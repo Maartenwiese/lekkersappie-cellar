@@ -1,0 +1,131 @@
+# Home Assistant Wine Cellar Dashboard (Sections View Layout)
+# Grounded in https://github.com/homeassistant-ai/skills (references/dashboard-guide.md)
+# - Uses `type: sections` view with 12-column responsive `grid_options`
+# - Uses explicit `type: heading` cards with inline action button badges
+# - Uses `type: tile` cards for summary metrics and cellar environment
+# - Uses `type: distribution` card (2026.2+) for Red / White / Rosé / Sparkling breakdown
+# - Uses `type: custom:wine-inventory-card` for bottle scanning, Vivino ranking, +1/-1 stock, and notes
+
+title: Wine Cellar
+views:
+  - title: Wine Cellar
+    path: wine-cellar
+    type: sections
+    icon: mdi:bottle-wine
+    max_columns: 3
+    badges:
+      - type: entity
+        entity: sensor.wine_cellar_total_bottles
+        show_name: true
+        show_state: true
+        color: red
+      - type: entity
+        entity: sensor.wine_cellar_ready_to_drink
+        show_name: true
+        show_state: true
+        color: green
+      - type: entity
+        entity: sensor.wine_cellar_drink_soon
+        show_name: true
+        show_state: true
+        color: amber
+    sections:
+      - type: grid
+        column_span: 1
+        cards:
+          - type: heading
+            heading: Cellar Overview
+            heading_style: title
+            icon: mdi:chart-box-outline
+            badges:
+              - type: button
+                icon: mdi:refresh
+                tap_action:
+                  action: perform-action
+                  perform_action: wine_inventory.refresh_vivino
+          - type: tile
+            entity: sensor.wine_cellar_total_bottles
+            name: Total Stock
+            icon: mdi:bottle-wine
+            color: red
+            grid_options:
+              columns: 6
+              rows: 1
+          - type: tile
+            entity: sensor.wine_cellar_unique_wines
+            name: Unique Wines
+            icon: mdi:glass-wine
+            color: purple
+            grid_options:
+              columns: 6
+              rows: 1
+          - type: tile
+            entity: sensor.wine_cellar_ready_to_drink
+            name: Ready to Drink
+            icon: mdi:check-decagram
+            color: green
+            grid_options:
+              columns: 6
+              rows: 1
+          - type: tile
+            entity: sensor.wine_cellar_drink_soon
+            name: Drink Soon
+            icon: mdi:clock-alert-outline
+            color: amber
+            grid_options:
+              columns: 6
+              rows: 1
+          - type: tile
+            entity: sensor.wine_cellar_estimated_value
+            name: Cellar Valuation
+            icon: mdi:cash-multiple
+            color: teal
+            grid_options:
+              columns: 12
+              rows: 1
+          - type: heading
+            heading: Stock by Wine Style
+            heading_style: subtitle
+            icon: mdi:chart-pie
+          - type: distribution
+            title: Wine Style Breakdown
+            entities:
+              - entity: sensor.wine_cellar_red_wine_bottles
+                name: Red
+                color: "#b71c1c"
+              - entity: sensor.wine_cellar_white_wine_bottles
+                name: White
+                color: "#f57f17"
+              - entity: sensor.wine_cellar_rose_wine_bottles
+                name: Rosé
+                color: "#ec407a"
+              - entity: sensor.wine_cellar_sparkling_wine_bottles
+                name: Sparkling
+                color: "#0288d1"
+              - entity: sensor.wine_cellar_dessert_fortified_bottles
+                name: Dessert / Fortified
+                color: "#6a1b9a"
+            grid_options:
+              columns: full
+              rows: 2
+
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Wine Inventory & Gemini Bottle Scanner
+            heading_style: title
+            icon: mdi:camera-iris
+            badges:
+              - type: button
+                icon: mdi:file-export-outline
+                tap_action:
+                  action: perform-action
+                  perform_action: wine_inventory.export_inventory
+                  data:
+                    format: csv
+          - type: custom:wine-inventory-card
+            title: Wine Cellar Inventory
+            grid_options:
+              columns: full
+              rows: auto

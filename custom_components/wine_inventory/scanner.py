@@ -1,0 +1,345 @@
+"""Gemini Flash-Lite Vision bottle label scanner and local cover saver."""
+
+from __future__ import annotations
+
+import base64
+import json
+import logging
+from pathlib import Path
+import re
+from typing import Any
+import uuid
+
+try:
+    import aiohttp
+except ImportError:  # pragma: no cover - fallback when running standalone unit tests outside HA venv
+    aiohttp = None  # type: ignore[assignment]
+
+from .const import COVERS_SUBDIR, DEFAULT_GEMINI_MODEL, WINE_TYPE_RED, WINE_TYPES
+
+_LOGGER = logging.getLogger(__name__)
+
+GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+
+LABEL_EXTRACTION_PROMPT = """You are an expert sommelier and wine cataloguing vision system.
+Analyze the provided photo of a wine bottle label and extract its details into JSON.
+
+Rules:
+1. Identify the producer/winery (`winery`) and the specific cuvée/wine name (`name`). If the label only shows a grape varietal as the main title, use that as `name`.
+2. Extract the 4-digit harvest year (`vintage`). If the wine is Non-Vintage, return `null` for `vintage`.
+3. Classify `wine_type` strictly as one of: "red", "white", "rose", "sparkling", "dessert", "fortified".
+4. Identify the grape varietals (`varietal`), wine region/appellation (`region`), and country (`country`).
+5. Extract `alcohol_pct` (number, e.g. 13.5) and `bottle_size_ml` (integer, default 750) if visible.
+6. Provide recommended drinking window bounds (`drink_from_year` and `drink_until_year`) based on the wine's style, appellation, and vintage, plus a short `drink_window_note` (e.g., "Ready now or hold 3-5 years; decant 1 hour").
+7. Suggest 2 to 4 concise `food_pairings` items.
+8. Provide a concise 1-sentence `label_summary` for the wine overview notes.
+"""
+
+LABEL_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "OBJECT",
+    "properties": {
+        "winery": {"type": "STRING"},
+        "name": {"type": "STRING"},
+        "vintage": {"type": "INTEGER", "nullable": True},
+        "wine_type": {
+            "type": "STRING",
+            "enum": ["red", "white", "rose", "sparkling", "dessert", "fortified"],
+        },
+        "varietal": {"type": "STRING"},
+        "region": {"type": "STRING"},
+        "country": {"type": "STRING"},
+        "alcohol_pct": {"type": "NUMBER", "nullable": True},
+        "bottle_size_ml": {"type": "INTEGER", "nullable": True},
+        "drink_from_year": {"type": "INTEGER", "nullable": True},
+        "drink_until_year": {"type": "INTEGER", "nullable": True},
+        "drink_window_note": {"type": "STRING"},
+        "food_pairings": {
+            "type": "ARRAY",
+            "items": {"type": "STRING"},
+        },
+        "label_summary": {"type": "STRING"},
+    },
+    "required": [
+        "winery",
+        "name",
+        "wine_type",
+        "varietal",
+        "region",
+        "country",
+        "drink_window_note",
+        "food_pairings",
+        "label_summary",
+    ],
+}
+
+
+class GeminiScannerError(Exception):
+    """Raised when Gemini vision label extraction fails."""
+
+
+def parse_image_data_uri(image_data: str) -> tuple[str, bytes]:
+    """Parse a base64 data URI or raw base64 string into (mime_type, raw_bytes)."""
+    cleaned = image_data.strip()
+    mime_type = "image/jpeg"
+    match = re.match(r"^data:(image/[a-zA-Z0-9.+-]+);base64,(.+)$", cleaned, re.DOTALL)
+    if match:
+        mime_type = match.group(1).lower()
+        b64_payload = match.group(2)
+    else:
+        b64_payload = cleaned
+
+    raw_bytes = base64.b64decode(b64_payload)
+    if not raw_bytes:
+        raise GeminiScannerError("Provided image payload is empty.")
+    return mime_type, raw_bytes
+
+
+def save_bottle_cover_image(
+    config_dir: str | Path,
+    image_bytes: bytes,
+    mime_type: str = "image/jpeg",
+) -> str:
+    """Save scanned bottle image under <config>/www/wine_inventory/covers/ and return /local/ URL."""
+    ext_map = {
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+    }
+    ext = ext_map.get(mime_type.lower(), ".jpg")
+    filename = f"bottle_{uuid.uuid4().hex[:12]}{ext}"
+    covers_dir = Path(config_dir) / COVERS_SUBDIR
+    covers_dir.mkdir(parents=True, exist_ok=True)
+    target_path = covers_dir / filename
+    target_path.write_bytes(image_bytes)
+    return f"/local/wine_inventory/covers/{filename}"
+
+
+def _normalize_extracted_payload(raw: dict[str, Any]) -> dict[str, Any]:
+    """Normalize and sanitize parsed JSON fields from Gemini response."""
+    wine_type = str(raw.get("wine_type") or WINE_TYPE_RED).lower().strip()
+    if wine_type not in WINE_TYPES:
+        wine_type = WINE_TYPE_RED
+
+    vintage_raw = raw.get("vintage")
+    vintage: int | None = None
+    if vintage_raw is not None:
+        try:
+            v_int = int(vintage_raw)
+            if 1800 <= v_int <= 2100:
+                vintage = v_int
+        except (ValueError, TypeError):
+            vintage = None
+
+    def _opt_int(val: Any, default: int | None = None) -> int | None:
+        if val is None:
+            return default
+        try:
+            return int(val)
+        except (ValueError, TypeError):
+            return default
+
+    def _opt_float(val: Any) -> float | None:
+        if val is None:
+            return None
+        try:
+            return round(float(val), 2)
+        except (ValueError, TypeError):
+            return None
+
+    pairings = raw.get("food_pairings")
+    if not isinstance(pairings, list):
+        pairings = []
+    else:
+        pairings = [str(p).strip() for p in pairings if str(p).strip()]
+
+    return {
+        "winery": str(raw.get("winery") or "").strip(),
+        "name": str(raw.get("name") or "").strip(),
+        "vintage": vintage,
+        "wine_type": wine_type,
+        "varietal": str(raw.get("varietal") or "").strip(),
+        "region": str(raw.get("region") or "").strip(),
+        "country": str(raw.get("country") or "").strip(),
+        "alcohol_pct": _opt_float(raw.get("alcohol_pct")),
+        "bottle_size_ml": _opt_int(raw.get("bottle_size_ml"), 750) or 750,
+        "drink_from_year": _opt_int(raw.get("drink_from_year")),
+        "drink_until_year": _opt_int(raw.get("drink_until_year")),
+        "drink_window_note": str(raw.get("drink_window_note") or "").strip(),
+        "food_pairings": pairings,
+        "general_notes": str(raw.get("label_summary") or "").strip(),
+    }
+
+
+async def async_scan_bottle_label(
+    session: aiohttp.ClientSession,
+    *,
+    api_key: str,
+    image_bytes: bytes,
+    mime_type: str = "image/jpeg",
+    model: str = DEFAULT_GEMINI_MODEL,
+    timeout_seconds: float = 30.0,
+) -> dict[str, Any]:
+    """Call Gemini REST API to extract structured wine label metadata from an image."""
+    clean_key = (api_key or "").strip()
+    if not clean_key:
+        raise GeminiScannerError(
+            "Gemini API key is not configured. Add it in Wine Inventory settings."
+        )
+    model_id = (model or DEFAULT_GEMINI_MODEL).strip()
+    if model_id.startswith("models/"):
+        model_id = model_id[len("models/") :]
+
+    url = f"{GEMINI_API_BASE_URL}/{model_id}:generateContent"
+    encoded_image = base64.b64encode(image_bytes).decode("ascii")
+
+    request_body: dict[str, Any] = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": LABEL_EXTRACTION_PROMPT},
+                    {
+                        "inlineData": {
+                            "mimeType": mime_type,
+                            "data": encoded_image,
+                        }
+                    },
+                ],
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.1,
+            "responseMimeType": "application/json",
+            "responseSchema": LABEL_RESPONSE_SCHEMA,
+        },
+    }
+
+    timeout = (
+        aiohttp.ClientTimeout(total=timeout_seconds)
+        if aiohttp is not None
+        else timeout_seconds
+    )
+    client_error_cls = aiohttp.ClientError if aiohttp is not None else OSError
+    try:
+        async with session.post(
+            url,
+            params={"key": clean_key},
+            json=request_body,
+            timeout=timeout,
+        ) as resp:
+            resp_text = await resp.text()
+            if resp.status != 200:
+                raise GeminiScannerError(
+                    f"Gemini API returned HTTP {resp.status}: {resp_text[:300]}"
+                )
+            payload = json.loads(resp_text)
+    except client_error_cls as err:
+        raise GeminiScannerError(f"Network error contacting Gemini API: {err}") from err
+    except json.JSONDecodeError as err:
+        raise GeminiScannerError(f"Invalid JSON returned by Gemini API: {err}") from err
+
+    candidates = payload.get("candidates") or []
+    if not candidates:
+        raise GeminiScannerError("Gemini returned no candidates for the bottle image.")
+
+    parts = candidates[0].get("content", {}).get("parts") or []
+    text_output = "".join(str(p.get("text") or "") for p in parts).strip()
+    if not text_output:
+        raise GeminiScannerError("Gemini returned an empty content part.")
+
+    try:
+        parsed_json = json.loads(text_output)
+    except json.JSONDecodeError as err:
+        raise GeminiScannerError(
+            f"Gemini output could not be parsed as JSON: {text_output[:200]}"
+        ) from err
+
+    normalized = _normalize_extracted_payload(parsed_json)
+    normalized["model_used"] = model_id
+    return normalized
+
+
+async def async_estimate_rating_via_gemini(
+    session: aiohttp.ClientSession,
+    *,
+    api_key: str,
+    winery: str,
+    name: str,
+    vintage: int | None,
+    model: str = DEFAULT_GEMINI_MODEL,
+    currency: str = "EUR",
+    timeout_seconds: float = 15.0,
+) -> dict[str, Any] | None:
+    """Fallback when Vivino HTTP endpoint is rate-limited (403/429) or unreachable."""
+    clean_key = (api_key or "").strip()
+    if not clean_key or (not winery and not name):
+        return None
+
+    model_id = (model or DEFAULT_GEMINI_MODEL).strip()
+    if model_id.startswith("models/"):
+        model_id = model_id[len("models/") :]
+
+    url = f"{GEMINI_API_BASE_URL}/{model_id}:generateContent"
+    vintage_str = str(vintage) if vintage else "Non-Vintage"
+    prompt = (
+        f"Provide the typical community wine rating (on a 1.0 to 5.0 scale) and estimated "
+        f"retail price in {currency} for: Winery='{winery}', Wine='{name}', Vintage={vintage_str}. "
+        f"If completely unknown, return null for rating."
+    )
+    schema = {
+        "type": "OBJECT",
+        "properties": {
+            "estimated_rating": {"type": "NUMBER", "nullable": True},
+            "estimated_price": {"type": "NUMBER", "nullable": True},
+        },
+    }
+    body = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.1,
+            "responseMimeType": "application/json",
+            "responseSchema": schema,
+        },
+    }
+
+    timeout = (
+        aiohttp.ClientTimeout(total=timeout_seconds)
+        if aiohttp is not None
+        else timeout_seconds
+    )
+    try:
+        async with session.post(
+            url,
+            params={"key": clean_key},
+            json=body,
+            timeout=timeout,
+        ) as resp:
+            if resp.status != 200:
+                return None
+            data = await resp.json()
+            parts = (
+                (data.get("candidates") or [{}])[0]
+                .get("content", {})
+                .get("parts")
+                or []
+            )
+            raw_text = "".join(str(p.get("text") or "") for p in parts).strip()
+            if not raw_text:
+                return None
+            parsed = json.loads(raw_text)
+            rating = parsed.get("estimated_rating")
+            price = parsed.get("estimated_price")
+            if rating is None:
+                return None
+            return {
+                "vivino_rating": round(float(rating), 2),
+                "vivino_ratings_count": None,
+                "vivino_url": f"https://www.vivino.com/search/wines?q={winery}+{name}",
+                "vivino_price_estimate": round(float(price), 2) if price else None,
+                "vivino_image_url": "",
+                "rating_source": "gemini_estimate",
+            }
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.debug("Gemini rating fallback failed: %s", err)
+        return None
