@@ -114,7 +114,7 @@ views:
         column_span: 2
         cards:
           - type: heading
-            heading: Cellar Grid & Label Scanner
+            heading: Cellar Inventory & Label Scanner
             heading_style: title
             icon: mdi:glass-wine
             badges:
@@ -127,7 +127,7 @@ views:
                     format: csv
           - type: custom:wine-inventory-card
             title: Lekkersappie
-            default_view: grid
+            default_view: list
             grid_options:
               columns: full
               rows: auto

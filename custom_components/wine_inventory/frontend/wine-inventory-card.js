@@ -66,13 +66,15 @@ class WineInventoryCard extends HTMLElement {
     this._filterTab = "all";
     this._searchQuery = "";
     this._sortBy = "recent";
-    this._viewMode = "grid";
+    this._viewMode = "list";
     this._userToggledView = false;
 
-    // Active modal state: null | "scan" | "crop_rotate" | "quick_add" | "consume" | "detail" | "backup"
+    // Active modal state: null | "scan" | "crop_rotate" | "quick_add" | "consume" | "detail" | "backup" | "image_preview"
     this._activeModal = null;
     this._modalWine = null;
     this._cropState = null;
+    this._previewImageWine = null;
+    this._previousModal = null;
     this._backupState = {
       busy: false,
       error: "",
@@ -126,8 +128,8 @@ class WineInventoryCard extends HTMLElement {
     if (this._config.title) {
       this._cellarName = this._config.title;
     }
-    if (this._config.default_view && !this._userToggledView) {
-      this._viewMode = this._config.default_view === "list" ? "list" : "grid";
+    if (!this._userToggledView) {
+      this._viewMode = this._config.default_view === "grid" ? "grid" : "list";
     }
     this._render();
   }
@@ -856,7 +858,7 @@ class WineInventoryCard extends HTMLElement {
           <div class="wine-thumb-wrap">
             ${
               wine.image_url
-                ? `<img class="wine-thumb" src="${escapeHtml(wine.image_url)}" alt="${escapeHtml(wine.name)}" />`
+                ? `<img class="wine-thumb preview-image-clickable" src="${escapeHtml(wine.image_url)}" alt="${escapeHtml(wine.name)}" data-action="preview-image" data-id="${wine.id}" title="Click to enlarge image" style="cursor: pointer;" />`
                 : `<div class="wine-thumb-placeholder type-${escapeHtml(wine.wine_type)}">
                     <ha-icon icon="mdi:glass-wine"></ha-icon>
                   </div>`
@@ -879,8 +881,9 @@ class WineInventoryCard extends HTMLElement {
               ${
                 ratingVal
                   ? wine.vivino_url
-                    ? `<a class="vivino-badge" href="${escapeHtml(wine.vivino_url)}" target="_blank" rel="noopener">
+                    ? `<a class="vivino-badge" href="${escapeHtml(wine.vivino_url)}" target="_blank" rel="noopener noreferrer" title="Open on Vivino (opens in new tab)">
                         ★ ${escapeHtml(ratingVal)} <span class="vivino-sub">Vivino ${escapeHtml(ratingCount)}</span>
+                        <ha-icon icon="mdi:open-in-new" style="--mdc-icon-size: 12px; margin-left: 2px;"></ha-icon>
                       </a>`
                     : `<span class="vivino-badge">★ ${escapeHtml(ratingVal)} <span class="vivino-sub">Vivino ${escapeHtml(ratingCount)}</span></span>`
                   : `<span class="vivino-badge muted">No Vivino rating</span>`
@@ -978,7 +981,7 @@ class WineInventoryCard extends HTMLElement {
                     <td>
                       ${
                         wine.image_url
-                          ? `<img class="wine-list-thumb" src="${escapeHtml(wine.image_url)}" alt="${escapeHtml(wine.name)}" />`
+                          ? `<img class="wine-list-thumb preview-image-clickable" src="${escapeHtml(wine.image_url)}" alt="${escapeHtml(wine.name)}" data-action="preview-image" data-id="${wine.id}" title="Click to enlarge image" style="cursor: pointer;" />`
                           : `<div class="wine-list-thumb-placeholder type-${escapeHtml(wine.wine_type)}">
                               <ha-icon icon="mdi:glass-wine" style="--mdc-icon-size: 20px;"></ha-icon>
                             </div>`
@@ -1005,7 +1008,12 @@ class WineInventoryCard extends HTMLElement {
                     <td>
                       ${
                         ratingVal
-                          ? `<span class="vivino-badge" style="font-size: 11px; padding: 2px 6px;">★ ${escapeHtml(ratingVal)}</span>`
+                          ? wine.vivino_url
+                            ? `<a class="vivino-badge" href="${escapeHtml(wine.vivino_url)}" target="_blank" rel="noopener noreferrer" title="Open on Vivino (opens in new tab)" style="font-size: 11px; padding: 2px 6px; text-decoration: none;">
+                                ★ ${escapeHtml(ratingVal)}
+                                <ha-icon icon="mdi:open-in-new" style="--mdc-icon-size: 11px; margin-left: 2px;"></ha-icon>
+                              </a>`
+                            : `<span class="vivino-badge" style="font-size: 11px; padding: 2px 6px;">★ ${escapeHtml(ratingVal)}</span>`
                           : `<span style="font-size: 11px; color: var(--secondary-text-color);">—</span>`
                       }
                     </td>
@@ -1764,6 +1772,13 @@ class WineInventoryCard extends HTMLElement {
     const df = this._detailForm;
     if (!w || !df) return "";
 
+    const statusMeta = DRINK_STATUS_META[w.drink_status] || DRINK_STATUS_META.unknown;
+    const typeLabel = WINE_TYPE_LABELS[w.wine_type] || "Wine";
+    const drinkYears =
+      w.drink_from_year || w.drink_until_year
+        ? `${w.drink_from_year || "Now"}–${w.drink_until_year || "…"}`
+        : statusMeta.label;
+
     return `
       <div class="modal-backdrop" id="modal-backdrop">
         <div class="modal-surface">
@@ -1772,6 +1787,50 @@ class WineInventoryCard extends HTMLElement {
             <button class="ha-btn icon-btn" id="close-modal-btn"><ha-icon icon="mdi:close"></ha-icon></button>
           </div>
           <div class="modal-body">
+            <div class="detail-overview-header" style="display: flex; gap: 14px; margin-bottom: 16px; padding: 12px; border-radius: 10px; background: var(--secondary-background-color, rgba(127,127,127,0.06)); align-items: center;">
+              <div class="detail-thumb-wrap" style="position: relative; cursor: pointer;" title="Click to enlarge image">
+                ${
+                  w.image_url
+                    ? `<img class="detail-wine-thumb preview-image-clickable" src="${escapeHtml(w.image_url)}" alt="${escapeHtml(w.name)}" data-action="preview-image" data-id="${w.id}" style="width: 72px; height: 96px; border-radius: 8px; object-fit: cover; box-shadow: 0 2px 6px rgba(0,0,0,0.15);" />
+                       <div class="thumb-zoom-overlay" style="position: absolute; bottom: 4px; right: 4px; background: rgba(0,0,0,0.65); color: #fff; border-radius: 4px; padding: 2px 4px; font-size: 10px; display: flex; align-items: center; pointer-events: none;">
+                         <ha-icon icon="mdi:magnify-plus-outline" style="--mdc-icon-size: 14px;"></ha-icon>
+                       </div>`
+                    : `<div class="wine-thumb-placeholder type-${escapeHtml(w.wine_type)}" style="width: 72px; height: 96px; border-radius: 8px;">
+                         <ha-icon icon="mdi:glass-wine"></ha-icon>
+                       </div>`
+                }
+              </div>
+              <div style="flex: 1; min-width: 0;">
+                <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 4px;">
+                  <span class="type-pill type-${escapeHtml(w.wine_type)}">${escapeHtml(typeLabel)}</span>
+                  <span class="vintage-pill">${escapeHtml(w.vintage ? String(w.vintage) : "NV")}</span>
+                  <span class="drink-pill" style="border-color:${statusMeta.color}; color:${statusMeta.color}; font-size: 11px;">
+                    ${escapeHtml(statusMeta.label)} (${escapeHtml(drinkYears)})
+                  </span>
+                </div>
+                <div style="font-size: 13px; font-weight: 500; color: var(--secondary-text-color);">${escapeHtml(w.winery)}</div>
+                <div style="font-size: 16px; font-weight: 600; margin: 2px 0 4px;">${escapeHtml(w.name)}</div>
+                <div style="font-size: 12px; color: var(--secondary-text-color);">
+                  ${escapeHtml([w.varietal, w.region, w.country].filter(Boolean).join(" • ") || "—")}
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center; margin-top: 6px; flex-wrap: wrap;">
+                  ${
+                    w.vivino_url
+                      ? `<a class="vivino-badge" href="${escapeHtml(w.vivino_url)}" target="_blank" rel="noopener noreferrer" title="Open on Vivino (opens in new tab)" style="text-decoration: none;">
+                           ★ ${escapeHtml(w.vivino_rating ? Number(w.vivino_rating).toFixed(1) : "Vivino")}
+                           <ha-icon icon="mdi:open-in-new" style="--mdc-icon-size: 13px; margin-left: 2px;"></ha-icon>
+                         </a>`
+                      : w.vivino_rating
+                      ? `<span class="vivino-badge">★ ${escapeHtml(Number(w.vivino_rating).toFixed(1))}</span>`
+                      : `<span class="vivino-badge muted">No Vivino rating</span>`
+                  }
+                  <span style="font-size: 12px; font-weight: 600; color: var(--primary-color);">
+                    In Stock: ${Number(w.quantity || 0)} ${Number(w.quantity) === 1 ? "bottle" : "bottles"}
+                  </span>
+                </div>
+              </div>
+            </div>
+
             <form id="detail-form" class="form-grid">
               <div class="form-field full-width">
                 <label>Free-Form Notes Overview</label>
@@ -1796,10 +1855,24 @@ class WineInventoryCard extends HTMLElement {
                 </div>
               </div>
               <div class="form-field">
-                <label>Vivino URL</label>
+                <label style="display: flex; justify-content: space-between; align-items: center;">
+                  <span>Vivino URL</span>
+                  ${
+                    df.vivino_url
+                      ? `<a href="${escapeHtml(df.vivino_url)}" target="_blank" rel="noopener noreferrer" style="font-size: 11px; color: var(--primary-color); display: inline-flex; align-items: center; gap: 2px; text-decoration: none;">
+                           <span>Open in Vivino</span>
+                           <ha-icon icon="mdi:open-in-new" style="--mdc-icon-size: 13px;"></ha-icon>
+                         </a>`
+                      : ""
+                  }
+                </label>
                 <input class="ha-input" name="vivino_url" value="${escapeHtml(df.vivino_url)}" />
               </div>
-              <div class="modal-actions full-width">
+              <div class="modal-actions full-width" style="display: flex; justify-content: space-between; align-items: center;">
+                <button type="button" class="ha-btn danger-btn" id="btn-delete-wine" data-id="${w.id}" style="background: rgba(198, 40, 40, 0.12); color: var(--error-color, #c62828); border-color: rgba(198, 40, 40, 0.35);">
+                  <ha-icon icon="mdi:trash-can-outline"></ha-icon>
+                  <span>Delete Wine</span>
+                </button>
                 <button type="submit" class="ha-btn primary-btn">
                   <ha-icon icon="mdi:content-save-outline"></ha-icon>
                   <span>Save Overview Changes</span>
@@ -1860,6 +1933,49 @@ class WineInventoryCard extends HTMLElement {
                       .join("")
               }
             </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  _openImagePreview(wine) {
+    if (!wine || !wine.image_url) return;
+    this._previewImageWine = wine;
+    this._previousModal = this._activeModal;
+    this._activeModal = "image_preview";
+    this._render();
+  }
+
+  _closeImagePreview() {
+    this._activeModal = this._previousModal || null;
+    this._previewImageWine = null;
+    this._previousModal = null;
+    this._render();
+  }
+
+  _renderImagePreviewModal() {
+    const wine = this._previewImageWine;
+    if (!wine || !wine.image_url) return "";
+    return `
+      <div class="modal-backdrop" id="image-preview-backdrop" style="background: rgba(0, 0, 0, 0.85); z-index: 1100;">
+        <div class="modal-surface" style="max-width: 540px; width: 92%; background: var(--card-background-color, #fff); border-radius: 14px; overflow: hidden; box-shadow: 0 16px 40px rgba(0,0,0,0.5);">
+          <div class="modal-header" style="padding: 14px 18px; border-bottom: 1px solid var(--divider-color, #e0e0e0);">
+            <div>
+              <h2 style="font-size: 16px; margin: 0; display: flex; align-items: center; gap: 8px;">
+                <ha-icon icon="mdi:image-outline" style="color: var(--primary-color);"></ha-icon>
+                <span>${escapeHtml(wine.name)}</span>
+              </h2>
+              <div style="font-size: 12px; color: var(--secondary-text-color); margin-top: 2px;">
+                ${escapeHtml(wine.winery)} (${wine.vintage || "NV"})
+              </div>
+            </div>
+            <button class="ha-btn icon-btn" id="close-image-preview-btn" title="Close">
+              <ha-icon icon="mdi:close"></ha-icon>
+            </button>
+          </div>
+          <div style="padding: 12px; background: rgba(0,0,0,0.04); display: flex; justify-content: center; align-items: center; max-height: 75vh; overflow: hidden;">
+            <img src="${escapeHtml(wine.image_url)}" alt="${escapeHtml(wine.name)}" style="max-height: 70vh; max-width: 100%; object-fit: contain; border-radius: 8px; display: block; box-shadow: 0 4px 12px rgba(0,0,0,0.25);" />
           </div>
         </div>
       </div>
@@ -1929,6 +2045,47 @@ class WineInventoryCard extends HTMLElement {
     // Modal handlers
     root.querySelector("#close-modal-btn")?.addEventListener("click", () => this._closeModal());
     root.querySelector("#cancel-modal-btn")?.addEventListener("click", () => this._closeModal());
+
+    // Image preview modal handlers
+    root.querySelector("#close-image-preview-btn")?.addEventListener("click", () => this._closeImagePreview());
+    root.querySelector("#image-preview-backdrop")?.addEventListener("click", (e) => {
+      if (e.target.id === "image-preview-backdrop") {
+        this._closeImagePreview();
+      }
+    });
+
+    root.querySelectorAll('[data-action="preview-image"]').forEach((el) => {
+      el.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const wineId = Number(el.dataset.id);
+        const wine = this._wines.find((w) => Number(w.id) === wineId) || this._modalWine;
+        if (wine && wine.image_url) {
+          this._openImagePreview(wine);
+        }
+      });
+    });
+
+    // Delete wine button handler
+    root.querySelector("#btn-delete-wine")?.addEventListener("click", async () => {
+      const wine = this._modalWine;
+      if (!wine || !this._hass) return;
+      const label = `${wine.winery ? wine.winery + " – " : ""}${wine.name} (${wine.vintage || "NV"})`;
+      const confirmed = window.confirm(
+        `⚠️ WARNING: Are you sure you want to permanently delete "${label}" from your cellar database?\n\nThis will completely remove the wine, all its purchase batches, and all tasting history. This action CANNOT be undone!`
+      );
+      if (!confirmed) return;
+
+      try {
+        await this._hass.callWS({
+          type: "wine_inventory/delete_wine",
+          wine_id: Number(wine.id),
+        });
+        this._closeModal();
+        await this._fetchInventory();
+      } catch (err) {
+        alert(`Failed to delete wine: ${err?.message || err}`);
+      }
+    });
 
     // Crop / Rotate modal handlers
     root.querySelector("#close-crop-btn")?.addEventListener("click", () => this._cancelCrop());
@@ -2799,6 +2956,7 @@ class WineInventoryCard extends HTMLElement {
       ${this._activeModal === "consume" ? this._renderConsumeModal() : ""}
       ${this._activeModal === "detail" ? this._renderDetailModal() : ""}
       ${this._activeModal === "backup" ? this._renderBackupModal() : ""}
+      ${this._activeModal === "image_preview" ? this._renderImagePreviewModal() : ""}
     `;
 
     this._updateEnvironmentBadges();

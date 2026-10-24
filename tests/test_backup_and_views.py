@@ -186,6 +186,40 @@ class TestBackupRestoreAndViews(unittest.TestCase):
         )
         self.assertEqual(card.get("default_view"), "list")
 
+    def test_database_delete_wine_permanently(self) -> None:
+        """Verify full permanent deletion of wine, batches, and timeline from SQLite database."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_file = Path(tmpdir) / "wine_inventory.db"
+            db = WineDatabase(db_file)
+            db.initialize()
+
+            # Add wine with initial batch
+            wine = db.add_or_increment_wine(
+                winery="Château Cheval Blanc",
+                name="Premier Grand Cru Classé A",
+                vintage=2010,
+                wine_type="red",
+                quantity=2,
+                purchase_location="Bordeaux",
+            )
+            wine_id = wine["id"]
+            self.assertEqual(len(db.list_wines()), 1)
+
+            # Consume 1 bottle to create tasting history
+            db.adjust_quantity(wine_id=wine_id, delta=-1, personal_rating=4.8, notes="Superb structure")
+            detail = db.get_wine_detail(wine_id)
+            self.assertIsNotNone(detail)
+            self.assertEqual(len(detail["timeline"]), 2)  # Added + Consumed
+
+            # Now delete wine permanently
+            deleted = db.delete_wine(wine_id)
+            self.assertTrue(deleted)
+            self.assertEqual(len(db.list_wines()), 0)
+            self.assertIsNone(db.get_wine_detail(wine_id))
+            stats = db.get_statistics()
+            self.assertEqual(stats["total_bottles"], 0)
+            self.assertEqual(stats["unique_wines"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
