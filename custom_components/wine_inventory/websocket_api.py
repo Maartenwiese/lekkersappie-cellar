@@ -35,6 +35,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_adjust_quantity)
     websocket_api.async_register_command(hass, ws_update_wine)
     websocket_api.async_register_command(hass, ws_delete_wine)
+    websocket_api.async_register_command(hass, ws_research_wine)
     websocket_api.async_register_command(hass, ws_refresh_vivino)
     websocket_api.async_register_command(hass, ws_create_backup)
     websocket_api.async_register_command(hass, ws_restore_backup)
@@ -274,6 +275,28 @@ async def ws_delete_wine(
         )
     except Exception as err:  # noqa: BLE001
         connection.send_error(msg["id"], "delete_failed", str(err))
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wine_inventory/research_wine",
+        vol.Required("wine_id"): int,
+        vol.Optional("entry_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_research_wine(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Perform deep Gemini AI research scan on wine producer and cuvée history."""
+    try:
+        coordinator = _get_coordinator(hass, msg.get("entry_id"))
+        result = await coordinator.async_research_wine(int(msg["wine_id"]))
+        connection.send_result(msg["id"], result)
+    except Exception as err:  # noqa: BLE001
+        connection.send_error(msg["id"], "research_failed", str(err))
 
 
 @websocket_api.websocket_command(

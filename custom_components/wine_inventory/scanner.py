@@ -21,24 +21,33 @@ _LOGGER = logging.getLogger(__name__)
 
 GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
-LABEL_EXTRACTION_PROMPT = """You are an expert sommelier and wine cataloguing vision system.
-Analyze the provided photo of a wine bottle label (which has been cropped and oriented upright) and extract its details into JSON.
+LABEL_EXTRACTION_PROMPT = """You are an expert master sommelier and wine cataloguing vision intelligence system.
+Analyze the provided photo of a wine bottle label (which has been cropped and oriented upright) and extract as much comprehensive, accurate detail as possible into JSON.
 
-Rules:
-1. Identify the producer/winery (`winery`) and the specific cuvée/wine name (`name`).
-   - Carefully inspect stylized, cursive, embossed, or traditional serif typography commonly found on wine labels.
-   - If the winery is prominent (e.g. "Château Margaux", "Antinori", "Penfolds"), extract it cleanly.
-   - If only a grape varietal (e.g. "Sauvignon Blanc", "Cabernet Sauvignon") is shown as the primary title without a separate cuvée name, use that as `name`.
-2. Extract the 4-digit harvest year (`vintage`).
-   - Look closely near the bottom, neck band, or center of the label.
-   - If the wine is Non-Vintage (common in Champagne/sparkling, port, sherry), return `null` for `vintage`.
-3. Classify `wine_type` strictly as one of: "red", "white", "rose", "sparkling", "dessert", "fortified".
-4. Identify the primary grape varietals (`varietal`, e.g. "Pinot Noir", "Chardonnay", "Tempranillo", "Bordeaux Blend"), wine region/appellation (`region`, e.g. "Napa Valley", "Barolo", "Rioja Alta"), and country (`country`, e.g. "France", "Italy", "United States", "Spain").
-5. Extract `alcohol_pct` (number, e.g. 13.5 or 14.0) and `bottle_size_ml` (integer, default 750) if indicated anywhere on the label.
-6. Provide recommended drinking window bounds (`drink_from_year` and `drink_until_year`) based on the wine's style, appellation, and vintage, plus a short `drink_window_note` (e.g., "Peak drinking 2026-2032; decant 45 mins before serving").
-7. Suggest 2 to 4 concise `food_pairings` items (e.g. ["Grilled ribeye", "Aged Gouda", "Wild mushroom risotto"]).
-8. Provide a concise 1-sentence `label_summary` for the wine overview notes.
-9. Return best-effort values even if parts of the label are partially weathered or in low contrast. Never return empty strings for winery or name if any recognizable text is visible.
+Core Extraction Rules:
+1. Producer / Winery (`winery`) and Specific Cuvée / Wine Name (`name`):
+   - Identify the winemaker/producer/château/bodega/estate cleanly (`winery`).
+   - Identify the specific cuvée, vineyard designation, or wine title (`name`).
+   - If only a grape varietal is used as the principal wine title (e.g. "Sauvignon Blanc", "Malbec"), use that as `name`.
+2. Harvest Year / Vintage (`vintage`):
+   - Scrutinize the label, neck band, vintage collar, and embossed elements for the 4-digit harvest year.
+   - If Non-Vintage (NV, common in Champagne, sparkling, fortified wines), return null.
+3. Grape Variety / Varietals (`varietal`):
+   - Identify the primary grape variety or blend composition (e.g., "Cabernet Sauvignon", "Chardonnay", "Pinot Noir", "Nebbiolo", "Tempranillo", "Syrah/Shiraz", "Sangiovese", "Bordeaux Blend", "Rhône Blend", "Sauvignon Blanc", "Riesling", "Malbec", "Merlot").
+   - If not explicitly written on Old World labels (e.g. Burgundy, Bordeaux, Rioja, Barolo, Chianti), deduce the canonical legal grape varieties for the appellation (e.g., Barolo = Nebbiolo, Red Burgundy = Pinot Noir, Chablis = Chardonnay, Chianti = Sangiovese).
+4. Country of Origin (`country`):
+   - Identify the country where the wine was produced (e.g., "France", "Italy", "Spain", "United States", "Germany", "Portugal", "South Africa", "Australia", "New Zealand", "Chile", "Argentina", "Austria", "Greece").
+5. Wine Region & Appellation (`region`):
+   - Extract the specific geographical growing region or AOC/DOC/DOCG/AVA (e.g., "Bordeaux", "Napa Valley", "Tuscany", "Rioja Alta", "Marlborough", "Mosel", "Piedmont").
+6. Wine Style (`wine_type`):
+   - Strictly classify as one of: "red", "white", "rose", "sparkling", "dessert", "fortified".
+7. Technical Specs:
+   - Extract `alcohol_pct` (e.g. 13.5, 14.0) and `bottle_size_ml` (integer, default 750).
+8. Sommelier Guidance:
+   - Provide recommended drinking window bounds (`drink_from_year` and `drink_until_year`) and a descriptive `drink_window_note` (e.g., "Peak drinking 2026-2032; decant 45 mins before serving").
+   - Suggest 2 to 4 concise `food_pairings` items (e.g. ["Grilled ribeye steak", "Aged Comté cheese", "Truffle risotto"]).
+   - Provide a concise 1-sentence `label_summary` for the wine overview notes.
+   - Return best-effort values even if parts of the label are partially weathered or in low contrast.
 """
 
 LABEL_RESPONSE_SCHEMA: dict[str, Any] = {
@@ -361,3 +370,141 @@ async def async_estimate_rating_via_gemini(
     except Exception as err:  # noqa: BLE001
         _LOGGER.debug("Gemini rating fallback failed: %s", err)
         return None
+
+
+WINE_RESEARCH_PROMPT = """You are a world-class master sommelier and esteemed wine historian.
+Conduct an in-depth, authoritative research review for the following wine:
+- Producer / Winery: {winery}
+- Wine / Cuvée Name: {name}
+- Vintage / Year: {vintage}
+- Grape Variety / Blend: {varietal}
+- Region / Appellation: {region}
+- Country of Origin: {country}
+- Wine Type / Style: {wine_type}
+- Stored Notes: {notes}
+
+Provide structured, engaging, sommelier-grade research covering:
+1. Producer History: A rich, concise narrative covering the history of the winery, estate, founding heritage, winemaking philosophy, and notable winemakers.
+2. The Wine & Terroir: Heritage of this specific cuvée, vineyard location, soil composition, microclimate (terroir), and vinification / barrel-aging methods.
+3. Tasting Profile & Structure: Detailed aromatic notes, palate profile, acid/tannin structure, body, and aging potential / peak window.
+4. Serving & Food Pairings: Recommended serving temperature, decanting duration, glassware, and ideal culinary pairings.
+5. Fun Facts & Accolades: 1 or 2 fascinating historical anecdotes, awards, or trivia about the estate or wine.
+6. Summary: A 2-sentence executive summary highlighting what makes this wine and producer special.
+"""
+
+WINE_RESEARCH_SCHEMA: dict[str, Any] = {
+    "type": "OBJECT",
+    "properties": {
+        "producer_history": {"type": "STRING"},
+        "wine_and_terroir": {"type": "STRING"},
+        "tasting_profile": {"type": "STRING"},
+        "serving_and_pairing": {"type": "STRING"},
+        "fun_facts": {"type": "STRING"},
+        "summary": {"type": "STRING"},
+    },
+    "required": [
+        "producer_history",
+        "wine_and_terroir",
+        "tasting_profile",
+        "serving_and_pairing",
+        "summary",
+    ],
+}
+
+
+async def async_research_wine_with_gemini(
+    session: aiohttp.ClientSession,
+    *,
+    api_key: str,
+    wine_data: dict[str, Any],
+    model: str = DEFAULT_GEMINI_MODEL,
+    timeout_seconds: float = 35.0,
+) -> dict[str, Any]:
+    """Perform in-depth Gemini AI research scan on wine producer and cuvée history."""
+    clean_key = (api_key or "").strip()
+    if not clean_key:
+        raise GeminiScannerError(
+            "Gemini API key is not configured. Add it in Lekkersappie options."
+        )
+
+    model_id = (model or DEFAULT_GEMINI_MODEL).strip()
+    if model_id.startswith("models/"):
+        model_id = model_id[len("models/") :]
+
+    url = f"{GEMINI_API_BASE_URL}/{model_id}:generateContent"
+
+    winery = str(wine_data.get("winery") or "Unknown Producer").strip()
+    name = str(wine_data.get("name") or "Estate Wine").strip()
+    vintage_str = str(wine_data.get("vintage") or "Non-Vintage")
+    varietal = str(wine_data.get("varietal") or "Traditional Varieties").strip()
+    region = str(wine_data.get("region") or "Unknown Region").strip()
+    country = str(wine_data.get("country") or "Unknown Country").strip()
+    wine_type = str(wine_data.get("wine_type") or "red").strip()
+    notes = str(wine_data.get("general_notes") or "").strip()
+
+    prompt = WINE_RESEARCH_PROMPT.format(
+        winery=winery,
+        name=name,
+        vintage=vintage_str,
+        varietal=varietal,
+        region=region,
+        country=country,
+        wine_type=wine_type,
+        notes=notes,
+    )
+
+    request_body = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.2,
+            "responseMimeType": "application/json",
+            "responseSchema": WINE_RESEARCH_SCHEMA,
+        },
+    }
+
+    timeout = (
+        aiohttp.ClientTimeout(total=timeout_seconds)
+        if aiohttp is not None
+        else timeout_seconds
+    )
+    client_error_cls = aiohttp.ClientError if aiohttp is not None else OSError
+
+    try:
+        async with session.post(
+            url,
+            params={"key": clean_key},
+            json=request_body,
+            timeout=timeout,
+        ) as resp:
+            resp_text = await resp.text()
+            if resp.status != 200:
+                raise GeminiScannerError(
+                    f"Gemini API returned HTTP {resp.status} during wine research: {resp_text[:250]}"
+                )
+            payload = json.loads(resp_text)
+    except client_error_cls as err:
+        raise GeminiScannerError(f"Network error contacting Gemini API: {err}") from err
+    except json.JSONDecodeError as err:
+        raise GeminiScannerError(f"Invalid JSON returned by Gemini API: {err}") from err
+
+    candidates = payload.get("candidates") or []
+    if not candidates:
+        raise GeminiScannerError("Gemini returned no research output for this wine.")
+
+    parts = candidates[0].get("content", {}).get("parts") or []
+    text_output = "".join(str(p.get("text") or "") for p in parts).strip()
+    if not text_output:
+        raise GeminiScannerError("Gemini returned an empty research text response.")
+
+    try:
+        research_json = json.loads(text_output)
+    except json.JSONDecodeError as err:
+        raise GeminiScannerError(
+            f"Failed to parse Gemini research JSON: {text_output[:200]}"
+        ) from err
+
+    return {
+        "status": "ok",
+        "research": research_json,
+        "model_used": model_id,
+    }

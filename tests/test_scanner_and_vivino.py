@@ -367,6 +367,114 @@ class TestScannerVivinoAndCoordinator(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_vivino_similarity_filtering_guards(self) -> None:
+        """Verify strict similarity check: either wine name or maker must be similar."""
+        from custom_components.wine_inventory.vivino import (
+            is_text_similar,
+            is_vivino_candidate_similar,
+            parse_vivino_explore_payload,
+        )
+
+        # 1. Direct text similarity checks
+        self.assertTrue(is_text_similar("Château Margaux", "Margaux"))
+        self.assertTrue(is_text_similar("Antinori", "Marchesi Antinori"))
+        self.assertTrue(is_text_similar("Tignanello", "Tignanello Toscana"))
+        self.assertFalse(is_text_similar("Château Margaux", "Yellow Tail"))
+        self.assertFalse(is_text_similar("Tignanello", "Shiraz"))
+
+        # 2. Candidate similarity checks
+        matching_cand = {
+            "winery": "Marchesi Antinori",
+            "name": "Tignanello",
+            "vintage": 2019,
+        }
+        self.assertTrue(
+            is_vivino_candidate_similar(
+                matching_cand, target_winery="Antinori", target_name="Tignanello"
+            )
+        )
+
+        dissimilar_cand = {
+            "winery": "Casella Wines",
+            "name": "Yellow Tail Shiraz",
+            "vintage": 2020,
+        }
+        self.assertFalse(
+            is_vivino_candidate_similar(
+                dissimilar_cand, target_winery="Antinori", target_name="Tignanello"
+            )
+        )
+
+        # 3. Payload filtering check: searching for Antinori Tignanello should reject Yellow Tail Shiraz
+        raw_payload = {
+            "explore_vintage": {
+                "matches": [
+                    {
+                        "vintage": {
+                            "year": 2020,
+                            "wine": {
+                                "id": 9999,
+                                "name": "Yellow Tail Shiraz",
+                                "winery": {"name": "Casella Wines"},
+                            },
+                        }
+                    }
+                ]
+            }
+        }
+        filtered = parse_vivino_explore_payload(
+            raw_payload,
+            target_winery="Antinori",
+            target_name="Tignanello",
+        )
+        self.assertEqual(filtered, [])
+
+    def test_gemini_wine_research_scan(self) -> None:
+        """Verify Gemini AI deep research scan on wine producer and cuvée history."""
+        from custom_components.wine_inventory.scanner import async_research_wine_with_gemini
+
+        async def _run() -> None:
+            research_payload = {
+                "producer_history": "Founded in 1385, Marchesi Antinori is one of Italy's oldest wine dynasties.",
+                "wine_and_terroir": "Born in 1971 from the Tignanello vineyard in the heart of Chianti Classico.",
+                "tasting_profile": "Intense notes of ripe red berries, vanilla, dark chocolate, and silky fine tannins.",
+                "serving_and_pairing": "Serve at 16-18°C after decanting 1 hour. Ideal with roasted venison and aged pecorino.",
+                "fun_facts": "The wine that ignited the Super Tuscan revolution by defying traditional DOC rules.",
+                "summary": "Tignanello is a landmark Italian masterpiece celebrating Tuscan Sangiovese with Bordeaux varieties.",
+            }
+            gemini_resp = {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [{"text": json.dumps(research_payload)}],
+                        }
+                    }
+                ]
+            }
+            session = _StubHttpSession(gemini_resp)
+            wine_data = {
+                "winery": "Antinori",
+                "name": "Tignanello",
+                "vintage": 2019,
+                "varietal": "Sangiovese, Cabernet Sauvignon",
+                "region": "Toscana",
+                "country": "Italy",
+                "wine_type": "red",
+                "general_notes": "Cellared in bottle at 14°C",
+            }
+            result = await async_research_wine_with_gemini(
+                session,  # type: ignore[arg-type]
+                api_key="test-api-key",
+                wine_data=wine_data,
+            )
+            self.assertEqual(result["status"], "ok")
+            res = result["research"]
+            self.assertIn("1385", res["producer_history"])
+            self.assertIn("Tignanello", res["wine_and_terroir"])
+            self.assertIn("Super Tuscan", res["fun_facts"])
+
+        asyncio.run(_run())
+
 
 if __name__ == "__main__":
     unittest.main()

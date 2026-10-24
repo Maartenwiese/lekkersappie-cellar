@@ -324,5 +324,4 @@ views:
 
               ### How to Backup or Restore
               - **Option 1**: Go to **Settings -> Devices & Services -> Lekkersappie -> Configure**, then select **Create Full Backup (.zip)** or **Restore Database from Backup (.zip)**.
-              - **Option 2**: In the **Lekkersappie card**, click the **Backup / Import** button in the top action bar to directly download or upload a `.zip` backup.
-              - **Option 3**: Use the **Import Wines** option to bulk-import bottles from JSON, CSV, or another wine archive without wiping your existing cellar.
+              - **Option 2**: In the **Lekkersappie options**, use the **Import Wines** option to bulk-import bottles from JSON, CSV, or another wine archive without wiping your existing cellar.

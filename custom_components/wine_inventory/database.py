@@ -93,6 +93,8 @@ class WineDatabase:
                     personal_rating REAL NULL,
                     image_url TEXT NOT NULL DEFAULT '',
                     quantity INTEGER NOT NULL DEFAULT 0,
+                    storage_location TEXT NOT NULL DEFAULT '',
+                    research_notes TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -136,6 +138,12 @@ class WineDatabase:
                     ON consumption_history (wine_id, timestamp DESC);
                 """
             )
+            # Automatic schema migration for existing databases
+            cols = {row["name"] for row in conn.execute("PRAGMA table_info(wines)").fetchall()}
+            if "storage_location" not in cols:
+                conn.execute("ALTER TABLE wines ADD COLUMN storage_location TEXT NOT NULL DEFAULT '';")
+            if "research_notes" not in cols:
+                conn.execute("ALTER TABLE wines ADD COLUMN research_notes TEXT NOT NULL DEFAULT '';")
 
     def checkpoint_wal(self) -> None:
         """Flush the SQLite Write-Ahead Log before a Home Assistant backup."""
@@ -165,6 +173,8 @@ class WineDatabase:
             data.get("drink_from_year"),
             data.get("drink_until_year"),
         )
+        data["storage_location"] = (data.get("storage_location") or "").strip()
+        data["research_notes"] = data.get("research_notes") or ""
         if batches is not None:
             data["batches"] = batches
             data["last_purchase_location"] = next(
@@ -175,6 +185,8 @@ class WineDatabase:
                 (b["storage_location"] for b in batches if b.get("storage_location")),
                 "",
             )
+            if not data["storage_location"] and data["last_storage_location"]:
+                data["storage_location"] = data["last_storage_location"]
             data["last_purchase_price"] = next(
                 (
                     b["purchase_price"]
@@ -345,8 +357,8 @@ class WineDatabase:
                         vivino_url, vivino_price_estimate, rating_source,
                         drink_from_year, drink_until_year, drink_window_note,
                         food_pairings, general_notes, personal_rating, image_url,
-                        quantity, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        quantity, storage_location, research_notes, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         winery.strip(),
@@ -371,6 +383,8 @@ class WineDatabase:
                         personal_rating,
                         image_url.strip(),
                         qty,
+                        storage_location.strip(),
+                        "",
                         timestamp,
                         timestamp,
                     ),
@@ -388,6 +402,7 @@ class WineDatabase:
                     """
                     UPDATE wines
                     SET quantity = ?,
+                        storage_location = CASE WHEN ? != '' THEN ? ELSE storage_location END,
                         vivino_rating = COALESCE(?, vivino_rating),
                         vivino_ratings_count = COALESCE(?, vivino_ratings_count),
                         vivino_url = CASE WHEN ? != '' THEN ? ELSE vivino_url END,
@@ -404,6 +419,8 @@ class WineDatabase:
                     """,
                     (
                         new_qty,
+                        storage_location.strip(),
+                        storage_location.strip(),
                         vivino_rating,
                         vivino_ratings_count,
                         vivino_url.strip(),
@@ -630,6 +647,8 @@ class WineDatabase:
             "general_notes",
             "personal_rating",
             "image_url",
+            "storage_location",
+            "research_notes",
         }
         set_clauses: list[str] = []
         values: list[Any] = []
@@ -662,6 +681,13 @@ class WineDatabase:
             )
             if cursor.rowcount == 0:
                 raise ValueError(f"Wine ID {wine_id} not found")
+
+            if "storage_location" in updates:
+                clean_loc = str(updates["storage_location"]).strip()
+                conn.execute(
+                    "UPDATE inventory_additions SET storage_location = ? WHERE wine_id = ? AND quantity_remaining > 0",
+                    (clean_loc, wine_id),
+                )
             detail = self._get_wine_detail_with_conn(conn, wine_id)
             assert detail is not None
             return detail

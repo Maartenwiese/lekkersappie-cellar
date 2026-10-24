@@ -307,8 +307,17 @@ class WineInventoryCard extends HTMLElement {
   _openDetailModal(wine) {
     this._activeModal = "detail";
     this._modalWine = wine;
+    this._researchingWineId = null;
+    this._researchError = "";
     this._detailForm = {
       wine_id: wine.id,
+      winery: wine.winery || "",
+      name: wine.name || "",
+      vintage: wine.vintage ?? "",
+      varietal: wine.varietal || "",
+      region: wine.region || "",
+      country: wine.country || "",
+      storage_location: wine.storage_location || wine.last_storage_location || "",
       general_notes: wine.general_notes || "",
       drink_from_year: wine.drink_from_year ?? "",
       drink_until_year: wine.drink_until_year ?? "",
@@ -318,6 +327,28 @@ class WineInventoryCard extends HTMLElement {
       personal_rating: wine.personal_rating ?? "",
     };
     this._render();
+  }
+
+  _getAvailableStorageAreas() {
+    const areas = new Set();
+    if (this._hass && this._hass.areas) {
+      Object.values(this._hass.areas).forEach((a) => {
+        if (a && a.name) areas.add(a.name.trim());
+      });
+    }
+    if (this._statistics && Array.isArray(this._statistics.known_storage_locations)) {
+      this._statistics.known_storage_locations.forEach((loc) => {
+        if (loc) areas.add(loc.trim());
+      });
+    }
+    (this._wines || []).forEach((w) => {
+      if (w.storage_location) areas.add(w.storage_location.trim());
+      if (w.last_storage_location) areas.add(w.last_storage_location.trim());
+    });
+    if (areas.size === 0) {
+      ["Cellar", "Wine Fridge", "Pantry", "Rack A", "Rack B", "Kitchen"].forEach((loc) => areas.add(loc));
+    }
+    return Array.from(areas).filter(Boolean).sort();
   }
 
   _closeModal() {
@@ -810,6 +841,13 @@ class WineInventoryCard extends HTMLElement {
       type: "wine_inventory/update_wine",
       wine_id: df.wine_id,
       updates: {
+        winery: df.winery,
+        name: df.name,
+        vintage: toIntOrNull(df.vintage),
+        varietal: df.varietal,
+        region: df.region,
+        country: df.country,
+        storage_location: df.storage_location,
         general_notes: df.general_notes,
         drink_from_year: toIntOrNull(df.drink_from_year),
         drink_until_year: toIntOrNull(df.drink_until_year),
@@ -821,6 +859,29 @@ class WineInventoryCard extends HTMLElement {
     });
     this._closeModal();
     await this._fetchInventory();
+  }
+
+  async _handleResearchWine(wineId) {
+    if (!this._hass) return;
+    this._researchingWineId = Number(wineId);
+    this._researchError = "";
+    this._render();
+    try {
+      const res = await this._hass.callWS({
+        type: "wine_inventory/research_wine",
+        wine_id: Number(wineId),
+      });
+      this._researchingWineId = null;
+      if (this._modalWine && Number(this._modalWine.id) === Number(wineId)) {
+        this._modalWine.research_notes = JSON.stringify(res.research || {});
+      }
+      await this._fetchInventory();
+      this._render();
+    } catch (err) {
+      this._researchingWineId = null;
+      this._researchError = err?.message || (typeof err === "string" ? err : "Gemini wine research failed.");
+      this._render();
+    }
   }
 
   async _refreshAllVivino() {
@@ -1412,7 +1473,7 @@ class WineInventoryCard extends HTMLElement {
     const s = this._scanState;
     const f = s.form;
     const knownStores = this._statistics.known_purchase_locations || [];
-    const knownLocations = this._statistics.known_storage_locations || [];
+    const knownLocations = this._getAvailableStorageAreas();
 
     return `
       <div class="modal-backdrop" id="modal-backdrop">
@@ -1649,7 +1710,7 @@ class WineInventoryCard extends HTMLElement {
     const qf = this._quickAddForm;
     if (!w || !qf) return "";
     const knownStores = this._statistics.known_purchase_locations || [];
-    const knownLocations = this._statistics.known_storage_locations || [];
+    const knownLocations = this._getAvailableStorageAreas();
 
     return `
       <div class="modal-backdrop" id="modal-backdrop">
@@ -1778,6 +1839,16 @@ class WineInventoryCard extends HTMLElement {
       w.drink_from_year || w.drink_until_year
         ? `${w.drink_from_year || "Now"}–${w.drink_until_year || "…"}`
         : statusMeta.label;
+    const availableAreas = this._getAvailableStorageAreas();
+
+    let research = null;
+    if (w.research_notes) {
+      try {
+        research = typeof w.research_notes === "string" ? JSON.parse(w.research_notes) : w.research_notes;
+      } catch (e) {
+        research = { summary: String(w.research_notes) };
+      }
+    }
 
     return `
       <div class="modal-backdrop" id="modal-backdrop">
@@ -1787,33 +1858,35 @@ class WineInventoryCard extends HTMLElement {
             <button class="ha-btn icon-btn" id="close-modal-btn"><ha-icon icon="mdi:close"></ha-icon></button>
           </div>
           <div class="modal-body">
-            <div class="detail-overview-header" style="display: flex; gap: 14px; margin-bottom: 16px; padding: 12px; border-radius: 10px; background: var(--secondary-background-color, rgba(127,127,127,0.06)); align-items: center;">
-              <div class="detail-thumb-wrap" style="position: relative; cursor: pointer;" title="Click to enlarge image">
+            <div class="detail-overview-header" style="display: flex; gap: 14px; margin-bottom: 16px; padding: 14px; border-radius: 12px; background: var(--secondary-background-color, rgba(127,127,127,0.06)); align-items: flex-start; border: 1px solid var(--divider-color, #e0e0e0);">
+              <div class="detail-thumb-wrap" style="position: relative; cursor: pointer; flex-shrink: 0;" title="Click to enlarge image">
                 ${
                   w.image_url
-                    ? `<img class="detail-wine-thumb preview-image-clickable" src="${escapeHtml(w.image_url)}" alt="${escapeHtml(w.name)}" data-action="preview-image" data-id="${w.id}" style="width: 72px; height: 96px; border-radius: 8px; object-fit: cover; box-shadow: 0 2px 6px rgba(0,0,0,0.15);" />
+                    ? `<img class="detail-wine-thumb preview-image-clickable" src="${escapeHtml(w.image_url)}" alt="${escapeHtml(w.name)}" data-action="preview-image" data-id="${w.id}" style="width: 80px; height: 106px; border-radius: 8px; object-fit: cover; box-shadow: 0 2px 8px rgba(0,0,0,0.18);" />
                        <div class="thumb-zoom-overlay" style="position: absolute; bottom: 4px; right: 4px; background: rgba(0,0,0,0.65); color: #fff; border-radius: 4px; padding: 2px 4px; font-size: 10px; display: flex; align-items: center; pointer-events: none;">
                          <ha-icon icon="mdi:magnify-plus-outline" style="--mdc-icon-size: 14px;"></ha-icon>
                        </div>`
-                    : `<div class="wine-thumb-placeholder type-${escapeHtml(w.wine_type)}" style="width: 72px; height: 96px; border-radius: 8px;">
+                    : `<div class="wine-thumb-placeholder type-${escapeHtml(w.wine_type)}" style="width: 80px; height: 106px; border-radius: 8px;">
                          <ha-icon icon="mdi:glass-wine"></ha-icon>
                        </div>`
                 }
               </div>
               <div style="flex: 1; min-width: 0;">
-                <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 4px;">
+                <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px;">
                   <span class="type-pill type-${escapeHtml(w.wine_type)}">${escapeHtml(typeLabel)}</span>
-                  <span class="vintage-pill">${escapeHtml(w.vintage ? String(w.vintage) : "NV")}</span>
+                  <span class="vintage-pill">📅 ${escapeHtml(w.vintage ? String(w.vintage) : "NV")}</span>
+                  ${w.varietal ? `<span class="filter-chip" style="padding: 2px 8px; font-size: 11px;">🍇 ${escapeHtml(w.varietal)}</span>` : ""}
                   <span class="drink-pill" style="border-color:${statusMeta.color}; color:${statusMeta.color}; font-size: 11px;">
                     ${escapeHtml(statusMeta.label)} (${escapeHtml(drinkYears)})
                   </span>
                 </div>
                 <div style="font-size: 13px; font-weight: 500; color: var(--secondary-text-color);">${escapeHtml(w.winery)}</div>
-                <div style="font-size: 16px; font-weight: 600; margin: 2px 0 4px;">${escapeHtml(w.name)}</div>
-                <div style="font-size: 12px; color: var(--secondary-text-color);">
-                  ${escapeHtml([w.varietal, w.region, w.country].filter(Boolean).join(" • ") || "—")}
+                <div style="font-size: 17px; font-weight: 700; margin: 2px 0 4px; line-height: 1.3;">${escapeHtml(w.name)}</div>
+                <div style="font-size: 12px; color: var(--secondary-text-color); margin-bottom: 6px;">
+                  🌍 ${escapeHtml([w.region, w.country].filter(Boolean).join(" • ") || "Origin not specified")}
+                  ${(w.storage_location || w.last_storage_location) ? ` • <strong style="color: var(--primary-color);">📍 ${escapeHtml(w.storage_location || w.last_storage_location)}</strong>` : ""}
                 </div>
-                <div style="display: flex; gap: 8px; align-items: center; margin-top: 6px; flex-wrap: wrap;">
+                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
                   ${
                     w.vivino_url
                       ? `<a class="vivino-badge" href="${escapeHtml(w.vivino_url)}" target="_blank" rel="noopener noreferrer" title="Open on Vivino (opens in new tab)" style="text-decoration: none;">
@@ -1824,18 +1897,153 @@ class WineInventoryCard extends HTMLElement {
                       ? `<span class="vivino-badge">★ ${escapeHtml(Number(w.vivino_rating).toFixed(1))}</span>`
                       : `<span class="vivino-badge muted">No Vivino rating</span>`
                   }
-                  <span style="font-size: 12px; font-weight: 600; color: var(--primary-color);">
-                    In Stock: ${Number(w.quantity || 0)} ${Number(w.quantity) === 1 ? "bottle" : "bottles"}
-                  </span>
+                  ${w.personal_rating ? `<span class="personal-badge">My Rating: ★ ${w.personal_rating}</span>` : ""}
+                </div>
+
+                <!-- Bottle Quantity Stepper (+ / -) with 0-Bottle Warning -->
+                <div class="detail-stepper-wrap" style="display: flex; align-items: center; gap: 10px; margin-top: 12px; flex-wrap: wrap;">
+                  <span style="font-size: 13px; font-weight: 600; color: var(--secondary-text-color);">In Cellar:</span>
+                  <div class="stepper-controls" style="display: inline-flex; align-items: center; background: var(--card-background-color, #fff); border: 1px solid var(--divider-color, #ccc); border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
+                    <button type="button" class="ha-btn icon-btn" id="btn-detail-qty-minus" data-id="${w.id}" data-qty="${w.quantity}" title="Decrease bottle count (-1)" style="width: 36px; height: 36px; border: none; border-radius: 0; background: transparent; cursor: pointer;">
+                      <ha-icon icon="mdi:minus"></ha-icon>
+                    </button>
+                    <span id="detail-qty-display" style="padding: 0 12px; font-weight: 700; font-size: 15px; min-width: 32px; text-align: center; color: var(--primary-color);">
+                      ${Number(w.quantity || 0)}
+                    </span>
+                    <button type="button" class="ha-btn icon-btn" id="btn-detail-qty-plus" data-id="${w.id}" data-qty="${w.quantity}" title="Increase bottle count (+1)" style="width: 36px; height: 36px; border: none; border-radius: 0; background: transparent; cursor: pointer;">
+                      <ha-icon icon="mdi:plus"></ha-icon>
+                    </button>
+                  </div>
+                  <span style="font-size: 12px; color: var(--secondary-text-color);">${Number(w.quantity) === 1 ? "bottle" : "bottles"}</span>
+                  <button type="button" class="ha-btn secondary-btn" id="btn-detail-research-wine" data-id="${w.id}" style="margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-weight: 600;" title="Deep Gemini AI research on producer, terroir & cuvée history" ${this._researchingWineId === w.id ? "disabled" : ""}>
+                    <ha-icon icon="mdi:auto-fix" style="color: var(--primary-color);"></ha-icon>
+                    <span>${this._researchingWineId === w.id ? "Researching..." : "Research Wine (AI)"}</span>
+                  </button>
                 </div>
               </div>
             </div>
 
+            ${
+              this._researchingWineId === w.id
+                ? `<div class="research-loading-banner" style="margin: 14px 0; padding: 14px; border-radius: 10px; background: rgba(3, 169, 244, 0.08); border: 1px solid var(--primary-color); display: flex; align-items: center; gap: 12px;">
+                     <ha-icon icon="mdi:loading" class="spin-icon" style="color: var(--primary-color); --mdc-icon-size: 24px; animation: spin 1s linear infinite;"></ha-icon>
+                     <div>
+                       <div style="font-weight: 600; font-size: 13px; color: var(--primary-color);">Gemini AI is researching this wine...</div>
+                       <div style="font-size: 12px; color: var(--secondary-text-color);">Investigating winemaker heritage, cuvée history, terroir, tasting profile, and pairings.</div>
+                     </div>
+                   </div>`
+                : ""
+            }
+
+            ${
+              this._researchError
+                ? `<div class="scan-error-card" style="margin: 12px 0;">
+                     <div class="scan-error-message"><strong>Research Failed:</strong> ${escapeHtml(this._researchError)}</div>
+                   </div>`
+                : ""
+            }
+
+            ${
+              research
+                ? `<div class="research-results-card" style="margin: 16px 0; border: 1px solid var(--divider-color, #e0e0e0); border-radius: 12px; padding: 16px; background: var(--secondary-background-color, rgba(127,127,127,0.04)); box-shadow: 0 1px 4px rgba(0,0,0,0.05);">
+                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                       <div style="display: flex; align-items: center; gap: 8px;">
+                         <ha-icon icon="mdi:auto-fix" style="color: var(--primary-color);"></ha-icon>
+                         <strong style="font-size: 14px;">Sommelier &amp; Producer AI Research</strong>
+                       </div>
+                       <button type="button" class="ha-btn secondary-btn icon-btn" id="btn-re-research-wine" data-id="${w.id}" title="Re-run Gemini AI Research">
+                         <ha-icon icon="mdi:refresh"></ha-icon>
+                       </button>
+                     </div>
+                     ${research.summary ? `<div style="font-size: 13px; font-weight: 500; font-style: italic; margin-bottom: 12px; line-height: 1.5; color: var(--primary-text-color);">${escapeHtml(research.summary)}</div>` : ""}
+                     <div style="display: flex; flex-direction: column; gap: 10px;">
+                       ${
+                         research.producer_history
+                           ? `<div class="research-block" style="padding: 10px; background: var(--card-background-color, #fff); border-radius: 8px; border: 1px solid var(--divider-color, #eee);">
+                                <strong style="display: block; font-size: 12px; color: var(--primary-color); margin-bottom: 4px;">🏰 Producer &amp; Winery Heritage</strong>
+                                <div style="font-size: 12px; line-height: 1.5; color: var(--primary-text-color);">${escapeHtml(research.producer_history)}</div>
+                              </div>`
+                           : ""
+                       }
+                       ${
+                         research.wine_and_terroir
+                           ? `<div class="research-block" style="padding: 10px; background: var(--card-background-color, #fff); border-radius: 8px; border: 1px solid var(--divider-color, #eee);">
+                                <strong style="display: block; font-size: 12px; color: var(--primary-color); margin-bottom: 4px;">🍇 The Wine, Vineyards &amp; Terroir</strong>
+                                <div style="font-size: 12px; line-height: 1.5; color: var(--primary-text-color);">${escapeHtml(research.wine_and_terroir)}</div>
+                              </div>`
+                           : ""
+                       }
+                       ${
+                         research.tasting_profile
+                           ? `<div class="research-block" style="padding: 10px; background: var(--card-background-color, #fff); border-radius: 8px; border: 1px solid var(--divider-color, #eee);">
+                                <strong style="display: block; font-size: 12px; color: var(--primary-color); margin-bottom: 4px;">🍷 Tasting Profile &amp; Cellar Longevity</strong>
+                                <div style="font-size: 12px; line-height: 1.5; color: var(--primary-text-color);">${escapeHtml(research.tasting_profile)}</div>
+                              </div>`
+                           : ""
+                       }
+                       ${
+                         research.serving_and_pairing
+                           ? `<div class="research-block" style="padding: 10px; background: var(--card-background-color, #fff); border-radius: 8px; border: 1px solid var(--divider-color, #eee);">
+                                <strong style="display: block; font-size: 12px; color: var(--primary-color); margin-bottom: 4px;">🍽️ Serving &amp; Culinary Pairings</strong>
+                                <div style="font-size: 12px; line-height: 1.5; color: var(--primary-text-color);">${escapeHtml(research.serving_and_pairing)}</div>
+                              </div>`
+                           : ""
+                       }
+                       ${
+                         research.fun_facts
+                           ? `<div class="research-block" style="padding: 10px; background: var(--card-background-color, #fff); border-radius: 8px; border: 1px solid var(--divider-color, #eee);">
+                                <strong style="display: block; font-size: 12px; color: var(--primary-color); margin-bottom: 4px;">✨ Fascinating Trivia &amp; Accolades</strong>
+                                <div style="font-size: 12px; line-height: 1.5; color: var(--primary-text-color);">${escapeHtml(research.fun_facts)}</div>
+                              </div>`
+                           : ""
+                       }
+                     </div>
+                   </div>`
+                : ""
+            }
+
             <form id="detail-form" class="form-grid">
+              <div class="form-field">
+                <label>Winery / Producer</label>
+                <input class="ha-input" name="winery" value="${escapeHtml(df.winery || "")}" placeholder="Producer / Estate" />
+              </div>
+              <div class="form-field">
+                <label>Wine / Cuvée Name</label>
+                <input class="ha-input" name="name" value="${escapeHtml(df.name || "")}" placeholder="Wine Name" />
+              </div>
+
+              <!-- Grape variety, Year, Country of Origin fields -->
+              <div class="form-field">
+                <label>Grape Variety / Blend</label>
+                <input class="ha-input" name="varietal" value="${escapeHtml(df.varietal || "")}" placeholder="e.g. Cabernet Sauvignon, Pinot Noir" />
+              </div>
+              <div class="form-field">
+                <label>Harvest Year / Vintage</label>
+                <input class="ha-input" type="number" name="vintage" value="${escapeHtml(df.vintage || "")}" placeholder="e.g. 2020 (leave blank for NV)" />
+              </div>
+              <div class="form-field">
+                <label>Country of Origin</label>
+                <input class="ha-input" name="country" value="${escapeHtml(df.country || "")}" placeholder="e.g. France, Italy, Spain, USA" />
+              </div>
+              <div class="form-field">
+                <label>Region / Appellation</label>
+                <input class="ha-input" name="region" value="${escapeHtml(df.region || "")}" placeholder="e.g. Bordeaux, Tuscany, Rioja" />
+              </div>
+
+              <!-- Storage Location / Area selection -->
+              <div class="form-field">
+                <label>Storage Area / Location</label>
+                <input class="ha-input" name="storage_location" list="detail-storage-areas" value="${escapeHtml(df.storage_location || "")}" placeholder="Select or type area (e.g. Wine Fridge, Cellar)" />
+                <datalist id="detail-storage-areas">
+                  ${availableAreas.map((loc) => `<option value="${escapeHtml(loc)}"></option>`).join("")}
+                </datalist>
+              </div>
+
               <div class="form-field full-width">
                 <label>Free-Form Notes Overview</label>
                 <textarea class="ha-textarea" name="general_notes" rows="3" placeholder="Master overview notes for this wine...">${escapeHtml(df.general_notes)}</textarea>
               </div>
+
               <div class="form-field">
                 <label>Drink Window (From – Until Year)</label>
                 <div class="split-2">
@@ -1999,11 +2207,6 @@ class WineInventoryCard extends HTMLElement {
       this._userToggledView = true;
       this._render();
     });
-    root.querySelector("#btn-open-backup")?.addEventListener("click", () => {
-      this._activeModal = "backup";
-      this._loadBackups();
-      this._render();
-    });
 
     const searchInput = root.querySelector("#wine-search-input");
     if (searchInput) {
@@ -2065,6 +2268,66 @@ class WineInventoryCard extends HTMLElement {
       });
     });
 
+    // Details View: Bottle quantity stepper (+ / -) with 0-bottle warning
+    root.querySelector("#btn-detail-qty-plus")?.addEventListener("click", async () => {
+      const wine = this._modalWine;
+      if (!wine || !this._hass) return;
+      try {
+        await this._hass.callWS({
+          type: "wine_inventory/adjust_quantity",
+          wine_id: Number(wine.id),
+          delta: 1,
+        });
+        wine.quantity = Number(wine.quantity || 0) + 1;
+        const disp = root.querySelector("#detail-qty-display");
+        if (disp) disp.textContent = String(wine.quantity);
+        await this._fetchInventory();
+        this._render();
+      } catch (err) {
+        alert(`Failed to add bottle: ${err?.message || err}`);
+      }
+    });
+
+    root.querySelector("#btn-detail-qty-minus")?.addEventListener("click", async () => {
+      const wine = this._modalWine;
+      if (!wine || !this._hass) return;
+      const currentQty = Number(wine.quantity || 0);
+      if (currentQty <= 0) return;
+
+      if (currentQty === 1) {
+        const label = `${wine.winery ? wine.winery + " – " : ""}${wine.name} (${wine.vintage || "NV"})`;
+        const confirmed = window.confirm(
+          `⚠️ WARNING: Reducing the bottle count to 0 will mark "${label}" as consumed / out of stock in your cellar.\n\nDo you want to confirm reducing the quantity to 0?`
+        );
+        if (!confirmed) return;
+      }
+
+      try {
+        await this._hass.callWS({
+          type: "wine_inventory/adjust_quantity",
+          wine_id: Number(wine.id),
+          delta: -1,
+        });
+        wine.quantity = Math.max(0, currentQty - 1);
+        const disp = root.querySelector("#detail-qty-display");
+        if (disp) disp.textContent = String(wine.quantity);
+        await this._fetchInventory();
+        this._render();
+      } catch (err) {
+        alert(`Failed to consume bottle: ${err?.message || err}`);
+      }
+    });
+
+    // Deep Gemini AI Wine Research Scan
+    root.querySelector("#btn-detail-research-wine")?.addEventListener("click", (e) => {
+      const wineId = Number(e.currentTarget.dataset.id);
+      this._handleResearchWine(wineId);
+    });
+    root.querySelector("#btn-re-research-wine")?.addEventListener("click", (e) => {
+      const wineId = Number(e.currentTarget.dataset.id);
+      this._handleResearchWine(wineId);
+    });
+
     // Delete wine button handler
     root.querySelector("#btn-delete-wine")?.addEventListener("click", async () => {
       const wine = this._modalWine;
@@ -2113,31 +2376,6 @@ class WineInventoryCard extends HTMLElement {
     root.querySelector("#dismiss-card-error-btn")?.addEventListener("click", () => {
       this._error = "";
       this._render();
-    });
-
-    // Backup & Restore modal handlers
-    root.querySelector("#close-backup-btn")?.addEventListener("click", () => this._closeModal());
-    root.querySelector("#dismiss-backup-error-btn")?.addEventListener("click", () => {
-      this._backupState.error = "";
-      this._render();
-    });
-    root.querySelector("#dismiss-backup-success-btn")?.addEventListener("click", () => {
-      this._backupState.success = "";
-      this._render();
-    });
-    root.querySelector("#btn-create-backup")?.addEventListener("click", () => this._handleCreateBackup());
-    root.querySelector("#btn-select-restore")?.addEventListener("click", () => {
-      root.querySelector("#restore-file-input")?.click();
-    });
-    root.querySelector("#restore-file-input")?.addEventListener("change", (e) => this._handleRestoreFile(e));
-    root.querySelector("#btn-select-import")?.addEventListener("click", () => {
-      root.querySelector("#import-file-input")?.click();
-    });
-    root.querySelector("#import-file-input")?.addEventListener("change", (e) => this._handleImportFile(e));
-    root.querySelectorAll("[data-restore-server-filename]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        this._handleRestoreServerBackup(btn.dataset.restoreServerFilename);
-      });
     });
 
     root.querySelector("#bottle-file-input")?.addEventListener("change", (e) => this._handleFileSelected(e));
@@ -2755,8 +2993,83 @@ class WineInventoryCard extends HTMLElement {
           white-space: pre-wrap;
         }
         @media (max-width: 600px) {
+          ha-card {
+            padding: 12px;
+          }
+          .header-bar {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 10px;
+          }
+          .title-block h1 {
+            font-size: 18px;
+          }
+          .header-actions {
+            justify-content: flex-start;
+            flex-wrap: wrap;
+            gap: 6px;
+          }
+          .controls-bar {
+            flex-direction: column;
+            gap: 8px;
+          }
+          .search-wrap {
+            width: 100%;
+            flex: 1 1 100%;
+          }
+          .filter-chips {
+            overflow-x: auto;
+            flex-wrap: nowrap;
+            -webkit-overflow-scrolling: touch;
+            padding-bottom: 4px;
+          }
+          .filter-chip {
+            white-space: nowrap;
+            flex-shrink: 0;
+          }
+          .wine-grid {
+            grid-template-columns: 1fr;
+            gap: 10px;
+          }
+          .wine-list-table th:nth-child(4),
+          .wine-list-table td:nth-child(4),
+          .wine-list-table th:nth-child(5),
+          .wine-list-table td:nth-child(5) {
+            display: none;
+          }
+          .wine-list-title-wrap {
+            max-width: 130px;
+          }
+          .modal-backdrop {
+            padding: 6px;
+          }
+          .modal-surface {
+            max-height: 94vh;
+            border-radius: 10px;
+          }
+          .modal-header {
+            padding: 12px 14px;
+          }
+          .modal-body {
+            padding: 12px 14px;
+          }
+          .detail-overview-header {
+            flex-direction: column;
+            align-items: flex-start !important;
+            gap: 10px !important;
+          }
+          .split-2 {
+            grid-template-columns: 1fr;
+          }
           .form-grid {
             grid-template-columns: 1fr;
+          }
+          .modal-actions {
+            flex-direction: column;
+            align-items: stretch;
+          }
+          .modal-actions button {
+            width: 100%;
           }
         }
         .active-view {
@@ -2871,10 +3184,6 @@ class WineInventoryCard extends HTMLElement {
             <button class="ha-btn ${this._viewMode === "list" ? "active-view" : "secondary-btn"} icon-btn" id="btn-toggle-list" title="Line-Item List View">
               <ha-icon icon="mdi:view-list"></ha-icon>
             </button>
-            <button class="ha-btn secondary-btn" id="btn-open-backup" title="Backup, Restore &amp; Import Database">
-              <ha-icon icon="mdi:database-arrow-down"></ha-icon>
-              <span>Backup / Import</span>
-            </button>
             <button class="ha-btn primary-btn" id="btn-scan-bottle">
               <ha-icon icon="mdi:camera-iris"></ha-icon>
               <span>Scan Bottle</span>
@@ -2955,7 +3264,6 @@ class WineInventoryCard extends HTMLElement {
       ${this._activeModal === "quick_add" ? this._renderQuickAddModal() : ""}
       ${this._activeModal === "consume" ? this._renderConsumeModal() : ""}
       ${this._activeModal === "detail" ? this._renderDetailModal() : ""}
-      ${this._activeModal === "backup" ? this._renderBackupModal() : ""}
       ${this._activeModal === "image_preview" ? this._renderImagePreviewModal() : ""}
     `;
 

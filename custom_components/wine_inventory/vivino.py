@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import html
 import json
 import logging
@@ -28,6 +29,62 @@ DEFAULT_HEADERS: dict[str, str] = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9,nl;q=0.8",
 }
+
+
+def clean_tokens(s: str) -> list[str]:
+    """Extract lowercased alphanumeric words with length > 1."""
+    return [t for t in re.findall(r"\w+", (s or "").lower()) if len(t) > 1]
+
+
+def is_text_similar(target: str, candidate: str, threshold: float = 0.5) -> bool:
+    """Check if target and candidate strings are lexically or semantically similar."""
+    t = (target or "").strip().lower()
+    c = (candidate or "").strip().lower()
+    if not t or not c:
+        return False
+    if t == c:
+        return True
+    if (len(t) >= 4 and t in c) or (len(c) >= 4 and c in t):
+        return True
+
+    t_tokens = set(clean_tokens(t))
+    c_tokens = set(clean_tokens(c))
+    if t_tokens and c_tokens:
+        overlap = t_tokens & c_tokens
+        if len(overlap) / min(len(t_tokens), len(c_tokens)) >= 0.5:
+            return True
+
+    ratio = difflib.SequenceMatcher(None, t, c).ratio()
+    return ratio >= threshold
+
+
+def is_vivino_candidate_similar(
+    candidate: dict[str, Any],
+    target_winery: str,
+    target_name: str,
+) -> bool:
+    """Determine whether a candidate Vivino record has a similar wine name or winery/maker.
+
+    Per strict requirement: either wine name or maker needs to be similar.
+    If not, do not match the wine to a Vivino match.
+    """
+    clean_target_winery = (target_winery or "").strip()
+    clean_target_name = (target_name or "").strip()
+
+    if not clean_target_winery and not clean_target_name:
+        return False
+
+    cand_winery = str(candidate.get("winery") or "").strip()
+    cand_name = str(candidate.get("name") or "").strip()
+
+    maker_similar = is_text_similar(clean_target_winery, cand_winery)
+    name_similar = is_text_similar(clean_target_name, cand_name)
+
+    # In case the winery was detected as part of the wine name or vice versa
+    cross_similar_1 = is_text_similar(clean_target_winery, cand_name)
+    cross_similar_2 = is_text_similar(clean_target_name, cand_winery)
+
+    return maker_similar or name_similar or cross_similar_1 or cross_similar_2
 
 
 def _score_candidate(
@@ -174,6 +231,20 @@ def parse_vivino_explore_payload(
             "vivino_image_url": img_location,
             "rating_source": "vivino",
         }
+
+        # Filter candidate: Either wine name or maker MUST be similar!
+        if (target_winery or target_name) and not is_vivino_candidate_similar(
+            candidate, target_winery, target_name
+        ):
+            _LOGGER.debug(
+                "Rejecting Vivino candidate '%s - %s' (neither winery nor name is similar to '%s - %s')",
+                winery_name,
+                wine_name,
+                target_winery,
+                target_name,
+            )
+            continue
+
         candidate["match_score"] = _score_candidate(
             candidate, target_winery, target_name, target_vintage
         )

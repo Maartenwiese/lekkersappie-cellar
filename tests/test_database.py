@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -172,6 +173,48 @@ class TestWineDatabase(unittest.TestCase):
             self.assertEqual(stats["estimated_value"], 114.0)
 
             db.checkpoint_wal()
+
+    def test_storage_location_and_research_notes(self) -> None:
+        """Verify storage location updates on wine and batches, and research notes persistence."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = WineDatabase(Path(tmpdir) / "wine_inventory.db")
+            db.initialize()
+
+            wine = db.add_or_increment_wine(
+                winery="Tenuta San Guido",
+                name="Sassicaia",
+                vintage=2018,
+                wine_type="red",
+                varietal="Cabernet Sauvignon, Cabernet Franc",
+                region="Bolgheri",
+                country="Italy",
+                quantity=3,
+                storage_location="Wine Fridge Rack 2",
+            )
+            self.assertEqual(wine["storage_location"], "Wine Fridge Rack 2")
+            self.assertEqual(wine["country"], "Italy")
+            self.assertEqual(wine["varietal"], "Cabernet Sauvignon, Cabernet Franc")
+
+            research_payload = json.dumps({
+                "producer_history": "Pioneering Bolgheri estate founded by Mario Incisa della Rocchetta.",
+                "wine_and_terroir": "Gravelly soils similar to Graves in Bordeaux.",
+                "summary": "Legendary Super Tuscan icon.",
+            })
+            updated = db.update_wine(
+                wine["id"],
+                {
+                    "storage_location": "Underground Cellar Bin 4",
+                    "research_notes": research_payload,
+                },
+            )
+            self.assertEqual(updated["storage_location"], "Underground Cellar Bin 4")
+            self.assertIn("Pioneering Bolgheri estate", updated["research_notes"])
+
+            detail = db.get_wine_detail(wine["id"])
+            self.assertIsNotNone(detail)
+            assert detail is not None
+            self.assertEqual(detail["storage_location"], "Underground Cellar Bin 4")
+            self.assertEqual(detail["batches"][0]["storage_location"], "Underground Cellar Bin 4")
 
 
 if __name__ == "__main__":

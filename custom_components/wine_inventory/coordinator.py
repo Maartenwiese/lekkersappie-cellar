@@ -38,6 +38,7 @@ from .const import (
 from .database import WineDatabase, utc_now_iso
 from .scanner import (
     async_estimate_rating_via_gemini,
+    async_research_wine_with_gemini,
     async_scan_bottle_label,
     parse_image_data_uri,
     save_bottle_cover_image,
@@ -428,6 +429,36 @@ class WineInventoryCoordinator:
         )
         await self.async_refresh()
         return deleted
+
+    async def async_research_wine(self, wine_id: int) -> dict[str, Any]:
+        """Perform deep Gemini AI research on producer history and wine details."""
+        wine = await self.hass.async_add_executor_job(
+            self.db.get_wine_detail, int(wine_id)
+        )
+        if not wine:
+            raise ValueError(f"Wine ID {wine_id} not found")
+
+        session = self._get_http_session()
+        result = await async_research_wine_with_gemini(
+            session,
+            api_key=self.gemini_api_key,
+            wine_data=wine,
+            model=self.gemini_model,
+        )
+        research_data = result.get("research") or {}
+        research_json = json.dumps(research_data)
+        updated_wine = await self.hass.async_add_executor_job(
+            self.db.update_wine,
+            int(wine_id),
+            {"research_notes": research_json},
+        )
+        await self.async_refresh()
+        return {
+            "status": "ok",
+            "wine": updated_wine,
+            "research": research_data,
+            "model_used": result.get("model_used"),
+        }
 
     async def async_refresh_vivino(self, wine_id: int | None = None) -> dict[str, Any]:
         """Re-fetch Vivino ratings for one wine or all in-stock wines."""
