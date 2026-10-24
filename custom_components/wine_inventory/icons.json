@@ -44,6 +44,9 @@
     "adjust_quantity": "mdi:plus-minus-variant",
     "update_wine": "mdi:notebook-edit-outline",
     "refresh_vivino": "mdi:refresh",
-    "export_inventory": "mdi:file-export-outline"
+    "export_inventory": "mdi:file-export-outline",
+    "create_backup": "mdi:cloud-upload-outline",
+    "restore_backup": "mdi:cloud-download-outline",
+    "import_wines": "mdi:file-import-outline"
   }
 }

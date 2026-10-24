@@ -3,15 +3,16 @@
 # - Uses `type: sections` view with 12-column responsive `grid_options`
 # - Uses explicit `type: heading` cards with inline action button badges
 # - Uses `type: tile` cards for summary metrics and cellar environment
-# - Uses `type: distribution` card (2026.2+) for Red / White / Rosé / Sparkling breakdown
+# - Uses `type: distribution` card for Red / White / Rosé / Sparkling breakdown
 # - Uses `type: custom:wine-inventory-card` for bottle scanning, Vivino ranking, +1/-1 stock, and notes
+# - Features multiple dedicated views: Cellar Overview, Line-Item List View, Tasting Archive, and Cellar Operations & Backup
 
 title: Lekkersappie
 views:
-  - title: Lekkersappie
-    path: lekkersappie
+  - title: Cellar Overview
+    path: overview
     type: sections
-    icon: mdi:glass-wine
+    icon: mdi:view-dashboard
     max_columns: 3
     badges:
       - type: entity
@@ -113,7 +114,7 @@ views:
         column_span: 2
         cards:
           - type: heading
-            heading: Lekkersappie — Wine Inventory & Gemini Scanner
+            heading: Cellar Grid & Label Scanner
             heading_style: title
             icon: mdi:glass-wine
             badges:
@@ -126,6 +127,202 @@ views:
                     format: csv
           - type: custom:wine-inventory-card
             title: Lekkersappie
+            default_view: grid
             grid_options:
               columns: full
               rows: auto
+
+  - title: Wine List
+    path: list-view
+    type: sections
+    icon: mdi:view-list
+    max_columns: 1
+    badges:
+      - type: entity
+        entity: sensor.lekkersappie_total_bottles
+        show_name: true
+        show_state: true
+        color: red
+      - type: entity
+        entity: sensor.lekkersappie_unique_wines
+        show_name: true
+        show_state: true
+        color: purple
+    sections:
+      - type: grid
+        column_span: 1
+        cards:
+          - type: heading
+            heading: Wine Inventory Line-Item List
+            heading_style: title
+            icon: mdi:format-list-bulleted
+            badges:
+              - type: button
+                icon: mdi:refresh
+                tap_action:
+                  action: perform-action
+                  perform_action: wine_inventory.refresh_vivino
+              - type: button
+                icon: mdi:file-export-outline
+                tap_action:
+                  action: perform-action
+                  perform_action: wine_inventory.export_inventory
+                  data:
+                    format: csv
+          - type: custom:wine-inventory-card
+            title: Lekkersappie
+            default_view: list
+            grid_options:
+              columns: full
+              rows: auto
+
+  - title: Tasting Archive
+    path: tasting-archive
+    type: sections
+    icon: mdi:book-open-page-variant
+    max_columns: 2
+    badges:
+      - type: entity
+        entity: sensor.lekkersappie_total_bottles
+        show_name: true
+        show_state: true
+        color: red
+    sections:
+      - type: grid
+        column_span: 1
+        cards:
+          - type: heading
+            heading: Cellar Tasting & Notes
+            heading_style: title
+            icon: mdi:notebook-check-outline
+          - type: tile
+            entity: sensor.lekkersappie_ready_to_drink
+            name: Prime Bottles to Open
+            icon: mdi:check-decagram
+            color: green
+            grid_options:
+              columns: 12
+              rows: 1
+          - type: tile
+            entity: sensor.lekkersappie_drink_soon
+            name: Urgently Drink Soon
+            icon: mdi:clock-alert-outline
+            color: amber
+            grid_options:
+              columns: 12
+              rows: 1
+          - type: markdown
+            title: Tasting Guide
+            content: >
+              Log personal tasting ratings and notes directly on any wine card or line item.
+              Click **Details & Batches** on any wine to view its historical timeline of additions and opened bottles.
+
+      - type: grid
+        column_span: 1
+        cards:
+          - type: heading
+            heading: Wine Line Items & Reviews
+            heading_style: subtitle
+            icon: mdi:star-box-multiple-outline
+          - type: custom:wine-inventory-card
+            title: Lekkersappie Tasted Archive
+            default_view: list
+            grid_options:
+              columns: full
+              rows: auto
+
+  - title: Operations & Backup
+    path: cellar-operations
+    type: sections
+    icon: mdi:database-cog
+    max_columns: 2
+    badges:
+      - type: entity
+        entity: sensor.lekkersappie_total_bottles
+        show_name: true
+        show_state: true
+        color: red
+      - type: entity
+        entity: sensor.lekkersappie_estimated_value
+        show_name: true
+        show_state: true
+        color: teal
+    sections:
+      - type: grid
+        column_span: 1
+        cards:
+          - type: heading
+            heading: Cellar Operations & Maintenance
+            heading_style: title
+            icon: mdi:database-arrow-down
+          - type: tile
+            entity: sensor.lekkersappie_total_bottles
+            name: Active Bottles
+            icon: mdi:glass-wine
+            color: red
+            grid_options:
+              columns: 6
+              rows: 1
+          - type: tile
+            entity: sensor.lekkersappie_unique_wines
+            name: Registered Wine Profiles
+            icon: mdi:database
+            color: purple
+            grid_options:
+              columns: 6
+              rows: 1
+          - type: heading
+            heading: Quick Actions
+            heading_style: subtitle
+            icon: mdi:lightning-bolt-outline
+          - type: button
+            name: Create Full Cellar Backup (.zip)
+            icon: mdi:folder-zip-outline
+            tap_action:
+              action: perform-action
+              perform_action: wine_inventory.create_backup
+            grid_options:
+              columns: 12
+              rows: 1
+          - type: button
+            name: Refresh Vivino Ratings
+            icon: mdi:refresh
+            tap_action:
+              action: perform-action
+              perform_action: wine_inventory.refresh_vivino
+            grid_options:
+              columns: 6
+              rows: 1
+          - type: button
+            name: Export Cellar as CSV
+            icon: mdi:file-delimited-outline
+            tap_action:
+              action: perform-action
+              perform_action: wine_inventory.export_inventory
+              data:
+                format: csv
+            grid_options:
+              columns: 6
+              rows: 1
+
+      - type: grid
+        column_span: 1
+        cards:
+          - type: heading
+            heading: Database Backup & Import Guide
+            heading_style: title
+            icon: mdi:information-outline
+          - type: markdown
+            title: Backup & Restore Specs
+            content: >
+              ### Full Cellar Backup (.zip)
+
+              A Lekkersappie full backup creates a self-contained `.zip` archive containing:
+              - **`wine_inventory.db`**: Complete SQLite database with all wine records, batches, transactions, and settings.
+              - **`covers/`**: All high-resolution cropped and processed bottle label photos.
+              - **`metadata.json`**: Integration version, cellar name, creation timestamp, and total bottle counts.
+
+              ### How to Backup or Restore
+              - **Option 1**: Go to **Settings -> Devices & Services -> Lekkersappie -> Configure**, then select **Create Full Backup (.zip)** or **Restore Database from Backup (.zip)**.
+              - **Option 2**: In the **Lekkersappie card**, click the **Backup / Import** button in the top action bar to directly download or upload a `.zip` backup.
+              - **Option 3**: Use the **Import Wines** option to bulk-import bottles from JSON, CSV, or another wine archive without wiping your existing cellar.

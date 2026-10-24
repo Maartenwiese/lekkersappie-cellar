@@ -536,3 +536,57 @@ class WineInventoryCoordinator:
             "download_url": download_url,
             "exported_wines": len(wines),
         }
+
+    async def async_create_backup(self) -> dict[str, Any]:
+        """Create a full .zip backup of SQLite db, metadata.json, and cover images."""
+        from .backup import create_backup_archive
+
+        config_dir = Path(getattr(self.hass.config, "config_dir", "."))
+        return await self.hass.async_add_executor_job(
+            create_backup_archive,
+            config_dir,
+            self.db,
+        )
+
+    async def async_restore_backup(self, zip_source: Path | bytes | str) -> dict[str, Any]:
+        """Restore database and cover images from a .zip backup archive."""
+        from .backup import restore_backup_archive
+
+        config_dir = Path(getattr(self.hass.config, "config_dir", "."))
+        res = await self.hass.async_add_executor_job(
+            restore_backup_archive,
+            config_dir,
+            self.db,
+            zip_source,
+        )
+        await self.async_refresh()
+        return res
+
+    async def async_import_wines(
+        self,
+        payload: list[dict[str, Any]] | dict[str, Any] | bytes | str,
+        format_type: str = "auto",
+    ) -> dict[str, Any]:
+        """Import wines from JSON list, CSV, or ZIP archive."""
+        from .backup import import_wines_archive
+
+        config_dir = Path(getattr(self.hass.config, "config_dir", "."))
+        res = await self.hass.async_add_executor_job(
+            import_wines_archive,
+            config_dir,
+            self.db,
+            payload,
+            format_type,
+        )
+        await self.async_refresh()
+        return res
+
+    async def async_list_backups(self) -> list[dict[str, Any]]:
+        """List available backups on disk."""
+        from .backup import list_available_backups
+
+        config_dir = Path(getattr(self.hass.config, "config_dir", "."))
+        return await self.hass.async_add_executor_job(
+            list_available_backups,
+            config_dir,
+        )

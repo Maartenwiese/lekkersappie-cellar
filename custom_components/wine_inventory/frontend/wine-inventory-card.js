@@ -66,11 +66,19 @@ class WineInventoryCard extends HTMLElement {
     this._filterTab = "all";
     this._searchQuery = "";
     this._sortBy = "recent";
+    this._viewMode = "grid";
+    this._userToggledView = false;
 
-    // Active modal state: null | "scan" | "crop_rotate" | "quick_add" | "consume" | "detail"
+    // Active modal state: null | "scan" | "crop_rotate" | "quick_add" | "consume" | "detail" | "backup"
     this._activeModal = null;
     this._modalWine = null;
     this._cropState = null;
+    this._backupState = {
+      busy: false,
+      error: "",
+      success: "",
+      backups: [],
+    };
     this._scanState = {
       busy: false,
       error: "",
@@ -117,6 +125,9 @@ class WineInventoryCard extends HTMLElement {
     this._config = config || {};
     if (this._config.title) {
       this._cellarName = this._config.title;
+    }
+    if (this._config.default_view && !this._userToggledView) {
+      this._viewMode = this._config.default_view === "list" ? "list" : "grid";
     }
     this._render();
   }
@@ -933,6 +944,410 @@ class WineInventoryCard extends HTMLElement {
     `;
   }
 
+  _renderWineListView(wines) {
+    return `
+      <div class="wine-list-table-container">
+        <table class="wine-list-table">
+          <thead>
+            <tr>
+              <th style="width: 44px;">Label</th>
+              <th>Wine &amp; Winery</th>
+              <th>Vintage</th>
+              <th>Type</th>
+              <th>Drink Window</th>
+              <th>Rating</th>
+              <th style="text-align: center;">Stock</th>
+              <th style="text-align: right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${wines
+              .map((wine) => {
+                const statusMeta = DRINK_STATUS_META[wine.drink_status] || DRINK_STATUS_META.unknown;
+                const typeLabel = WINE_TYPE_LABELS[wine.wine_type] || "Wine";
+                const vintageLabel = wine.vintage ? String(wine.vintage) : "NV";
+                const ratingVal = wine.vivino_rating ? Number(wine.vivino_rating).toFixed(1) : null;
+                const drinkYears =
+                  wine.drink_from_year || wine.drink_until_year
+                    ? `${wine.drink_from_year || "Now"}–${wine.drink_until_year || "…"}`
+                    : statusMeta.label;
+                const subMeta = [wine.varietal, wine.region, wine.country].filter(Boolean).join(" • ") || "—";
+
+                return `
+                  <tr data-wine-id="${wine.id}">
+                    <td>
+                      ${
+                        wine.image_url
+                          ? `<img class="wine-list-thumb" src="${escapeHtml(wine.image_url)}" alt="${escapeHtml(wine.name)}" />`
+                          : `<div class="wine-list-thumb-placeholder type-${escapeHtml(wine.wine_type)}">
+                              <ha-icon icon="mdi:glass-wine" style="--mdc-icon-size: 20px;"></ha-icon>
+                            </div>`
+                      }
+                    </td>
+                    <td>
+                      <div class="wine-list-title-wrap">
+                        <strong title="${escapeHtml(wine.name)}">${escapeHtml(wine.name)}</strong>
+                        <span style="font-weight: 500;">${escapeHtml(wine.winery)}</span>
+                        <span>${escapeHtml(subMeta)}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <span class="vintage-pill">${escapeHtml(vintageLabel)}</span>
+                    </td>
+                    <td>
+                      <span class="type-pill type-${escapeHtml(wine.wine_type)}">${escapeHtml(typeLabel)}</span>
+                    </td>
+                    <td>
+                      <span class="drink-pill" style="border-color:${statusMeta.color}; color:${statusMeta.color}; font-size: 11px;">
+                        ${escapeHtml(drinkYears)}
+                      </span>
+                    </td>
+                    <td>
+                      ${
+                        ratingVal
+                          ? `<span class="vivino-badge" style="font-size: 11px; padding: 2px 6px;">★ ${escapeHtml(ratingVal)}</span>`
+                          : `<span style="font-size: 11px; color: var(--secondary-text-color);">—</span>`
+                      }
+                    </td>
+                    <td style="text-align: center;">
+                      <div class="stepper-group" style="justify-content: center;">
+                        <button class="ha-btn icon-btn minus-btn" data-action="consume" data-id="${wine.id}" title="Open / Consume Bottle (-1)" style="padding: 2px 6px; min-width: 26px; min-height: 26px;">
+                          <ha-icon icon="mdi:minus" style="--mdc-icon-size: 14px;"></ha-icon>
+                        </button>
+                        <strong class="qty-badge" style="min-width: 32px; font-size: 13px;">${Number(wine.quantity || 0)}</strong>
+                        <button class="ha-btn icon-btn plus-btn" data-action="quick-add" data-id="${wine.id}" title="Add Bottle (+1)" style="padding: 2px 6px; min-width: 26px; min-height: 26px;">
+                          <ha-icon icon="mdi:plus" style="--mdc-icon-size: 14px;"></ha-icon>
+                        </button>
+                      </div>
+                    </td>
+                    <td style="text-align: right;">
+                      <div class="wine-list-actions" style="justify-content: flex-end;">
+                        <button class="ha-btn secondary-btn" data-action="detail" data-id="${wine.id}" style="padding: 4px 10px; font-size: 12px;">
+                          <ha-icon icon="mdi:notebook-edit-outline" style="--mdc-icon-size: 16px;"></ha-icon>
+                          <span>Details</span>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                `;
+              })
+              .join("")}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  async _loadBackups() {
+    if (!this._hass) return;
+    try {
+      const res = await this._hass.callWS({ type: "wine_inventory/list_backups" });
+      this._backupState.backups = res.backups || [];
+      this._render();
+    } catch (err) {
+      console.warn("Failed to list backups:", err);
+    }
+  }
+
+  async _handleCreateBackup() {
+    if (!this._hass) return;
+    this._backupState.busy = true;
+    this._backupState.error = "";
+    this._backupState.success = "";
+    this._render();
+    try {
+      const res = await this._hass.callWS({ type: "wine_inventory/create_backup" });
+      this._backupState.busy = false;
+      this._backupState.success = `Backup created successfully (${res.wine_count} wines, ${(res.size_bytes / 1024).toFixed(1)} KB): ${res.backup_filename}`;
+      const a = document.createElement("a");
+      if (res.archive_base64) {
+        a.href = `data:application/zip;base64,${res.archive_base64}`;
+      } else if (res.download_url) {
+        a.href = res.download_url;
+      }
+      a.download = res.backup_filename || "wine_inventory_backup.zip";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      await this._loadBackups();
+    } catch (err) {
+      this._backupState.busy = false;
+      this._backupState.error = err?.message || "Failed to create backup.";
+      this._render();
+    }
+  }
+
+  async _handleRestoreFile(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    event.target.value = "";
+    if (
+      !confirm(
+        `Are you sure you want to restore from "${file.name}"? This will overwrite your current cellar database and restore images.`
+      )
+    ) {
+      return;
+    }
+    this._backupState.busy = true;
+    this._backupState.error = "";
+    this._backupState.success = "";
+    this._render();
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const dataUrl = String(reader.result || "");
+        const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl;
+        const res = await this._hass.callWS({
+          type: "wine_inventory/restore_backup",
+          archive_base64: base64,
+        });
+        this._backupState.busy = false;
+        this._backupState.success = `Database restored successfully (${res.wines_restored} wines, ${res.images_restored} images)!`;
+        await this._fetchInventory();
+        await this._loadBackups();
+      } catch (err) {
+        this._backupState.busy = false;
+        this._backupState.error = err?.message || "Failed to restore backup.";
+        this._render();
+      }
+    };
+    reader.onerror = () => {
+      this._backupState.busy = false;
+      this._backupState.error = "Failed to read selected backup file.";
+      this._render();
+    };
+    reader.readAsDataURL(file);
+  }
+
+  async _handleImportFile(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    event.target.value = "";
+    this._backupState.busy = true;
+    this._backupState.error = "";
+    this._backupState.success = "";
+    this._render();
+
+    const fileNameLower = file.name.toLowerCase();
+    const isZip = fileNameLower.endsWith(".zip");
+    const isCsv = fileNameLower.endsWith(".csv");
+    const formatType = isZip ? "zip" : isCsv ? "csv" : "json";
+
+    const reader = new FileReader();
+    if (isZip) {
+      reader.onload = async () => {
+        try {
+          const dataUrl = String(reader.result || "");
+          const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl;
+          const res = await this._hass.callWS({
+            type: "wine_inventory/import_wines",
+            payload: base64,
+            format_type: "zip",
+          });
+          this._backupState.busy = false;
+          this._backupState.success = `Imported ${res.imported_wines} wines (${res.bottles_added} bottles added)!`;
+          await this._fetchInventory();
+        } catch (err) {
+          this._backupState.busy = false;
+          this._backupState.error = err?.message || "Import failed.";
+          this._render();
+        }
+      };
+      reader.readAsDataURL(file);
+    } else {
+      reader.onload = async () => {
+        try {
+          const text = String(reader.result || "");
+          const payload = formatType === "json" ? JSON.parse(text) : text;
+          const res = await this._hass.callWS({
+            type: "wine_inventory/import_wines",
+            payload: payload,
+            format_type: formatType,
+          });
+          this._backupState.busy = false;
+          this._backupState.success = `Imported ${res.imported_wines} wines (${res.bottles_added} bottles added)!`;
+          await this._fetchInventory();
+        } catch (err) {
+          this._backupState.busy = false;
+          this._backupState.error = err?.message || "Import failed.";
+          this._render();
+        }
+      };
+      reader.readAsText(file);
+    }
+  }
+
+  async _handleRestoreServerBackup(filename) {
+    if (!this._hass || !filename) return;
+    if (
+      !confirm(
+        `Are you sure you want to restore from "${filename}"? This will overwrite your current cellar database and restore images.`
+      )
+    ) {
+      return;
+    }
+    this._backupState.busy = true;
+    this._backupState.error = "";
+    this._backupState.success = "";
+    this._render();
+    try {
+      const res = await this._hass.callWS({
+        type: "wine_inventory/restore_backup",
+        backup_filename: filename,
+      });
+      this._backupState.busy = false;
+      this._backupState.success = `Database restored successfully (${res.wines_restored} wines, ${res.images_restored} images)!`;
+      await this._fetchInventory();
+      await this._loadBackups();
+    } catch (err) {
+      this._backupState.busy = false;
+      this._backupState.error = err?.message || "Failed to restore backup.";
+      this._render();
+    }
+  }
+
+  _renderBackupModal() {
+    const bs = this._backupState;
+    return `
+      <div class="modal-backdrop" id="backup-modal-backdrop">
+        <div class="modal-surface" style="max-width: 620px;">
+          <div class="modal-header">
+            <h2>
+              <ha-icon icon="mdi:database-cog" style="color: var(--primary-color, #03a9f4);"></ha-icon>
+              <span>Cellar Database Backup, Restore &amp; Import</span>
+            </h2>
+            <button class="ha-btn icon-btn" id="close-backup-btn" title="Close">
+              <ha-icon icon="mdi:close"></ha-icon>
+            </button>
+          </div>
+
+          <div class="modal-body">
+            ${
+              bs.error
+                ? `<div class="card-alert-banner" role="alert" style="margin-bottom: 14px;">
+                    <div class="card-alert-content">
+                      <ha-icon icon="mdi:alert-circle" style="color: var(--error-color, #c62828);"></ha-icon>
+                      <span>${escapeHtml(bs.error)}</span>
+                    </div>
+                    <button class="ha-btn icon-btn" id="dismiss-backup-error-btn">
+                      <ha-icon icon="mdi:close"></ha-icon>
+                    </button>
+                  </div>`
+                : ""
+            }
+
+            ${
+              bs.success
+                ? `<div class="scan-status-banner" style="background: rgba(46, 125, 50, 0.15); color: #2e7d32; padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                      <ha-icon icon="mdi:check-circle" style="color: #2e7d32;"></ha-icon>
+                      <span>${escapeHtml(bs.success)}</span>
+                    </div>
+                    <button class="ha-btn icon-btn" id="dismiss-backup-success-btn">
+                      <ha-icon icon="mdi:close"></ha-icon>
+                    </button>
+                  </div>`
+                : ""
+            }
+
+            <div class="backup-action-card" style="border: 1px solid var(--divider-color, #e0e0e0); border-radius: 10px; padding: 14px; margin-bottom: 12px; background: var(--secondary-background-color, rgba(127,127,127,0.04));">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+                <div style="max-width: 360px;">
+                  <strong style="font-size: 14px; display: flex; align-items: center; gap: 6px;">
+                    <ha-icon icon="mdi:folder-zip-outline" style="color: var(--primary-color);"></ha-icon>
+                    Full Cellar Backup (.zip)
+                  </strong>
+                  <div style="font-size: 12px; color: var(--secondary-text-color); margin-top: 4px;">
+                    Creates a complete archive containing <code>wine_inventory.db</code>, all bottle photos (<code>covers/</code>), and metadata.
+                  </div>
+                </div>
+                <button class="ha-btn primary-btn" id="btn-create-backup" ${bs.busy ? "disabled" : ""}>
+                  <ha-icon icon="mdi:download"></ha-icon>
+                  <span>${bs.busy ? "Creating…" : "Download Backup (.zip)"}</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="backup-action-card" style="border: 1px solid var(--divider-color, #e0e0e0); border-radius: 10px; padding: 14px; margin-bottom: 12px; background: var(--secondary-background-color, rgba(127,127,127,0.04));">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+                <div style="max-width: 360px;">
+                  <strong style="font-size: 14px; display: flex; align-items: center; gap: 6px;">
+                    <ha-icon icon="mdi:database-refresh" style="color: var(--warning-color, #ef6c00);"></ha-icon>
+                    Restore Database from Backup (.zip)
+                  </strong>
+                  <div style="font-size: 12px; color: var(--secondary-text-color); margin-top: 4px;">
+                    Restores your database and cover images. <em>Warning: Replaces active cellar data.</em>
+                  </div>
+                </div>
+                <div>
+                  <input type="file" id="restore-file-input" accept=".zip" style="display: none;" />
+                  <button class="ha-btn secondary-btn" id="btn-select-restore" ${bs.busy ? "disabled" : ""}>
+                    <ha-icon icon="mdi:upload"></ha-icon>
+                    <span>Restore .zip Backup</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="backup-action-card" style="border: 1px solid var(--divider-color, #e0e0e0); border-radius: 10px; padding: 14px; margin-bottom: 16px; background: var(--secondary-background-color, rgba(127,127,127,0.04));">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+                <div style="max-width: 360px;">
+                  <strong style="font-size: 14px; display: flex; align-items: center; gap: 6px;">
+                    <ha-icon icon="mdi:file-import-outline" style="color: #2e7d32;"></ha-icon>
+                    Import Wines (JSON / CSV / ZIP)
+                  </strong>
+                  <div style="font-size: 12px; color: var(--secondary-text-color); margin-top: 4px;">
+                    Batch imports bottles from JSON, CSV, or another wine backup file without wiping existing wines.
+                  </div>
+                </div>
+                <div>
+                  <input type="file" id="import-file-input" accept=".json,.csv,.zip" style="display: none;" />
+                  <button class="ha-btn secondary-btn" id="btn-select-import" ${bs.busy ? "disabled" : ""}>
+                    <ha-icon icon="mdi:file-upload-outline"></ha-icon>
+                    <span>Import File</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            ${
+              (bs.backups || []).length > 0
+                ? `
+                <div class="section-divider" style="margin-bottom: 10px;">Available On-Disk Backups (${bs.backups.length})</div>
+                <div style="display: flex; flex-direction: column; gap: 8px; max-height: 180px; overflow-y: auto;">
+                  ${bs.backups
+                    .map(
+                      (b) => `
+                    <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border: 1px solid var(--divider-color, #e0e0e0); border-radius: 8px; font-size: 12px;">
+                      <div>
+                        <strong>${escapeHtml(b.filename)}</strong>
+                        <div style="color: var(--secondary-text-color); font-size: 11px;">
+                          ${(b.size_bytes / 1024).toFixed(1)} KB • ${escapeHtml(formatDisplayDate(b.created_at))}
+                        </div>
+                      </div>
+                      <div style="display: flex; gap: 6px;">
+                        ${
+                          b.download_url
+                            ? `<a class="ha-btn secondary-btn" href="${escapeHtml(b.download_url)}" download="${escapeHtml(b.filename)}" style="padding: 4px 8px; font-size: 11px; text-decoration: none;">Download</a>`
+                            : ""
+                        }
+                        <button class="ha-btn secondary-btn" data-restore-server-filename="${escapeHtml(b.filename)}" style="padding: 4px 8px; font-size: 11px;">Restore</button>
+                      </div>
+                    </div>
+                  `
+                    )
+                    .join("")}
+                </div>
+              `
+                : ""
+            }
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   _renderCropRotateModal() {
     return `
       <div class="modal-backdrop" id="modal-backdrop">
@@ -1458,6 +1873,21 @@ class WineInventoryCard extends HTMLElement {
     root.querySelector("#btn-scan-bottle")?.addEventListener("click", () => this._openScanModal(false));
     root.querySelector("#btn-add-manual")?.addEventListener("click", () => this._openScanModal(true));
     root.querySelector("#btn-refresh-vivino")?.addEventListener("click", () => this._refreshAllVivino());
+    root.querySelector("#btn-toggle-grid")?.addEventListener("click", () => {
+      this._viewMode = "grid";
+      this._userToggledView = true;
+      this._render();
+    });
+    root.querySelector("#btn-toggle-list")?.addEventListener("click", () => {
+      this._viewMode = "list";
+      this._userToggledView = true;
+      this._render();
+    });
+    root.querySelector("#btn-open-backup")?.addEventListener("click", () => {
+      this._activeModal = "backup";
+      this._loadBackups();
+      this._render();
+    });
 
     const searchInput = root.querySelector("#wine-search-input");
     if (searchInput) {
@@ -1526,6 +1956,31 @@ class WineInventoryCard extends HTMLElement {
     root.querySelector("#dismiss-card-error-btn")?.addEventListener("click", () => {
       this._error = "";
       this._render();
+    });
+
+    // Backup & Restore modal handlers
+    root.querySelector("#close-backup-btn")?.addEventListener("click", () => this._closeModal());
+    root.querySelector("#dismiss-backup-error-btn")?.addEventListener("click", () => {
+      this._backupState.error = "";
+      this._render();
+    });
+    root.querySelector("#dismiss-backup-success-btn")?.addEventListener("click", () => {
+      this._backupState.success = "";
+      this._render();
+    });
+    root.querySelector("#btn-create-backup")?.addEventListener("click", () => this._handleCreateBackup());
+    root.querySelector("#btn-select-restore")?.addEventListener("click", () => {
+      root.querySelector("#restore-file-input")?.click();
+    });
+    root.querySelector("#restore-file-input")?.addEventListener("change", (e) => this._handleRestoreFile(e));
+    root.querySelector("#btn-select-import")?.addEventListener("click", () => {
+      root.querySelector("#import-file-input")?.click();
+    });
+    root.querySelector("#import-file-input")?.addEventListener("change", (e) => this._handleImportFile(e));
+    root.querySelectorAll("[data-restore-server-filename]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        this._handleRestoreServerBackup(btn.dataset.restoreServerFilename);
+      });
     });
 
     root.querySelector("#bottle-file-input")?.addEventListener("change", (e) => this._handleFileSelected(e));
@@ -2147,6 +2602,87 @@ class WineInventoryCard extends HTMLElement {
             grid-template-columns: 1fr;
           }
         }
+        .active-view {
+          background: var(--primary-color, #03a9f4) !important;
+          color: var(--text-primary-color, #fff) !important;
+          border-color: transparent !important;
+        }
+        .wine-list-table-container {
+          overflow-x: auto;
+          margin-top: 6px;
+          border: 1px solid var(--divider-color, #e0e0e0);
+          border-radius: 10px;
+          background: var(--card-background-color, #fff);
+        }
+        .wine-list-table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 13px;
+          text-align: left;
+        }
+        .wine-list-table th {
+          background: var(--secondary-background-color, rgba(127, 127, 127, 0.08));
+          padding: 10px 12px;
+          font-weight: 600;
+          font-size: 11px;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          color: var(--secondary-text-color);
+          border-bottom: 1px solid var(--divider-color, #e0e0e0);
+          white-space: nowrap;
+        }
+        .wine-list-table td {
+          padding: 10px 12px;
+          border-bottom: 1px solid var(--divider-color, #f0f0f0);
+          vertical-align: middle;
+        }
+        .wine-list-table tr:last-child td {
+          border-bottom: none;
+        }
+        .wine-list-table tr:hover {
+          background: var(--secondary-background-color, rgba(127, 127, 127, 0.04));
+        }
+        .wine-list-thumb {
+          width: 36px;
+          height: 48px;
+          border-radius: 4px;
+          object-fit: cover;
+          display: block;
+        }
+        .wine-list-thumb-placeholder {
+          width: 36px;
+          height: 48px;
+          border-radius: 4px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .wine-list-title-wrap {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          max-width: 260px;
+        }
+        .wine-list-title-wrap strong {
+          font-size: 13px;
+          color: var(--primary-text-color);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .wine-list-title-wrap span {
+          font-size: 11px;
+          color: var(--secondary-text-color);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .wine-list-actions {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          white-space: nowrap;
+        }
       </style>
 
       <ha-card>
@@ -2172,6 +2708,16 @@ class WineInventoryCard extends HTMLElement {
           </div>
 
           <div class="header-actions">
+            <button class="ha-btn ${this._viewMode === "grid" ? "active-view" : "secondary-btn"} icon-btn" id="btn-toggle-grid" title="Grid View">
+              <ha-icon icon="mdi:view-grid"></ha-icon>
+            </button>
+            <button class="ha-btn ${this._viewMode === "list" ? "active-view" : "secondary-btn"} icon-btn" id="btn-toggle-list" title="Line-Item List View">
+              <ha-icon icon="mdi:view-list"></ha-icon>
+            </button>
+            <button class="ha-btn secondary-btn" id="btn-open-backup" title="Backup, Restore &amp; Import Database">
+              <ha-icon icon="mdi:database-arrow-down"></ha-icon>
+              <span>Backup / Import</span>
+            </button>
             <button class="ha-btn primary-btn" id="btn-scan-bottle">
               <ha-icon icon="mdi:camera-iris"></ha-icon>
               <span>Scan Bottle</span>
@@ -2239,6 +2785,8 @@ class WineInventoryCard extends HTMLElement {
                 <ha-icon icon="mdi:glass-wine" style="--mdc-icon-size: 40px; color: #a61a2e;"></ha-icon>
                 <p>No wines match the current filter. Click <strong>Scan Bottle</strong> to scan a wine label with Gemini Flash-Lite!</p>
               </div>`
+            : this._viewMode === "list"
+            ? this._renderWineListView(wines)
             : `<div class="wine-grid">
                 ${wines.map((w) => this._renderWineCard(w)).join("")}
               </div>`
@@ -2250,6 +2798,7 @@ class WineInventoryCard extends HTMLElement {
       ${this._activeModal === "quick_add" ? this._renderQuickAddModal() : ""}
       ${this._activeModal === "consume" ? this._renderConsumeModal() : ""}
       ${this._activeModal === "detail" ? this._renderDetailModal() : ""}
+      ${this._activeModal === "backup" ? this._renderBackupModal() : ""}
     `;
 
     this._updateEnvironmentBadges();

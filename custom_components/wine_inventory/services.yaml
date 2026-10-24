@@ -259,3 +259,39 @@ export_inventory:
           options:
             - "csv"
             - "json"
+
+create_backup:
+  name: Create Full Database Backup (.zip)
+  description: Create a complete .zip archive containing SQLite database, metadata.json, and all bottle cover images saved to /local/wine_inventory/backups/.
+
+restore_backup:
+  name: Restore Database from Backup (.zip)
+  description: Restore the SQLite database and all bottle cover images from a .zip backup archive.
+  fields:
+    file_path:
+      name: Backup File Path
+      description: Absolute path or filename in /local/wine_inventory/backups/ to restore from.
+      selector:
+        text:
+
+import_wines:
+  name: Import Wines (CSV, JSON, or ZIP)
+  description: Import wines and batches into the cellar from a file path or JSON text.
+  fields:
+    source:
+      name: Import Source
+      description: File path (.json, .csv, .zip) or JSON text.
+      required: true
+      selector:
+        text:
+          multiline: true
+    format:
+      name: Format
+      default: "auto"
+      selector:
+        select:
+          options:
+            - "auto"
+            - "json"
+            - "csv"
+            - "zip"

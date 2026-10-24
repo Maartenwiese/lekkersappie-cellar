@@ -6,7 +6,7 @@ from typing import Final
 
 DOMAIN: Final = "wine_inventory"
 NAME: Final = "Lekkersappie"
-VERSION: Final = "0.2.3"
+VERSION: Final = "0.2.4"
 
 # Config & Options keys
 CONF_CELLAR_NAME: Final = "cellar_name"
@@ -32,6 +32,7 @@ STORAGE_DIR_NAME: Final = "wine_inventory"
 DB_FILENAME: Final = "wine_inventory.db"
 COVERS_SUBDIR: Final = "www/wine_inventory/covers"
 EXPORTS_SUBDIR: Final = "www/wine_inventory/exports"
+BACKUPS_SUBDIR: Final = "www/wine_inventory/backups"
 FRONTEND_URL_BASE: Final = "/wine_inventory"
 CARD_JS_FILENAME: Final = "wine-inventory-card.js"
 CARD_RESOURCE_URL: Final = f"{FRONTEND_URL_BASE}/{CARD_JS_FILENAME}?v={VERSION}"
@@ -84,3 +85,6 @@ SERVICE_ADJUST_QUANTITY: Final = "adjust_quantity"
 SERVICE_UPDATE_WINE: Final = "update_wine"
 SERVICE_REFRESH_VIVINO: Final = "refresh_vivino"
 SERVICE_EXPORT_INVENTORY: Final = "export_inventory"
+SERVICE_CREATE_BACKUP: Final = "create_backup"
+SERVICE_RESTORE_BACKUP: Final = "restore_backup"
+SERVICE_IMPORT_WINES: Final = "import_wines"

@@ -149,5 +149,13 @@ Open your **Lekkersappie** dashboard card. You have two ways to add a bottle:
   - If a wine's stock reaches `0` bottles, it is never deleted—click the **Tasted Archive** filter chip at the top of the card to browse every past wine you've finished along with your ratings and tasting notes.
 - **Viewing & Editing the Notes Overview & History (`Batches & Notes` Button)**:
   - Click **Batches & Notes** on any wine card to edit its master **Free-Form Notes Overview** and **Drink Window**, inspect remaining bottles across different storage slots, and read the full chronological timeline of additions and tastings.
+- **Switching Between Grid & Line-Item List Views**:
+  - In the Lekkersappie card header, toggle between **Grid View** (`mdi:view-grid`) and **Line-Item List View** (`mdi:view-list`).
+  - In **Line-Item List View**, each wine is rendered as a clean, compact line item displaying its label thumbnail, winery, vintage, wine type, drinking window, Vivino rating, inline bottle stepper (`-` and `+`), and details button.
+  - You can also set `default_view: list` or `default_view: grid` directly in the card's Lovelace YAML configuration or use the dedicated **Wine List** view in `dashboards/wine-cellar-dashboard.yaml`.
+- **Database Backup, Restore & Import (.zip / JSON / CSV)**:
+  - **Download Full Backup (.zip)**: Exports a self-contained archive containing `wine_inventory.db`, all bottle cover photos (`covers/`), and structured JSON metadata. You can create a backup from the **Backup / Import** button in the card header, from the integration options (**Settings → Devices & Services → Lekkersappie → Configure → Create Full Backup**), or via the `wine_inventory.create_backup` action.
+  - **Restore Database (.zip)**: Restore a previous `.zip` backup archive either by uploading it directly through the card modal or through the integration configure options (**Settings → Devices & Services → Lekkersappie → Configure → Restore Database from Backup**).
+  - **Import Wines (JSON / CSV / ZIP)**: Import wines in bulk from external CSV spreadsheets, JSON export arrays, or other cellar archives without overwriting existing wines. Available in the card modal and the integration configure options.
 - **Exporting Your Inventory to CSV or JSON**:
   - Click the export badge in the dashboard header (or run the `wine_inventory.export_inventory` action in **Developer Tools → Actions**) to save a complete CSV or JSON export under `/config/www/wine_inventory/exports/` (downloadable at `/local/wine_inventory/exports/wine_inventory_export.csv`).

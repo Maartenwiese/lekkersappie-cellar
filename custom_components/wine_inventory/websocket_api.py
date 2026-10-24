@@ -36,6 +36,10 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_update_wine)
     websocket_api.async_register_command(hass, ws_delete_wine)
     websocket_api.async_register_command(hass, ws_refresh_vivino)
+    websocket_api.async_register_command(hass, ws_create_backup)
+    websocket_api.async_register_command(hass, ws_restore_backup)
+    websocket_api.async_register_command(hass, ws_import_wines)
+    websocket_api.async_register_command(hass, ws_list_backups)
 
 
 @websocket_api.websocket_command(
@@ -292,3 +296,122 @@ async def ws_refresh_vivino(
         connection.send_result(msg["id"], res)
     except Exception as err:  # noqa: BLE001
         connection.send_error(msg["id"], "vivino_refresh_failed", str(err))
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wine_inventory/create_backup",
+        vol.Optional("entry_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_create_backup(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Create a complete .zip backup containing database, metadata, and images."""
+    try:
+        coordinator = _get_coordinator(hass, msg.get("entry_id"))
+        res = await coordinator.async_create_backup()
+        connection.send_result(msg["id"], res)
+    except Exception as err:  # noqa: BLE001
+        connection.send_error(msg["id"], "backup_failed", str(err))
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wine_inventory/restore_backup",
+        vol.Optional("file_path"): str,
+        vol.Optional("zip_data"): str,
+        vol.Optional("entry_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_restore_backup(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Restore database and images from a backup .zip file path or base64 data."""
+    try:
+        coordinator = _get_coordinator(hass, msg.get("entry_id"))
+        zip_data = msg.get("zip_data")
+        file_path = msg.get("file_path")
+        if zip_data:
+            import base64
+
+            if "," in zip_data:
+                zip_data = zip_data.split(",", 1)[1]
+            raw_bytes = base64.b64decode(zip_data)
+            res = await coordinator.async_restore_backup(raw_bytes)
+        elif file_path:
+            res = await coordinator.async_restore_backup(file_path)
+        else:
+            raise ValueError("Either 'file_path' or 'zip_data' must be provided.")
+
+        connection.send_result(msg["id"], res)
+    except Exception as err:  # noqa: BLE001
+        connection.send_error(msg["id"], "restore_failed", str(err))
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wine_inventory/import_wines",
+        vol.Optional("source"): str,
+        vol.Optional("file_data"): str,
+        vol.Optional("wines"): list,
+        vol.Optional("entry_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_import_wines(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Import wines from file path, base64 archive, or JSON list."""
+    try:
+        coordinator = _get_coordinator(hass, msg.get("entry_id"))
+        file_data = msg.get("file_data")
+        source = msg.get("source")
+        wines_list = msg.get("wines")
+
+        if file_data:
+            import base64
+
+            if "," in file_data:
+                file_data = file_data.split(",", 1)[1]
+            raw_bytes = base64.b64decode(file_data)
+            res = await coordinator.async_import_wines(raw_bytes)
+        elif source:
+            res = await coordinator.async_import_wines(source)
+        elif wines_list is not None:
+            res = await coordinator.async_import_wines(wines_list)
+        else:
+            raise ValueError("No import payload provided.")
+
+        connection.send_result(msg["id"], res)
+    except Exception as err:  # noqa: BLE001
+        connection.send_error(msg["id"], "import_failed", str(err))
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wine_inventory/list_backups",
+        vol.Optional("entry_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_list_backups(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """List available backups on disk."""
+    try:
+        coordinator = _get_coordinator(hass, msg.get("entry_id"))
+        res = await coordinator.async_list_backups()
+        connection.send_result(msg["id"], {"backups": res})
+    except Exception as err:  # noqa: BLE001
+        connection.send_error(msg["id"], "list_backups_failed", str(err))

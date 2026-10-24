@@ -37,8 +37,11 @@ from .const import (
     FRONTEND_URL_BASE,
     SERVICE_ADD_WINE,
     SERVICE_ADJUST_QUANTITY,
+    SERVICE_CREATE_BACKUP,
     SERVICE_EXPORT_INVENTORY,
+    SERVICE_IMPORT_WINES,
     SERVICE_REFRESH_VIVINO,
+    SERVICE_RESTORE_BACKUP,
     SERVICE_SCAN_BOTTLE,
     SERVICE_UPDATE_WINE,
 )
@@ -144,6 +147,21 @@ def _async_register_services(hass: HomeAssistant) -> None:
             call.data.get("format", "csv")
         )
 
+    async def handle_create_backup(call: ServiceCall) -> ServiceResponse:
+        coordinator = _get_coordinator(hass, call.data.get("entry_id"))
+        return await coordinator.async_create_backup()
+
+    async def handle_restore_backup(call: ServiceCall) -> ServiceResponse:
+        coordinator = _get_coordinator(hass, call.data.get("entry_id"))
+        return await coordinator.async_restore_backup(call.data.get("file_path"))
+
+    async def handle_import_wines(call: ServiceCall) -> ServiceResponse:
+        coordinator = _get_coordinator(hass, call.data.get("entry_id"))
+        return await coordinator.async_import_wines(
+            payload=call.data.get("source"),
+            format_type=call.data.get("format", "auto"),
+        )
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_SCAN_BOTTLE,
@@ -185,6 +203,24 @@ def _async_register_services(hass: HomeAssistant) -> None:
         DOMAIN,
         SERVICE_EXPORT_INVENTORY,
         handle_export_inventory,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CREATE_BACKUP,
+        handle_create_backup,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_RESTORE_BACKUP,
+        handle_restore_backup,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_IMPORT_WINES,
+        handle_import_wines,
         supports_response=SupportsResponse.OPTIONAL,
     )
 
