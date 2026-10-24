@@ -145,6 +145,59 @@ class TestScannerVivinoAndCoordinator(unittest.TestCase):
             "https://images.vivino.com/thumbs/tig.png",
         )
 
+    def test_parse_vivino_search_html_ssr(self) -> None:
+        """Verify parsing of real Vivino search page HTML containing SSR data-ssr-props."""
+        import html
+        from custom_components.wine_inventory.vivino import parse_vivino_search_html
+
+        ssr_data = {
+            "initialExploreResults": {
+                "records": [
+                    {
+                        "vintage": {
+                            "year": 2015,
+                            "seo_name": "antinori-tignanello-2015",
+                            "statistics": {"ratings_average": 4.6, "ratings_count": 14699},
+                            "wine": {
+                                "id": 1652,
+                                "name": "Tignanello",
+                                "winery": {"name": "Antinori"},
+                                "region": {"name": "Toscana", "country": {"name": "Italy"}},
+                            },
+                        },
+                        "price": {"amount": 160.0},
+                    },
+                    {
+                        "vintage": {
+                            "year": 2019,
+                            "statistics": {"ratings_average": 4.6, "ratings_count": 8668},
+                            "wine": {
+                                "id": 1652,
+                                "name": "Tignanello",
+                                "winery": {"name": "Antinori"},
+                                "region": {"name": "Toscana", "country": {"name": "Italy"}},
+                            },
+                        },
+                        "price": {"amount": 145.0},
+                    },
+                ]
+            }
+        }
+        encoded_json = html.escape(json.dumps(ssr_data))
+        mock_html = f'<html><body><div id="ssr-explore-page" data-ssr-component="ExplorePage" data-ssr-props="{encoded_json}"></div></body></html>'
+
+        candidates = parse_vivino_search_html(
+            mock_html,
+            target_winery="Antinori",
+            target_name="Tignanello",
+            target_vintage=2015,
+        )
+        self.assertEqual(len(candidates), 2)
+        self.assertEqual(candidates[0]["vintage"], 2015)
+        self.assertEqual(candidates[0]["vivino_rating"], 4.6)
+        self.assertEqual(candidates[0]["winery"], "Antinori")
+        self.assertEqual(candidates[0]["name"], "Tignanello")
+
     def test_coordinator_end_to_end_scan_add_and_export(self) -> None:
         """Verify full async workflow: Gemini scan -> Vivino lookup -> DB add -> CSV export."""
 

@@ -628,6 +628,7 @@ class WineInventoryCard extends HTMLElement {
       const existing = res.existing_wine || null;
       this._scanState.vivinoCandidates = res.vivino_candidates || [];
       this._scanState.vivinoStatus = res.vivino_status || "";
+      this._scanState.selectedVivinoIndex = this._scanState.vivinoCandidates.length > 0 ? 0 : -1;
       this._scanState.existingWine = existing;
 
       this._scanState.form = {
@@ -678,9 +679,19 @@ class WineInventoryCard extends HTMLElement {
   }
 
   _applyVivinoCandidate(index) {
+    this._scanState.selectedVivinoIndex = index;
+    const f = this._scanState.form;
+    if (index === -1) {
+      f.vivino_rating = "";
+      f.vivino_ratings_count = null;
+      f.vivino_url = "";
+      f.vivino_price_estimate = "";
+      f.rating_source = "";
+      this._render();
+      return;
+    }
     const cand = this._scanState.vivinoCandidates[index];
     if (!cand) return;
-    const f = this._scanState.form;
     f.vivino_rating = cand.vivino_rating ?? "";
     f.vivino_ratings_count = cand.vivino_ratings_count ?? null;
     f.vivino_url = cand.vivino_url || "";
@@ -1069,21 +1080,33 @@ class WineInventoryCard extends HTMLElement {
                         : ""
                     }
                     ${
-                      s.vivinoCandidates && s.vivinoCandidates.length > 1
+                      s.vivinoCandidates && s.vivinoCandidates.length > 0
                         ? `<div class="form-field full-width">
-                            <label>Vivino Match Candidates (select if another match is closer)</label>
+                            <label>Vivino Match Selection (select candidate or disconnect)</label>
                             <select id="vivino-candidate-select" class="ha-input">
+                              <option value="-1" ${s.selectedVivinoIndex === -1 ? "selected" : ""}>
+                                🚫 Do not link to Vivino (Leave unlinked)
+                              </option>
                               ${s.vivinoCandidates
                                 .map(
                                   (c, idx) =>
-                                    `<option value="${idx}">
-                                      ${escapeHtml(c.winery)} – ${escapeHtml(c.name)} (${c.vintage || "NV"}) • ★ ${
-                                      c.vivino_rating ?? "?"
-                                    } (${c.vivino_ratings_count ?? 0} ratings)
+                                    `<option value="${idx}" ${s.selectedVivinoIndex === idx ? "selected" : ""}>
+                                      ★ ${c.vivino_rating ?? "?"} – ${escapeHtml(c.winery)}: ${escapeHtml(c.name)} (${c.vintage || "NV"}) [${c.vivino_ratings_count ? c.vivino_ratings_count.toLocaleString() : 0} ratings]
                                     </option>`
                                 )
                                 .join("")}
                             </select>
+                          </div>`
+                        : s.form.vivino_rating || s.form.vivino_url
+                        ? `<div class="form-field full-width">
+                            <label>Vivino Match</label>
+                            <div style="display:flex; justify-content:space-between; align-items:center; padding: 6px 12px; background:var(--secondary-background-color, rgba(127,127,127,0.08)); border-radius:8px;">
+                              <span style="font-size: 13px;">★ ${escapeHtml(s.form.vivino_rating)} (${escapeHtml(s.form.rating_source || "Vivino")})</span>
+                              <button type="button" class="ha-btn secondary-btn" id="btn-disconnect-vivino" style="padding: 4px 8px; font-size: 12px;">
+                                <ha-icon icon="mdi:link-variant-off"></ha-icon>
+                                <span>Do Not Link</span>
+                              </button>
+                            </div>
                           </div>`
                         : ""
                     }
@@ -1508,6 +1531,9 @@ class WineInventoryCard extends HTMLElement {
     root.querySelector("#bottle-file-input")?.addEventListener("change", (e) => this._handleFileSelected(e));
     root.querySelector("#vivino-candidate-select")?.addEventListener("change", (e) => {
       this._applyVivinoCandidate(Number(e.target.value));
+    });
+    root.querySelector("#btn-disconnect-vivino")?.addEventListener("click", () => {
+      this._applyVivinoCandidate(-1);
     });
 
     if (this._activeModal === "crop_rotate") {
