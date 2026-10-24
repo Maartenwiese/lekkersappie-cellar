@@ -1,7 +1,4 @@
 {
   "name": "Lekkersappie",
-  "render_readme": true,
-  "homeassistant": "2025.1.0",
-  "zip_release": true,
-  "filename": "wine_inventory.zip"
+  "render_readme": true
 }

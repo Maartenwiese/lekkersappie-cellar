@@ -50,24 +50,26 @@ _LOGGER = logging.getLogger(__name__)
 async def _async_register_frontend(hass: HomeAssistant) -> None:
     """Serve wine-inventory-card.js via hass.http and auto-register Lovelace resource."""
     domain_meta = hass.data.setdefault(DOMAIN, {})
-    if domain_meta.get("_frontend_registered"):
-        return
-
     frontend_dir = Path(__file__).parent / "frontend"
     card_js_path = frontend_dir / CARD_JS_FILENAME
 
-    if hasattr(hass, "http") and hass.http is not None:
-        await hass.http.async_register_static_paths(
-            [
-                StaticPathConfig(
-                    f"{FRONTEND_URL_BASE}/{CARD_JS_FILENAME}",
-                    str(card_js_path),
-                    cache_headers=True,
+    if not domain_meta.get("_frontend_registered"):
+        if hasattr(hass, "http") and hass.http is not None:
+            try:
+                await hass.http.async_register_static_paths(
+                    [
+                        StaticPathConfig(
+                            f"{FRONTEND_URL_BASE}/{CARD_JS_FILENAME}",
+                            str(card_js_path),
+                            cache_headers=True,
+                        )
+                    ]
                 )
-            ]
-        )
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug("Static path already registered or failed: %s", err)
+        domain_meta["_frontend_registered"] = True
 
-    # Auto-register in Lovelace storage resources if available (with ?v=1.0.0 cache-busting)
+    # Auto-register or update version in Lovelace storage resources if available
     try:
         lovelace = hass.data.get("lovelace")
         resources = getattr(lovelace, "resources", None)
@@ -86,14 +88,20 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
                 _LOGGER.info(
                     "Auto-registered Lovelace resource %s", CARD_RESOURCE_URL
                 )
+            elif existing[0].get("url") != CARD_RESOURCE_URL and existing[0].get("id"):
+                await resources.async_update_item(
+                    existing[0]["id"],
+                    {"res_type": "module", "url": CARD_RESOURCE_URL},
+                )
+                _LOGGER.info(
+                    "Updated Lovelace resource URL to %s", CARD_RESOURCE_URL
+                )
     except Exception as err:  # noqa: BLE001
         _LOGGER.debug(
             "Could not auto-register Lovelace storage resource (add %s manually if in YAML mode): %s",
             CARD_RESOURCE_URL,
             err,
         )
-
-    domain_meta["_frontend_registered"] = True
 
 
 def _async_register_services(hass: HomeAssistant) -> None:
