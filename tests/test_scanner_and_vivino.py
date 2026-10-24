@@ -252,6 +252,68 @@ class TestScannerVivinoAndCoordinator(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_gemini_scanner_error_reporting_on_http_failures(self) -> None:
+        """Verify that GeminiScannerError reports descriptive, user-friendly messages for HTTP 400, 403, 429."""
+        from custom_components.wine_inventory.scanner import (
+            GeminiScannerError,
+            async_scan_bottle_label,
+        )
+
+        class _ErrorSession:
+            def __init__(self, status: int, text: str) -> None:
+                self.status = status
+                self.msg_text = text
+
+            def post(self, url: str, **kwargs: Any) -> Any:
+                class _Resp:
+                    def __init__(self, s: int, t: str) -> None:
+                        self.status = s
+                        self.t = t
+
+                    async def text(self) -> str:
+                        return self.t
+
+                    async def __aenter__(self) -> Any:
+                        return self
+
+                    async def __aexit__(self, *args: Any) -> None:
+                        pass
+
+                return _Resp(self.status, self.msg_text)
+
+        async def _run() -> None:
+            # 1. HTTP 400 - Model ID error
+            with self.assertRaises(GeminiScannerError) as ctx_400:
+                await async_scan_bottle_label(
+                    _ErrorSession(400, "models/invalid not found"),  # type: ignore[arg-type]
+                    api_key="valid-key",
+                    image_bytes=b"dummy",
+                )
+            self.assertIn("HTTP 400", str(ctx_400.exception))
+            self.assertIn("Check your configured Gemini Model ID", str(ctx_400.exception))
+
+            # 2. HTTP 403 - Permission Denied / Key issue
+            with self.assertRaises(GeminiScannerError) as ctx_403:
+                await async_scan_bottle_label(
+                    _ErrorSession(403, "API_KEY_INVALID"),  # type: ignore[arg-type]
+                    api_key="bad-key",
+                    image_bytes=b"dummy",
+                )
+            self.assertIn("HTTP 403", str(ctx_403.exception))
+            self.assertIn("Google Gemini API key", str(ctx_403.exception))
+
+            # 3. HTTP 429 - Rate limit / Quota
+            with self.assertRaises(GeminiScannerError) as ctx_429:
+                await async_scan_bottle_label(
+                    _ErrorSession(429, "RESOURCE_EXHAUSTED"),  # type: ignore[arg-type]
+                    api_key="valid-key",
+                    image_bytes=b"dummy",
+                )
+            self.assertIn("HTTP 429", str(ctx_429.exception))
+            self.assertIn("Rate Limit", str(ctx_429.exception))
+
+        asyncio.run(_run())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -21,8 +21,10 @@ Built following the [**`homeassistant-ai/skills`**](https://github.com/homeassis
 - **🍷 Local SQLite Cellar Database (`wine_inventory.db`)**:
   - Relational schema with master `wines`, child `inventory_additions` batches (recording `added_at` date/time, `purchase_location`, `purchase_price`, `storage_location`, `drink_window_note`, and batch `notes`), and `consumption_history` (tasting notes & audit log).
   - Automatic Write-Ahead Log (`WAL`) checkpointing hooked into Home Assistant Core Backups (`backup.py`).
-- **📸 Visual Bottle Label Scanning (Gemini Flash-Lite)**:
-  - Snap a photo directly from the Home Assistant mobile/desktop UI or capture a frame from any Home Assistant `camera.*` or `image.*` entity.
+- **📸 Visual Bottle Label Scanning with Interactive Crop & Rotate (Gemini Flash-Lite)**:
+  - Snap a photo directly from your smartphone camera or upload a photo from your desktop.
+  - **Interactive Crop & Rotate Modal**: Rotate photos 90° in either direction and adjust the cropping box to frame only the wine label, removing backgrounds, tilted bottle angles, and glare for optimal vision recognition.
+  - **Prominent Error Visibility**: Any scan failures (unreadable labels, invalid API keys, quota limits) are surfaced in a high-visibility error card with actionable troubleshooting tips and one-click "Adjust Crop & Retry".
   - Extracts Winery, Wine Name, Vintage (`YYYY` or `NV`), Wine Style (`red`, `white`, `rose`, `sparkling`, `dessert`, `fortified`), Varietal, Region, Country, Alcohol %, recommended Drinking Window (`drink_from_year`–`drink_until_year`), Food Pairings, and a concise label summary.
   - Automatically detects if the scanned bottle already exists in your cellar so you can increment your stock in one click without creating duplicate wine entries.
 - **⭐ Automatic Vivino Ranking Lookup**:
@@ -107,13 +109,18 @@ Open your **Lekkersappie** dashboard card. You have two ways to add a bottle:
 
 #### Method A: Scan a Bottle Photo (Gemini Flash-Lite + Vivino)
 1. Click the primary **Scan Bottle** button (`📷`) in the top-right of the Lekkersappie card.
-2. In the **Scan Wine Bottle** dialog:
-   - **On Mobile / Tablet / Desktop**: Click **Snap Photo / Upload Label**. On a phone, this opens your rear camera directly; snap a clear photo of the front wine label.
-   - **Via a Home Assistant Camera**: Alternatively, pick any `camera.*` or `image.*` entity from the dropdown and click **Scan HA Camera**.
-3. Wait a couple of seconds while **Gemini Flash-Lite** extracts the label details and queries **Vivino**:
-   - **Winery, Wine Name, Vintage, Wine Type, Varietal, Region, and Country** are automatically filled in.
-   - **Vivino Rating & URL** are populated from the best Vivino match. If multiple matches were found on Vivino, you can switch between the top 3 matches using the **Vivino Match Candidates** dropdown at the top of the form.
-   - **Duplicate Check**: If that exact wine & vintage is already in your database, a green banner appears (*"Already in your cellar! Saving will increment the bottle count and log this new addition batch."*).
+2. In the **Scan Wine Bottle** dialog, click **Take Photo / Upload Label**.
+   - On a phone or tablet, this directly activates your device camera so you can take a photo of the bottle.
+   - On a desktop, select any bottle photo from your computer.
+3. The interactive **Crop & Rotate Bottle Label** modal opens immediately:
+   - Click **Rotate Left (90°)** or **Rotate Right (90°)** if the bottle was photographed sideways or upside down until the label is upright.
+   - Drag the crop rectangle and corner handles to tightly frame the front wine label, cutting out tables, backgrounds, reflections, or bottle necks.
+   - Click **Confirm & Scan Label**.
+4. Wait a couple of seconds while **Gemini Flash-Lite** extracts the label details and queries **Vivino**:
+   - **Winery, Wine Name, Vintage, Wine Type, Varietal, Region, and Country** are automatically extracted and populated.
+   - **Vivino Rating & URL** are populated from the best Vivino match. If multiple matches were found on Vivino, you can switch between the top 3 matches using the **Vivino Match Candidates** dropdown.
+   - **Duplicate Check**: If that exact wine & vintage is already in your cellar database, a green notification banner appears (*"Already in your cellar! Saving will increment the bottle count and log this new addition batch."*).
+   - **Error Visibility**: If any issue occurs (e.g., blurry image, invalid API key, or quota limit), an alert card clearly explains the root cause with troubleshooting tips and an **Adjust Crop & Retry** button so you can re-crop without re-uploading.
 4. Complete the **Addition Metadata, Drinking Window & Notes** section:
    - **Quantity Added**: Number of bottles you are adding (defaults to `1`).
    - **Date / Time Added**: Automatically pre-filled with the exact current date & time (editable if backdating).

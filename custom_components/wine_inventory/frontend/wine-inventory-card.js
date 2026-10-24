@@ -67,14 +67,14 @@ class WineInventoryCard extends HTMLElement {
     this._searchQuery = "";
     this._sortBy = "recent";
 
-    // Active modal state: null | "scan" | "quick_add" | "consume" | "detail"
+    // Active modal state: null | "scan" | "crop_rotate" | "quick_add" | "consume" | "detail"
     this._activeModal = null;
     this._modalWine = null;
+    this._cropState = null;
     this._scanState = {
       busy: false,
       error: "",
       imageData: "",
-      cameraEntityId: "",
       vivinoCandidates: [],
       vivinoStatus: "",
       existingWine: null,
@@ -246,13 +246,6 @@ class WineInventoryCard extends HTMLElement {
     return list;
   }
 
-  _getCameraEntities() {
-    if (!this._hass || !this._hass.states) return [];
-    return Object.keys(this._hass.states).filter(
-      (eid) => eid.startsWith("camera.") || eid.startsWith("image.")
-    );
-  }
-
   _openScanModal(manualOnly = false) {
     this._activeModal = "scan";
     this._scanState = {
@@ -260,7 +253,6 @@ class WineInventoryCard extends HTMLElement {
       error: "",
       manualOnly,
       imageData: "",
-      cameraEntityId: this._getCameraEntities()[0] || "",
       vivinoCandidates: [],
       vivinoStatus: "",
       existingWine: null,
@@ -324,18 +316,301 @@ class WineInventoryCard extends HTMLElement {
   async _handleFileSelected(event) {
     const file = event.target.files?.[0];
     if (!file) return;
+    event.target.value = "";
+    this._scanState.busy = true;
+    this._scanState.error = "";
+    this._render();
+
     const reader = new FileReader();
-    reader.onload = async () => {
-      this._scanState.imageData = String(reader.result || "");
-      await this._runBottleScan({ image_data: this._scanState.imageData });
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        this._cropState = {
+          image: img,
+          originalDataUrl: String(reader.result || ""),
+          rotation: 0,
+          crop: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 },
+          dragging: false,
+          dragHandle: null,
+          dragStart: { px: 0, py: 0 },
+          initialCrop: null,
+        };
+        this._scanState.busy = false;
+        this._activeModal = "crop_rotate";
+        this._render();
+      };
+      img.onerror = () => {
+        this._scanState.busy = false;
+        this._scanState.error = "Failed to decode the selected image file. Please choose a valid JPG/PNG/WebP photo.";
+        this._render();
+      };
+      img.src = String(reader.result || "");
+    };
+    reader.onerror = () => {
+      this._scanState.busy = false;
+      this._scanState.error = "Failed to read image file from your device.";
+      this._render();
     };
     reader.readAsDataURL(file);
   }
 
-  async _handleCameraCapture() {
-    const camId = this._scanState.cameraEntityId;
-    if (!camId) return;
-    await this._runBottleScan({ camera_entity_id: camId });
+  _rotateCrop(delta) {
+    if (!this._cropState) return;
+    this._cropState.rotation = (this._cropState.rotation + delta + 360) % 360;
+    this._cropState.crop = { x: 0.1, y: 0.1, width: 0.8, height: 0.8 };
+    this._render();
+  }
+
+  _resetCrop() {
+    if (!this._cropState) return;
+    this._cropState.crop = { x: 0.1, y: 0.1, width: 0.8, height: 0.8 };
+    this._drawCropCanvas();
+  }
+
+  _cancelCrop() {
+    this._activeModal = "scan";
+    this._render();
+  }
+
+  _confirmCropAndScan() {
+    if (!this._cropState || !this._cropState.image) return;
+    const { image, rotation, crop } = this._cropState;
+    const origW = image.naturalWidth || image.width;
+    const origH = image.naturalHeight || image.height;
+    const isSideways = rotation === 90 || rotation === 270;
+    const rotW = isSideways ? origH : origW;
+    const rotH = isSideways ? origW : origH;
+
+    const fullCanvas = document.createElement("canvas");
+    fullCanvas.width = rotW;
+    fullCanvas.height = rotH;
+    const fctx = fullCanvas.getContext("2d");
+    if (!fctx) return;
+    fctx.translate(rotW / 2, rotH / 2);
+    fctx.rotate((rotation * Math.PI) / 180);
+    fctx.drawImage(image, -origW / 2, -origH / 2);
+
+    const pixelX = Math.max(0, Math.round(crop.x * rotW));
+    const pixelY = Math.max(0, Math.round(crop.y * rotH));
+    const pixelW = Math.min(rotW - pixelX, Math.max(32, Math.round(crop.width * rotW)));
+    const pixelH = Math.min(rotH - pixelY, Math.max(32, Math.round(crop.height * rotH)));
+
+    const cropCanvas = document.createElement("canvas");
+    cropCanvas.width = pixelW;
+    cropCanvas.height = pixelH;
+    const cctx = cropCanvas.getContext("2d");
+    if (!cctx) return;
+    cctx.drawImage(fullCanvas, pixelX, pixelY, pixelW, pixelH, 0, 0, pixelW, pixelH);
+
+    const croppedDataUrl = cropCanvas.toDataURL("image/jpeg", 0.92);
+    this._scanState.imageData = croppedDataUrl;
+    this._activeModal = "scan";
+    this._render();
+    this._runBottleScan({ image_data: croppedDataUrl });
+  }
+
+  _setupCropCanvas() {
+    const canvas = this.shadowRoot.querySelector("#crop-canvas");
+    const wrapper = this.shadowRoot.querySelector("#canvas-wrapper");
+    if (!canvas || !wrapper || !this._cropState || !this._cropState.image) return;
+
+    const { image, rotation } = this._cropState;
+    const origW = image.naturalWidth || image.width;
+    const origH = image.naturalHeight || image.height;
+    const isSideways = rotation === 90 || rotation === 270;
+    const effW = isSideways ? origH : origW;
+    const effH = isSideways ? origW : origH;
+
+    const wrapperRect = wrapper.getBoundingClientRect();
+    const maxW = Math.max(260, Math.min(520, wrapperRect.width || 480));
+    const maxH = 400;
+    const scale = Math.min(maxW / effW, maxH / effH);
+    const dispW = Math.max(180, Math.round(effW * scale));
+    const dispH = Math.max(180, Math.round(effH * scale));
+
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(dispW * dpr);
+    canvas.height = Math.round(dispH * dpr);
+    canvas.style.width = `${dispW}px`;
+    canvas.style.height = `${dispH}px`;
+
+    this._cropState.dispW = dispW;
+    this._cropState.dispH = dispH;
+    this._cropState.dpr = dpr;
+
+    this._drawCropCanvas();
+
+    const getCanvasPos = (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const clientX = e.clientX ?? (e.touches && e.touches[0]?.clientX) ?? 0;
+      const clientY = e.clientY ?? (e.touches && e.touches[0]?.clientY) ?? 0;
+      return {
+        px: (clientX - rect.left) * (dispW / rect.width),
+        py: (clientY - rect.top) * (dispH / rect.height),
+      };
+    };
+
+    const getHitHandle = (pos) => {
+      const c = this._cropState.crop;
+      const bx = c.x * dispW;
+      const by = c.y * dispH;
+      const bw = c.width * dispW;
+      const bh = c.height * dispH;
+      const r = 24;
+
+      if (Math.hypot(pos.px - bx, pos.py - by) <= r) return "nw";
+      if (Math.hypot(pos.px - (bx + bw), pos.py - by) <= r) return "ne";
+      if (Math.hypot(pos.px - (bx + bw), pos.py - (by + bh)) <= r) return "se";
+      if (Math.hypot(pos.px - bx, pos.py - (by + bh)) <= r) return "sw";
+      if (pos.px >= bx && pos.px <= bx + bw && pos.py >= by && pos.py <= by + bh) return "move";
+      return null;
+    };
+
+    canvas.onpointerdown = (e) => {
+      e.preventDefault();
+      const pos = getCanvasPos(e);
+      const handle = getHitHandle(pos);
+      if (!handle) return;
+      this._cropState.dragging = true;
+      this._cropState.dragHandle = handle;
+      this._cropState.dragStart = pos;
+      this._cropState.initialCrop = { ...this._cropState.crop };
+      try {
+        canvas.setPointerCapture(e.pointerId);
+      } catch (_) {}
+    };
+
+    canvas.onpointermove = (e) => {
+      if (!this._cropState.dragging) {
+        const pos = getCanvasPos(e);
+        const handle = getHitHandle(pos);
+        if (handle === "nw" || handle === "se") canvas.style.cursor = "nwse-resize";
+        else if (handle === "ne" || handle === "sw") canvas.style.cursor = "nesw-resize";
+        else if (handle === "move") canvas.style.cursor = "move";
+        else canvas.style.cursor = "default";
+        return;
+      }
+
+      e.preventDefault();
+      const pos = getCanvasPos(e);
+      const dx = (pos.px - this._cropState.dragStart.px) / dispW;
+      const dy = (pos.py - this._cropState.dragStart.py) / dispH;
+      const init = this._cropState.initialCrop;
+      const minSize = 0.08;
+
+      if (this._cropState.dragHandle === "move") {
+        const nx = Math.max(0, Math.min(1 - init.width, init.x + dx));
+        const ny = Math.max(0, Math.min(1 - init.height, init.y + dy));
+        this._cropState.crop.x = nx;
+        this._cropState.crop.y = ny;
+      } else if (this._cropState.dragHandle === "nw") {
+        const right = init.x + init.width;
+        const bottom = init.y + init.height;
+        const nx = Math.max(0, Math.min(right - minSize, init.x + dx));
+        const ny = Math.max(0, Math.min(bottom - minSize, init.y + dy));
+        this._cropState.crop.x = nx;
+        this._cropState.crop.y = ny;
+        this._cropState.crop.width = right - nx;
+        this._cropState.crop.height = bottom - ny;
+      } else if (this._cropState.dragHandle === "ne") {
+        const left = init.x;
+        const bottom = init.y + init.height;
+        const nw = Math.max(minSize, Math.min(1 - left, init.width + dx));
+        const ny = Math.max(0, Math.min(bottom - minSize, init.y + dy));
+        this._cropState.crop.y = ny;
+        this._cropState.crop.width = nw;
+        this._cropState.crop.height = bottom - ny;
+      } else if (this._cropState.dragHandle === "se") {
+        const left = init.x;
+        const top = init.y;
+        this._cropState.crop.width = Math.max(minSize, Math.min(1 - left, init.width + dx));
+        this._cropState.crop.height = Math.max(minSize, Math.min(1 - top, init.height + dy));
+      } else if (this._cropState.dragHandle === "sw") {
+        const top = init.y;
+        const right = init.x + init.width;
+        const nx = Math.max(0, Math.min(right - minSize, init.x + dx));
+        this._cropState.crop.x = nx;
+        this._cropState.crop.width = right - nx;
+        this._cropState.crop.height = Math.max(minSize, Math.min(1 - top, init.height + dy));
+      }
+      this._drawCropCanvas();
+    };
+
+    const stopDrag = (e) => {
+      if (this._cropState && this._cropState.dragging) {
+        this._cropState.dragging = false;
+        this._cropState.dragHandle = null;
+        try {
+          canvas.releasePointerCapture(e.pointerId);
+        } catch (_) {}
+      }
+    };
+    canvas.onpointerup = stopDrag;
+    canvas.onpointercancel = stopDrag;
+  }
+
+  _drawCropCanvas() {
+    const canvas = this.shadowRoot.querySelector("#crop-canvas");
+    if (!canvas || !this._cropState || !this._cropState.image) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const { image, rotation, crop, dispW, dispH, dpr } = this._cropState;
+    if (!dispW || !dispH) return;
+
+    ctx.save();
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, dispW, dispH);
+
+    ctx.save();
+    ctx.translate(dispW / 2, dispH / 2);
+    ctx.rotate((rotation * Math.PI) / 180);
+    const origW = image.naturalWidth || image.width;
+    const origH = image.naturalHeight || image.height;
+    const isSideways = rotation === 90 || rotation === 270;
+    const targetW = isSideways ? dispH : dispW;
+    const targetH = isSideways ? dispW : dispH;
+    ctx.drawImage(image, -targetW / 2, -targetH / 2, targetW, targetH);
+    ctx.restore();
+
+    const bx = Math.round(crop.x * dispW);
+    const by = Math.round(crop.y * dispH);
+    const bw = Math.round(crop.width * dispW);
+    const bh = Math.round(crop.height * dispH);
+
+    ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+    ctx.fillRect(0, 0, dispW, by);
+    ctx.fillRect(0, by + bh, dispW, dispH - (by + bh));
+    ctx.fillRect(0, by, bx, bh);
+    ctx.fillRect(bx + bw, by, dispW - (bx + bw), bh);
+
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(bx, by, bw, bh);
+
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = "#1a73e8";
+    ctx.strokeRect(bx, by, bw, bh);
+    ctx.setLineDash([]);
+
+    const handleR = 7;
+    const corners = [
+      [bx, by],
+      [bx + bw, by],
+      [bx + bw, by + bh],
+      [bx, by + bh],
+    ];
+    corners.forEach(([cx, cy]) => {
+      ctx.beginPath();
+      ctx.arc(cx, cy, handleR, 0, Math.PI * 2);
+      ctx.fillStyle = "#1a73e8";
+      ctx.fill();
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    });
+
+    ctx.restore();
   }
 
   async _runBottleScan(payload) {
@@ -387,7 +662,15 @@ class WineInventoryCard extends HTMLElement {
         storage_location: existing?.last_storage_location || "",
       };
     } catch (err) {
-      this._scanState.error = err?.message || "Bottle scan failed. You can still fill details manually.";
+      const errMsg = err?.message || (typeof err === "string" ? err : "Bottle scan failed. You can still fill details manually.");
+      this._scanState.error = errMsg;
+      this.dispatchEvent(
+        new CustomEvent("hass-notification", {
+          detail: { message: `Lekkersappie: ${errMsg}` },
+          bubbles: true,
+          composed: true,
+        })
+      );
     } finally {
       this._scanState.busy = false;
       this._render();
@@ -639,10 +922,61 @@ class WineInventoryCard extends HTMLElement {
     `;
   }
 
+  _renderCropRotateModal() {
+    return `
+      <div class="modal-backdrop" id="modal-backdrop">
+        <div class="modal-surface crop-modal-surface">
+          <div class="modal-header">
+            <h2>
+              <ha-icon icon="mdi:crop-rotate"></ha-icon>
+              <span>Crop &amp; Rotate Bottle Label</span>
+            </h2>
+            <button class="ha-btn icon-btn" id="close-crop-btn" title="Cancel">
+              <ha-icon icon="mdi:close"></ha-icon>
+            </button>
+          </div>
+
+          <div class="modal-body crop-modal-body">
+            <div class="crop-instructions">
+              <ha-icon icon="mdi:information-outline"></ha-icon>
+              <span>Rotate so the wine label is upright, then drag the box &amp; corner handles to frame only the label for optimal recognition.</span>
+            </div>
+
+            <div class="canvas-wrapper" id="canvas-wrapper">
+              <canvas id="crop-canvas"></canvas>
+            </div>
+
+            <div class="crop-controls-row">
+              <button type="button" class="ha-btn secondary-btn" id="btn-rotate-left">
+                <ha-icon icon="mdi:rotate-left"></ha-icon>
+                <span>Rotate Left (90°)</span>
+              </button>
+              <button type="button" class="ha-btn secondary-btn" id="btn-rotate-right">
+                <ha-icon icon="mdi:rotate-right"></ha-icon>
+                <span>Rotate Right (90°)</span>
+              </button>
+              <button type="button" class="ha-btn secondary-btn" id="btn-reset-crop">
+                <ha-icon icon="mdi:refresh"></ha-icon>
+                <span>Reset Frame</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="modal-actions full-width crop-footer">
+            <button type="button" class="ha-btn secondary-btn" id="btn-cancel-crop">Cancel</button>
+            <button type="button" class="ha-btn primary-btn" id="btn-confirm-crop">
+              <ha-icon icon="mdi:check"></ha-icon>
+              <span>Confirm &amp; Scan Label</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   _renderScanModal() {
     const s = this._scanState;
     const f = s.form;
-    const cameras = this._getCameraEntities();
     const knownStores = this._statistics.known_purchase_locations || [];
     const knownLocations = this._statistics.known_storage_locations || [];
 
@@ -664,27 +998,15 @@ class WineInventoryCard extends HTMLElement {
                     <div class="scan-buttons-row">
                       <label class="ha-btn primary-btn file-label">
                         <ha-icon icon="mdi:camera"></ha-icon>
-                        <span>Snap Photo / Upload Label</span>
+                        <span>Take Photo / Upload Label</span>
                         <input type="file" id="bottle-file-input" accept="image/*" capture="environment" hidden />
                       </label>
                       ${
-                        cameras.length > 0
-                          ? `<div class="cam-select-row">
-                              <select id="camera-entity-select" class="ha-input">
-                                ${cameras
-                                  .map(
-                                    (cid) =>
-                                      `<option value="${escapeHtml(cid)}" ${
-                                        s.cameraEntityId === cid ? "selected" : ""
-                                      }>${escapeHtml(cid)}</option>`
-                                  )
-                                  .join("")}
-                              </select>
-                              <button type="button" class="ha-btn secondary-btn" id="capture-cam-btn">
-                                <ha-icon icon="mdi:camera-wireless"></ha-icon>
-                                <span>Scan HA Camera</span>
-                              </button>
-                            </div>`
+                        this._cropState?.image
+                          ? `<button type="button" class="ha-btn secondary-btn" id="reopen-crop-btn">
+                              <ha-icon icon="mdi:crop-rotate"></ha-icon>
+                              <span>Adjust Crop &amp; Rotate</span>
+                            </button>`
                           : ""
                       }
                     </div>
@@ -698,7 +1020,39 @@ class WineInventoryCard extends HTMLElement {
                     }
                     ${
                       s.error
-                        ? `<div class="scan-error-banner">${escapeHtml(s.error)}</div>`
+                        ? `<div class="scan-error-card" role="alert">
+                            <div class="scan-error-header">
+                              <div class="scan-error-title-wrap">
+                                <ha-icon icon="mdi:alert-circle" style="color: var(--error-color, #c62828);"></ha-icon>
+                                <strong style="color: var(--error-color, #c62828);">Scan Recognition Error</strong>
+                              </div>
+                              <button type="button" class="ha-btn icon-btn" id="dismiss-scan-error-btn" title="Dismiss Error">
+                                <ha-icon icon="mdi:close"></ha-icon>
+                              </button>
+                            </div>
+                            <div class="scan-error-body">
+                              <p class="scan-error-message">${escapeHtml(s.error)}</p>
+                              <div class="scan-error-hint">
+                                <strong>Troubleshooting tips:</strong>
+                                <ul>
+                                  <li>Check that your Google Gemini API key is valid in Lekkersappie integration options.</li>
+                                  <li>Click <em>Adjust Crop &amp; Rotate</em> to orient the label upright and frame only the printed front label.</li>
+                                  <li>Or type the winery, wine name, and vintage manually into the fields below.</li>
+                                </ul>
+                              </div>
+                            </div>
+                            <div class="scan-error-actions">
+                              ${
+                                this._cropState?.image
+                                  ? `<button type="button" class="ha-btn primary-btn" id="retry-crop-btn">
+                                      <ha-icon icon="mdi:crop-rotate"></ha-icon>
+                                      <span>Adjust Crop &amp; Retry</span>
+                                    </button>`
+                                  : ""
+                              }
+                              <button type="button" class="ha-btn secondary-btn" id="clear-scan-error-btn">Dismiss</button>
+                            </div>
+                          </div>`
                         : ""
                     }
                     ${
@@ -1123,14 +1477,42 @@ class WineInventoryCard extends HTMLElement {
     root.querySelector("#close-modal-btn")?.addEventListener("click", () => this._closeModal());
     root.querySelector("#cancel-modal-btn")?.addEventListener("click", () => this._closeModal());
 
-    root.querySelector("#bottle-file-input")?.addEventListener("change", (e) => this._handleFileSelected(e));
-    root.querySelector("#camera-entity-select")?.addEventListener("change", (e) => {
-      this._scanState.cameraEntityId = e.target.value;
+    // Crop / Rotate modal handlers
+    root.querySelector("#close-crop-btn")?.addEventListener("click", () => this._cancelCrop());
+    root.querySelector("#btn-cancel-crop")?.addEventListener("click", () => this._cancelCrop());
+    root.querySelector("#btn-confirm-crop")?.addEventListener("click", () => this._confirmCropAndScan());
+    root.querySelector("#btn-rotate-left")?.addEventListener("click", () => this._rotateCrop(-90));
+    root.querySelector("#btn-rotate-right")?.addEventListener("click", () => this._rotateCrop(90));
+    root.querySelector("#btn-reset-crop")?.addEventListener("click", () => this._resetCrop());
+    root.querySelector("#reopen-crop-btn")?.addEventListener("click", () => {
+      this._activeModal = "crop_rotate";
+      this._render();
     });
-    root.querySelector("#capture-cam-btn")?.addEventListener("click", () => this._handleCameraCapture());
+    root.querySelector("#retry-crop-btn")?.addEventListener("click", () => {
+      this._activeModal = "crop_rotate";
+      this._render();
+    });
+    root.querySelector("#dismiss-scan-error-btn")?.addEventListener("click", () => {
+      this._scanState.error = "";
+      this._render();
+    });
+    root.querySelector("#clear-scan-error-btn")?.addEventListener("click", () => {
+      this._scanState.error = "";
+      this._render();
+    });
+    root.querySelector("#dismiss-card-error-btn")?.addEventListener("click", () => {
+      this._error = "";
+      this._render();
+    });
+
+    root.querySelector("#bottle-file-input")?.addEventListener("change", (e) => this._handleFileSelected(e));
     root.querySelector("#vivino-candidate-select")?.addEventListener("change", (e) => {
       this._applyVivinoCandidate(Number(e.target.value));
     });
+
+    if (this._activeModal === "crop_rotate") {
+      this._setupCropCanvas();
+    }
 
     const scanForm = root.querySelector("#scan-add-form");
     if (scanForm) {
@@ -1527,10 +1909,56 @@ class WineInventoryCard extends HTMLElement {
           gap: 10px;
           align-items: center;
         }
-        .cam-select-row {
+        .crop-modal-surface {
+          max-width: 640px;
+          width: 95%;
+        }
+        .crop-modal-body {
           display: flex;
-          gap: 6px;
-          flex: 1;
+          flex-direction: column;
+          align-items: center;
+          gap: 14px;
+        }
+        .crop-instructions {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 13px;
+          color: var(--secondary-text-color);
+          background: var(--secondary-background-color, rgba(127, 127, 127, 0.08));
+          padding: 8px 12px;
+          border-radius: 8px;
+          width: 100%;
+          box-sizing: border-box;
+        }
+        .canvas-wrapper {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: #111;
+          border-radius: 8px;
+          overflow: hidden;
+          padding: 10px;
+          width: 100%;
+          box-sizing: border-box;
+          min-height: 240px;
+        }
+        #crop-canvas {
+          touch-action: none;
+          user-select: none;
+          max-width: 100%;
+          display: block;
+          border-radius: 4px;
+        }
+        .crop-controls-row {
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: center;
+          gap: 8px;
+          width: 100%;
+        }
+        .crop-footer {
+          margin-top: 8px;
         }
         .scan-status-banner, .scan-existing-banner, .scan-error-banner {
           margin-top: 10px;
@@ -1540,6 +1968,71 @@ class WineInventoryCard extends HTMLElement {
           display: flex;
           align-items: center;
           gap: 8px;
+        }
+        .scan-error-card {
+          margin-top: 12px;
+          padding: 14px;
+          border-radius: 10px;
+          border: 1px solid var(--error-color, #c62828);
+          background: rgba(198, 40, 40, 0.08);
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+        .scan-error-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+        }
+        .scan-error-title-wrap {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        .scan-error-message {
+          margin: 0;
+          font-size: 13px;
+          color: var(--primary-text-color);
+          font-weight: 500;
+          line-height: 1.4;
+        }
+        .scan-error-hint {
+          margin-top: 6px;
+          font-size: 12px;
+          color: var(--secondary-text-color);
+          line-height: 1.4;
+        }
+        .scan-error-hint ul {
+          margin: 4px 0 0 16px;
+          padding: 0;
+        }
+        .scan-error-hint li {
+          margin-bottom: 2px;
+        }
+        .scan-error-actions {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+          margin-top: 4px;
+        }
+        .card-alert-banner {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 10px 14px;
+          border-radius: 8px;
+          margin-bottom: 14px;
+          font-size: 13px;
+          gap: 10px;
+          background: rgba(198, 40, 40, 0.12);
+          border: 1px solid var(--error-color, #c62828);
+          color: var(--primary-text-color);
+        }
+        .card-alert-content {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex: 1;
         }
         .scan-status-banner {
           background: rgba(2, 136, 209, 0.15);
@@ -1702,7 +2195,15 @@ class WineInventoryCard extends HTMLElement {
 
         ${
           this._error
-            ? `<div class="scan-error-banner" style="margin-bottom:12px;">${escapeHtml(this._error)}</div>`
+            ? `<div class="card-alert-banner" role="alert">
+                <div class="card-alert-content">
+                  <ha-icon icon="mdi:alert-circle" style="color: var(--error-color, #c62828);"></ha-icon>
+                  <span>${escapeHtml(this._error)}</span>
+                </div>
+                <button class="ha-btn icon-btn" id="dismiss-card-error-btn" title="Dismiss">
+                  <ha-icon icon="mdi:close"></ha-icon>
+                </button>
+              </div>`
             : ""
         }
 
@@ -1719,6 +2220,7 @@ class WineInventoryCard extends HTMLElement {
       </ha-card>
 
       ${this._activeModal === "scan" ? this._renderScanModal() : ""}
+      ${this._activeModal === "crop_rotate" ? this._renderCropRotateModal() : ""}
       ${this._activeModal === "quick_add" ? this._renderQuickAddModal() : ""}
       ${this._activeModal === "consume" ? this._renderConsumeModal() : ""}
       ${this._activeModal === "detail" ? this._renderDetailModal() : ""}

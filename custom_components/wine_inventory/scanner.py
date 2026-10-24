@@ -22,17 +22,23 @@ _LOGGER = logging.getLogger(__name__)
 GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
 LABEL_EXTRACTION_PROMPT = """You are an expert sommelier and wine cataloguing vision system.
-Analyze the provided photo of a wine bottle label and extract its details into JSON.
+Analyze the provided photo of a wine bottle label (which has been cropped and oriented upright) and extract its details into JSON.
 
 Rules:
-1. Identify the producer/winery (`winery`) and the specific cuvée/wine name (`name`). If the label only shows a grape varietal as the main title, use that as `name`.
-2. Extract the 4-digit harvest year (`vintage`). If the wine is Non-Vintage, return `null` for `vintage`.
+1. Identify the producer/winery (`winery`) and the specific cuvée/wine name (`name`).
+   - Carefully inspect stylized, cursive, embossed, or traditional serif typography commonly found on wine labels.
+   - If the winery is prominent (e.g. "Château Margaux", "Antinori", "Penfolds"), extract it cleanly.
+   - If only a grape varietal (e.g. "Sauvignon Blanc", "Cabernet Sauvignon") is shown as the primary title without a separate cuvée name, use that as `name`.
+2. Extract the 4-digit harvest year (`vintage`).
+   - Look closely near the bottom, neck band, or center of the label.
+   - If the wine is Non-Vintage (common in Champagne/sparkling, port, sherry), return `null` for `vintage`.
 3. Classify `wine_type` strictly as one of: "red", "white", "rose", "sparkling", "dessert", "fortified".
-4. Identify the grape varietals (`varietal`), wine region/appellation (`region`), and country (`country`).
-5. Extract `alcohol_pct` (number, e.g. 13.5) and `bottle_size_ml` (integer, default 750) if visible.
-6. Provide recommended drinking window bounds (`drink_from_year` and `drink_until_year`) based on the wine's style, appellation, and vintage, plus a short `drink_window_note` (e.g., "Ready now or hold 3-5 years; decant 1 hour").
-7. Suggest 2 to 4 concise `food_pairings` items.
+4. Identify the primary grape varietals (`varietal`, e.g. "Pinot Noir", "Chardonnay", "Tempranillo", "Bordeaux Blend"), wine region/appellation (`region`, e.g. "Napa Valley", "Barolo", "Rioja Alta"), and country (`country`, e.g. "France", "Italy", "United States", "Spain").
+5. Extract `alcohol_pct` (number, e.g. 13.5 or 14.0) and `bottle_size_ml` (integer, default 750) if indicated anywhere on the label.
+6. Provide recommended drinking window bounds (`drink_from_year` and `drink_until_year`) based on the wine's style, appellation, and vintage, plus a short `drink_window_note` (e.g., "Peak drinking 2026-2032; decant 45 mins before serving").
+7. Suggest 2 to 4 concise `food_pairings` items (e.g. ["Grilled ribeye", "Aged Gouda", "Wild mushroom risotto"]).
 8. Provide a concise 1-sentence `label_summary` for the wine overview notes.
+9. Return best-effort values even if parts of the label are partially weathered or in low contrast. Never return empty strings for winery or name if any recognizable text is visible.
 """
 
 LABEL_RESPONSE_SCHEMA: dict[str, Any] = {
@@ -230,6 +236,18 @@ async def async_scan_bottle_label(
         ) as resp:
             resp_text = await resp.text()
             if resp.status != 200:
+                if resp.status == 400:
+                    raise GeminiScannerError(
+                        f"Gemini API Bad Request (HTTP 400): {resp_text[:250]}. Check your configured Gemini Model ID in Lekkersappie options."
+                    )
+                if resp.status in (401, 403):
+                    raise GeminiScannerError(
+                        f"Gemini API Permission Denied (HTTP {resp.status}): {resp_text[:250]}. Check that your Google Gemini API key is valid and Generative Language API is enabled."
+                    )
+                if resp.status == 429:
+                    raise GeminiScannerError(
+                        "Gemini API Rate Limit / Quota Exceeded (HTTP 429). Please wait a moment before scanning another bottle."
+                    )
                 raise GeminiScannerError(
                     f"Gemini API returned HTTP {resp.status}: {resp_text[:300]}"
                 )
