@@ -94,6 +94,8 @@ class WineDatabase:
                     image_url TEXT NOT NULL DEFAULT '',
                     quantity INTEGER NOT NULL DEFAULT 0,
                     storage_location TEXT NOT NULL DEFAULT '',
+                    purchase_location TEXT NOT NULL DEFAULT '',
+                    purchase_price REAL NULL,
                     research_notes TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -142,6 +144,10 @@ class WineDatabase:
             cols = {row["name"] for row in conn.execute("PRAGMA table_info(wines)").fetchall()}
             if "storage_location" not in cols:
                 conn.execute("ALTER TABLE wines ADD COLUMN storage_location TEXT NOT NULL DEFAULT '';")
+            if "purchase_location" not in cols:
+                conn.execute("ALTER TABLE wines ADD COLUMN purchase_location TEXT NOT NULL DEFAULT '';")
+            if "purchase_price" not in cols:
+                conn.execute("ALTER TABLE wines ADD COLUMN purchase_price REAL NULL;")
             if "research_notes" not in cols:
                 conn.execute("ALTER TABLE wines ADD COLUMN research_notes TEXT NOT NULL DEFAULT '';")
 
@@ -174,6 +180,16 @@ class WineDatabase:
             data.get("drink_until_year"),
         )
         data["storage_location"] = (data.get("storage_location") or "").strip()
+        data["purchase_location"] = (
+            data.get("purchase_location")
+            or data.get("last_purchase_location")
+            or ""
+        ).strip()
+        data["purchase_price"] = (
+            data.get("purchase_price")
+            if data.get("purchase_price") is not None
+            else data.get("last_purchase_price")
+        )
         data["research_notes"] = data.get("research_notes") or ""
         if batches is not None:
             data["batches"] = batches
@@ -357,8 +373,9 @@ class WineDatabase:
                         vivino_url, vivino_price_estimate, rating_source,
                         drink_from_year, drink_until_year, drink_window_note,
                         food_pairings, general_notes, personal_rating, image_url,
-                        quantity, storage_location, research_notes, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        quantity, storage_location, purchase_location, purchase_price,
+                        research_notes, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         winery.strip(),
@@ -384,6 +401,8 @@ class WineDatabase:
                         image_url.strip(),
                         qty,
                         storage_location.strip(),
+                        purchase_location.strip(),
+                        purchase_price,
                         "",
                         timestamp,
                         timestamp,
@@ -403,6 +422,8 @@ class WineDatabase:
                     UPDATE wines
                     SET quantity = ?,
                         storage_location = CASE WHEN ? != '' THEN ? ELSE storage_location END,
+                        purchase_location = CASE WHEN ? != '' THEN ? ELSE purchase_location END,
+                        purchase_price = COALESCE(?, purchase_price),
                         vivino_rating = COALESCE(?, vivino_rating),
                         vivino_ratings_count = COALESCE(?, vivino_ratings_count),
                         vivino_url = CASE WHEN ? != '' THEN ? ELSE vivino_url END,
@@ -421,6 +442,9 @@ class WineDatabase:
                         new_qty,
                         storage_location.strip(),
                         storage_location.strip(),
+                        purchase_location.strip(),
+                        purchase_location.strip(),
+                        purchase_price,
                         vivino_rating,
                         vivino_ratings_count,
                         vivino_url.strip(),
@@ -648,6 +672,8 @@ class WineDatabase:
             "personal_rating",
             "image_url",
             "storage_location",
+            "purchase_location",
+            "purchase_price",
             "research_notes",
         }
         set_clauses: list[str] = []
@@ -688,6 +714,64 @@ class WineDatabase:
                     "UPDATE inventory_additions SET storage_location = ? WHERE wine_id = ? AND quantity_remaining > 0",
                     (clean_loc, wine_id),
                 )
+
+            if "purchase_location" in updates or "purchase_price" in updates:
+                clean_store = (
+                    str(updates["purchase_location"]).strip()
+                    if "purchase_location" in updates
+                    else None
+                )
+                price_val = None
+                if "purchase_price" in updates:
+                    raw_p = updates["purchase_price"]
+                    try:
+                        price_val = float(raw_p) if raw_p is not None and str(raw_p).strip() != "" else None
+                    except (ValueError, TypeError):
+                        price_val = None
+
+                latest_batch = conn.execute(
+                    "SELECT id FROM inventory_additions WHERE wine_id = ? ORDER BY added_at DESC, id DESC LIMIT 1",
+                    (wine_id,),
+                ).fetchone()
+                if latest_batch:
+                    if clean_store is not None and "purchase_price" in updates:
+                        conn.execute(
+                            "UPDATE inventory_additions SET purchase_location = ?, purchase_price = ? WHERE id = ?",
+                            (clean_store, price_val, latest_batch["id"]),
+                        )
+                    elif clean_store is not None:
+                        conn.execute(
+                            "UPDATE inventory_additions SET purchase_location = ? WHERE id = ?",
+                            (clean_store, latest_batch["id"]),
+                        )
+                    elif "purchase_price" in updates:
+                        conn.execute(
+                            "UPDATE inventory_additions SET purchase_price = ? WHERE id = ?",
+                            (price_val, latest_batch["id"]),
+                        )
+
+            detail = self._get_wine_detail_with_conn(conn, wine_id)
+            assert detail is not None
+            return detail
+
+    def unlink_vivino(self, wine_id: int) -> dict[str, Any]:
+        """Remove Vivino link, ratings, and estimates from a wine record."""
+        with closing(self._connect()) as conn, conn:
+            cursor = conn.execute(
+                """
+                UPDATE wines
+                SET vivino_rating = NULL,
+                    vivino_ratings_count = NULL,
+                    vivino_url = '',
+                    vivino_price_estimate = NULL,
+                    rating_source = '',
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (utc_now_iso(), wine_id),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(f"Wine ID {wine_id} not found")
             detail = self._get_wine_detail_with_conn(conn, wine_id)
             assert detail is not None
             return detail

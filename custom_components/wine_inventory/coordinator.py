@@ -430,6 +430,23 @@ class WineInventoryCoordinator:
         await self.async_refresh()
         return deleted
 
+    async def async_unlink_vivino(self, wine_id: int) -> dict[str, Any]:
+        """Remove Vivino link, ratings, and estimates from a wine record."""
+        wine = await self.hass.async_add_executor_job(
+            self.db.unlink_vivino,
+            int(wine_id),
+        )
+        await self.async_refresh()
+        self._emit_event(
+            EVENT_WINE_UPDATED,
+            {
+                "wine_id": wine["id"],
+                "winery": wine["winery"],
+                "name": wine["name"],
+            },
+        )
+        return wine
+
     async def async_research_wine(self, wine_id: int) -> dict[str, Any]:
         """Perform deep Gemini AI research on producer history and wine details."""
         wine = await self.hass.async_add_executor_job(

@@ -31,12 +31,30 @@ DEFAULT_HEADERS: dict[str, str] = {
 }
 
 
+WINE_STOP_WORDS: set[str] = {
+    "wine", "wines", "winery", "estate", "vineyard", "vineyards",
+    "chateau", "château", "domaine", "bodega", "bodegas",
+    "selection", "reserva", "reserve", "gran", "grand", "cru",
+    "doc", "docg", "igt", "aop", "aoc", "dop", "ava",
+    "de", "la", "le", "del", "di", "el", "du", "des", "van", "von",
+    "und", "and", "the", "red", "white", "rose", "rosé", "vintage", "bottle",
+    "cuvee", "cuvée", "tenuta", "casa", "valle", "valley", "cellars",
+}
+
+
 def clean_tokens(s: str) -> list[str]:
     """Extract lowercased alphanumeric words with length > 1."""
     return [t for t in re.findall(r"\w+", (s or "").lower()) if len(t) > 1]
 
 
-def is_text_similar(target: str, candidate: str, threshold: float = 0.5) -> bool:
+def clean_distinctive_tokens(s: str) -> list[str]:
+    """Extract lowercased alphanumeric words excluding generic wine stop words."""
+    tokens = clean_tokens(s)
+    distinctive = [t for t in tokens if t not in WINE_STOP_WORDS]
+    return distinctive if distinctive else tokens
+
+
+def is_text_similar(target: str, candidate: str, threshold: float = 0.55) -> bool:
     """Check if target and candidate strings are lexically or semantically similar."""
     t = (target or "").strip().lower()
     c = (candidate or "").strip().lower()
@@ -44,14 +62,15 @@ def is_text_similar(target: str, candidate: str, threshold: float = 0.5) -> bool
         return False
     if t == c:
         return True
-    if (len(t) >= 4 and t in c) or (len(c) >= 4 and c in t):
+    if (len(t) >= 5 and t in c) or (len(c) >= 5 and c in t):
         return True
 
-    t_tokens = set(clean_tokens(t))
-    c_tokens = set(clean_tokens(c))
-    if t_tokens and c_tokens:
-        overlap = t_tokens & c_tokens
-        if len(overlap) / min(len(t_tokens), len(c_tokens)) >= 0.5:
+    t_distinct = set(clean_distinctive_tokens(t))
+    c_distinct = set(clean_distinctive_tokens(c))
+    if t_distinct and c_distinct:
+        overlap = t_distinct & c_distinct
+        dice = 2.0 * len(overlap) / (len(t_distinct) + len(c_distinct))
+        if dice >= threshold:
             return True
 
     ratio = difflib.SequenceMatcher(None, t, c).ratio()
@@ -63,10 +82,15 @@ def is_vivino_candidate_similar(
     target_winery: str,
     target_name: str,
 ) -> bool:
-    """Determine whether a candidate Vivino record has a similar wine name or winery/maker.
+    """Determine with high certainty whether a Vivino record matches the scanned wine.
 
-    Per strict requirement: either wine name or maker needs to be similar.
-    If not, do not match the wine to a Vivino match.
+    To eliminate false positives and unrelated matches:
+    - If BOTH winery and wine name are provided:
+        1. The winery/producer must match (or be contained in the candidate name/maker),
+        2. AND the specific wine cuvée/name must match (or the combined producer+name must
+           have high distinctive overlap while cuvée has at least partial match).
+    - If only winery is provided, maker similarity must be high (>= 0.6).
+    - If only wine name is provided, name similarity must be high (>= 0.6).
     """
     clean_target_winery = (target_winery or "").strip()
     clean_target_name = (target_name or "").strip()
@@ -77,14 +101,28 @@ def is_vivino_candidate_similar(
     cand_winery = str(candidate.get("winery") or "").strip()
     cand_name = str(candidate.get("name") or "").strip()
 
-    maker_similar = is_text_similar(clean_target_winery, cand_winery)
-    name_similar = is_text_similar(clean_target_name, cand_name)
+    maker_similar = is_text_similar(clean_target_winery, cand_winery, threshold=0.55)
+    name_similar = is_text_similar(clean_target_name, cand_name, threshold=0.55)
 
     # In case the winery was detected as part of the wine name or vice versa
-    cross_similar_1 = is_text_similar(clean_target_winery, cand_name)
-    cross_similar_2 = is_text_similar(clean_target_name, cand_winery)
+    cross_similar_1 = is_text_similar(clean_target_winery, cand_name, threshold=0.55)
+    cross_similar_2 = is_text_similar(clean_target_name, cand_winery, threshold=0.55)
 
-    return maker_similar or name_similar or cross_similar_1 or cross_similar_2
+    # Combined full string similarity check
+    full_target = f"{clean_target_winery} {clean_target_name}".strip()
+    full_cand = f"{cand_winery} {cand_name}".strip()
+    combined_similar = is_text_similar(full_target, full_cand, threshold=0.65)
+
+    if clean_target_winery and clean_target_name:
+        # Require BOTH producer and wine name to be similar, or high combined match
+        producer_matches = maker_similar or cross_similar_1
+        cuvee_matches = name_similar or cross_similar_2
+        return (producer_matches and cuvee_matches) or (combined_similar and cuvee_matches)
+
+    if clean_target_winery:
+        return maker_similar or cross_similar_1
+
+    return name_similar or cross_similar_2
 
 
 def _score_candidate(
@@ -245,9 +283,22 @@ def parse_vivino_explore_payload(
             )
             continue
 
-        candidate["match_score"] = _score_candidate(
+        score = _score_candidate(
             candidate, target_winery, target_name, target_vintage
         )
+        # Enforce minimum certainty threshold to avoid spurious/tenuous matches
+        min_score = 4.0 if (target_winery and target_name) else 2.5
+        if (target_winery or target_name) and score < min_score:
+            _LOGGER.debug(
+                "Rejecting Vivino candidate '%s - %s' with low confidence score %.2f < %.2f",
+                winery_name,
+                wine_name,
+                score,
+                min_score,
+            )
+            continue
+
+        candidate["match_score"] = score
         candidates.append(candidate)
 
     candidates.sort(

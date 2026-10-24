@@ -405,7 +405,23 @@ class TestScannerVivinoAndCoordinator(unittest.TestCase):
             )
         )
 
-        # 3. Payload filtering check: searching for Antinori Tignanello should reject Yellow Tail Shiraz
+        # 3. Specific cuvée guard: Penfolds Grange must NOT match Penfolds Rawson's Retreat Semillon
+        self.assertFalse(
+            is_vivino_candidate_similar(
+                {"winery": "Penfolds", "name": "Rawson's Retreat Semillon"},
+                "Penfolds",
+                "Grange",
+            )
+        )
+        self.assertTrue(
+            is_vivino_candidate_similar(
+                {"winery": "Penfolds", "name": "Grange Shiraz"},
+                "Penfolds",
+                "Grange",
+            )
+        )
+
+        # 4. Payload filtering check: searching for Antinori Tignanello should reject Yellow Tail Shiraz
         raw_payload = {
             "explore_vintage": {
                 "matches": [
@@ -441,6 +457,14 @@ class TestScannerVivinoAndCoordinator(unittest.TestCase):
                 "serving_and_pairing": "Serve at 16-18°C after decanting 1 hour. Ideal with roasted venison and aged pecorino.",
                 "fun_facts": "The wine that ignited the Super Tuscan revolution by defying traditional DOC rules.",
                 "summary": "Tignanello is a landmark Italian masterpiece celebrating Tuscan Sangiovese with Bordeaux varieties.",
+                "taste_profile": {
+                    "soft_vs_acidic": 68,
+                    "light_vs_bold": 78,
+                    "dry_vs_sweet": 8,
+                    "soft_vs_acidic_label": "Crisp & Lively",
+                    "light_vs_bold_label": "Bold & Full",
+                    "dry_vs_sweet_label": "Bone Dry",
+                },
             }
             gemini_resp = {
                 "candidates": [
@@ -472,6 +496,10 @@ class TestScannerVivinoAndCoordinator(unittest.TestCase):
             self.assertIn("1385", res["producer_history"])
             self.assertIn("Tignanello", res["wine_and_terroir"])
             self.assertIn("Super Tuscan", res["fun_facts"])
+            self.assertEqual(res["taste_profile"]["soft_vs_acidic"], 68)
+            self.assertEqual(res["taste_profile"]["light_vs_bold"], 78)
+            self.assertEqual(res["taste_profile"]["dry_vs_sweet"], 8)
+            self.assertEqual(res["taste_profile"]["soft_vs_acidic_label"], "Crisp & Lively")
 
         asyncio.run(_run())
 

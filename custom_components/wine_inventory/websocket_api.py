@@ -35,6 +35,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_adjust_quantity)
     websocket_api.async_register_command(hass, ws_update_wine)
     websocket_api.async_register_command(hass, ws_delete_wine)
+    websocket_api.async_register_command(hass, ws_unlink_vivino)
     websocket_api.async_register_command(hass, ws_research_wine)
     websocket_api.async_register_command(hass, ws_refresh_vivino)
     websocket_api.async_register_command(hass, ws_create_backup)
@@ -275,6 +276,31 @@ async def ws_delete_wine(
         )
     except Exception as err:  # noqa: BLE001
         connection.send_error(msg["id"], "delete_failed", str(err))
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wine_inventory/unlink_vivino",
+        vol.Required("wine_id"): int,
+        vol.Optional("entry_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_unlink_vivino(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Remove Vivino link, ratings, and estimates from a wine."""
+    try:
+        coordinator = _get_coordinator(hass, msg.get("entry_id"))
+        wine = await coordinator.async_unlink_vivino(int(msg["wine_id"]))
+        connection.send_result(
+            msg["id"],
+            {"wine": wine, "statistics": coordinator.statistics},
+        )
+    except Exception as err:  # noqa: BLE001
+        connection.send_error(msg["id"], "unlink_failed", str(err))
 
 
 @websocket_api.websocket_command(

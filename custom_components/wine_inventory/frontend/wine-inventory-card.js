@@ -318,6 +318,10 @@ class WineInventoryCard extends HTMLElement {
       region: wine.region || "",
       country: wine.country || "",
       storage_location: wine.storage_location || wine.last_storage_location || "",
+      purchase_location: wine.purchase_location || wine.last_purchase_location || "",
+      purchase_price: wine.purchase_price !== null && wine.purchase_price !== undefined
+        ? wine.purchase_price
+        : (wine.last_purchase_price !== null && wine.last_purchase_price !== undefined ? wine.last_purchase_price : ""),
       general_notes: wine.general_notes || "",
       drink_from_year: wine.drink_from_year ?? "",
       drink_until_year: wine.drink_until_year ?? "",
@@ -848,6 +852,8 @@ class WineInventoryCard extends HTMLElement {
         region: df.region,
         country: df.country,
         storage_location: df.storage_location,
+        purchase_location: df.purchase_location || "",
+        purchase_price: toFloatOrNull(df.purchase_price),
         general_notes: df.general_notes,
         drink_from_year: toIntOrNull(df.drink_from_year),
         drink_until_year: toIntOrNull(df.drink_until_year),
@@ -859,6 +865,39 @@ class WineInventoryCard extends HTMLElement {
     });
     this._closeModal();
     await this._fetchInventory();
+  }
+
+  async _handleUnlinkVivino(wineId) {
+    if (!this._hass) return;
+    const wine = this._wines.find((w) => Number(w.id) === Number(wineId));
+    const label = wine ? `${wine.winery} – ${wine.name}` : `Wine #${wineId}`;
+    const confirmed = window.confirm(
+      `Remove the Vivino link and ratings from "${label}"?\n\nThis will clear the Vivino URL, star rating, review count, and price estimate.`
+    );
+    if (!confirmed) return;
+
+    try {
+      const res = await this._hass.callWS({
+        type: "wine_inventory/unlink_vivino",
+        wine_id: Number(wineId),
+      });
+      if (this._modalWine && Number(this._modalWine.id) === Number(wineId)) {
+        this._modalWine = res.wine || this._modalWine;
+        this._modalWine.vivino_url = "";
+        this._modalWine.vivino_rating = null;
+        this._modalWine.vivino_ratings_count = null;
+        this._modalWine.vivino_price_estimate = null;
+        this._modalWine.rating_source = "";
+        if (this._detailForm) {
+          this._detailForm.vivino_url = "";
+          this._detailForm.vivino_rating = "";
+        }
+      }
+      await this._fetchInventory();
+      this._render();
+    } catch (err) {
+      alert(`Failed to unlink Vivino: ${err.message || err}`);
+    }
   }
 
   async _handleResearchWine(wineId) {
@@ -1049,8 +1088,8 @@ class WineInventoryCard extends HTMLElement {
                       }
                     </td>
                     <td>
-                      <div class="wine-list-title-wrap">
-                        <strong title="${escapeHtml(wine.name)}">${escapeHtml(wine.name)}</strong>
+                      <div class="wine-list-title-wrap wine-title-clickable" data-action="detail" data-id="${wine.id}" title="Click to view wine details" style="cursor: pointer;">
+                        <strong title="${escapeHtml(wine.name)}" style="cursor: pointer; color: var(--primary-color, #a61a2e);">${escapeHtml(wine.name)}</strong>
                         <span style="font-weight: 500;">${escapeHtml(wine.winery)}</span>
                         <span>${escapeHtml(subMeta)}</span>
                       </div>
@@ -1885,6 +1924,8 @@ class WineInventoryCard extends HTMLElement {
                 <div style="font-size: 12px; color: var(--secondary-text-color); margin-bottom: 6px;">
                   🌍 ${escapeHtml([w.region, w.country].filter(Boolean).join(" • ") || "Origin not specified")}
                   ${(w.storage_location || w.last_storage_location) ? ` • <strong style="color: var(--primary-color);">📍 ${escapeHtml(w.storage_location || w.last_storage_location)}</strong>` : ""}
+                  ${(df.purchase_location || w.purchase_location || w.last_purchase_location) ? ` • <span>🛒 ${escapeHtml(df.purchase_location || w.purchase_location || w.last_purchase_location)}</span>` : ""}
+                  ${(df.purchase_price !== "" && df.purchase_price !== null && df.purchase_price !== undefined) ? ` • <span>💰 ${escapeHtml(String(df.purchase_price))} ${escapeHtml(this._currency)}</span>` : (w.purchase_price !== null && w.purchase_price !== undefined) ? ` • <span>💰 ${escapeHtml(String(w.purchase_price))} ${escapeHtml(this._currency)}</span>` : ""}
                 </div>
                 <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
                   ${
@@ -1896,6 +1937,14 @@ class WineInventoryCard extends HTMLElement {
                       : w.vivino_rating
                       ? `<span class="vivino-badge">★ ${escapeHtml(Number(w.vivino_rating).toFixed(1))}</span>`
                       : `<span class="vivino-badge muted">No Vivino rating</span>`
+                  }
+                  ${
+                    (w.vivino_url || w.vivino_rating || df.vivino_url || df.vivino_rating)
+                      ? `<button type="button" class="ha-btn secondary-btn" id="btn-detail-unlink-vivino" data-id="${w.id}" style="color: var(--error-color, #c62828); border-color: rgba(198, 40, 40, 0.35); font-size: 11px; padding: 2px 8px; display: inline-flex; align-items: center; gap: 4px;" title="Remove incorrect Vivino link and ratings">
+                           <ha-icon icon="mdi:link-off" style="--mdc-icon-size: 14px;"></ha-icon>
+                           <span>Remove Vivino Link</span>
+                         </button>`
+                      : ""
                   }
                   ${w.personal_rating ? `<span class="personal-badge">My Rating: ★ ${w.personal_rating}</span>` : ""}
                 </div>
@@ -1956,6 +2005,64 @@ class WineInventoryCard extends HTMLElement {
                        </button>
                      </div>
                      ${research.summary ? `<div style="font-size: 13px; font-weight: 500; font-style: italic; margin-bottom: 12px; line-height: 1.5; color: var(--primary-text-color);">${escapeHtml(research.summary)}</div>` : ""}
+                     ${
+                       research.taste_profile
+                         ? `
+                         <div class="taste-sliders-card" style="margin: 6px 0 12px; border: 1px solid var(--divider-color, #e0e0e0); border-radius: 10px; padding: 12px; background: var(--card-background-color, #fff);">
+                           <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 12px;">
+                             <ha-icon icon="mdi:tune-vertical-variant" style="color: var(--primary-color); --mdc-icon-size: 16px;"></ha-icon>
+                             <strong style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--primary-color);">Structural Taste Profile</strong>
+                           </div>
+                           <div style="display: flex; flex-direction: column; gap: 12px;">
+                             <!-- Soft vs Acidic -->
+                             <div class="taste-slider-item">
+                               <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11px; margin-bottom: 4px;">
+                                 <span style="font-weight: 600; color: ${Number(research.taste_profile.soft_vs_acidic) <= 40 ? 'var(--primary-color)' : 'var(--secondary-text-color)'};">Soft / Round</span>
+                                 <span style="font-size: 11px; font-weight: 700; color: var(--primary-color); background: rgba(166,26,46,0.08); padding: 1px 8px; border-radius: 10px;">
+                                   ${escapeHtml(research.taste_profile.soft_vs_acidic_label || (Number(research.taste_profile.soft_vs_acidic) < 40 ? 'Soft & Mellow' : Number(research.taste_profile.soft_vs_acidic) > 60 ? 'Crisp & Acidic' : 'Balanced Acidity'))} (${Math.round(Number(research.taste_profile.soft_vs_acidic || 50))}%)
+                                 </span>
+                                 <span style="font-weight: 600; color: ${Number(research.taste_profile.soft_vs_acidic) >= 60 ? 'var(--primary-color)' : 'var(--secondary-text-color)'};">Acidic / Crisp</span>
+                               </div>
+                               <div style="position: relative; height: 8px; background: var(--secondary-background-color, #eee); border-radius: 6px; border: 1px solid var(--divider-color, #ddd);">
+                                 <div style="position: absolute; left: 0; top: 0; bottom: 0; width: ${Math.max(4, Math.min(100, Number(research.taste_profile.soft_vs_acidic || 50)))}%; background: linear-gradient(90deg, #c084fc, #a61a2e); border-radius: 5px;"></div>
+                                 <div style="position: absolute; left: ${Math.max(2, Math.min(98, Number(research.taste_profile.soft_vs_acidic || 50)))}%; top: 50%; transform: translate(-50%, -50%); width: 14px; height: 14px; background: #fff; border: 3px solid var(--primary-color, #a61a2e); border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,0.3);"></div>
+                                </div>
+                             </div>
+
+                             <!-- Light vs Bold -->
+                             <div class="taste-slider-item">
+                               <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11px; margin-bottom: 4px;">
+                                 <span style="font-weight: 600; color: ${Number(research.taste_profile.light_vs_bold) <= 40 ? 'var(--primary-color)' : 'var(--secondary-text-color)'};">Light-Bodied</span>
+                                 <span style="font-size: 11px; font-weight: 700; color: var(--primary-color); background: rgba(166,26,46,0.08); padding: 1px 8px; border-radius: 10px;">
+                                   ${escapeHtml(research.taste_profile.light_vs_bold_label || (Number(research.taste_profile.light_vs_bold) < 40 ? 'Light & Elegant' : Number(research.taste_profile.light_vs_bold) > 60 ? 'Bold & Powerful' : 'Medium-Bodied'))} (${Math.round(Number(research.taste_profile.light_vs_bold || 50))}%)
+                                 </span>
+                                 <span style="font-weight: 600; color: ${Number(research.taste_profile.light_vs_bold) >= 60 ? 'var(--primary-color)' : 'var(--secondary-text-color)'};">Bold / Full</span>
+                               </div>
+                               <div style="position: relative; height: 8px; background: var(--secondary-background-color, #eee); border-radius: 6px; border: 1px solid var(--divider-color, #ddd);">
+                                 <div style="position: absolute; left: 0; top: 0; bottom: 0; width: ${Math.max(4, Math.min(100, Number(research.taste_profile.light_vs_bold || 50)))}%; background: linear-gradient(90deg, #fcd34d, #831843); border-radius: 5px;"></div>
+                                 <div style="position: absolute; left: ${Math.max(2, Math.min(98, Number(research.taste_profile.light_vs_bold || 50)))}%; top: 50%; transform: translate(-50%, -50%); width: 14px; height: 14px; background: #fff; border: 3px solid var(--primary-color, #a61a2e); border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,0.3);"></div>
+                                </div>
+                             </div>
+
+                             <!-- Dry vs Sweet -->
+                             <div class="taste-slider-item">
+                               <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11px; margin-bottom: 4px;">
+                                 <span style="font-weight: 600; color: ${Number(research.taste_profile.dry_vs_sweet) <= 40 ? 'var(--primary-color)' : 'var(--secondary-text-color)'};">Bone Dry</span>
+                                 <span style="font-size: 11px; font-weight: 700; color: var(--primary-color); background: rgba(166,26,46,0.08); padding: 1px 8px; border-radius: 10px;">
+                                   ${escapeHtml(research.taste_profile.dry_vs_sweet_label || (Number(research.taste_profile.dry_vs_sweet) < 25 ? 'Bone Dry' : Number(research.taste_profile.dry_vs_sweet) < 50 ? 'Dry' : Number(research.taste_profile.dry_vs_sweet) < 75 ? 'Off-Dry' : 'Sweet'))} (${Math.round(Number(research.taste_profile.dry_vs_sweet || 10))}%)
+                                 </span>
+                                 <span style="font-weight: 600; color: ${Number(research.taste_profile.dry_vs_sweet) >= 60 ? 'var(--primary-color)' : 'var(--secondary-text-color)'};">Sweet / Luscious</span>
+                               </div>
+                               <div style="position: relative; height: 8px; background: var(--secondary-background-color, #eee); border-radius: 6px; border: 1px solid var(--divider-color, #ddd);">
+                                 <div style="position: absolute; left: 0; top: 0; bottom: 0; width: ${Math.max(4, Math.min(100, Number(research.taste_profile.dry_vs_sweet || 10)))}%; background: linear-gradient(90deg, #93c5fd, #f59e0b); border-radius: 5px;"></div>
+                                 <div style="position: absolute; left: ${Math.max(2, Math.min(98, Number(research.taste_profile.dry_vs_sweet || 10)))}%; top: 50%; transform: translate(-50%, -50%); width: 14px; height: 14px; background: #fff; border: 3px solid var(--primary-color, #a61a2e); border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,0.3);"></div>
+                                </div>
+                             </div>
+                           </div>
+                         </div>
+                         `
+                         : ""
+                     }
                      <div style="display: flex; flex-direction: column; gap: 10px;">
                        ${
                          research.producer_history
@@ -2037,6 +2144,16 @@ class WineInventoryCard extends HTMLElement {
                 <datalist id="detail-storage-areas">
                   ${availableAreas.map((loc) => `<option value="${escapeHtml(loc)}"></option>`).join("")}
                 </datalist>
+              </div>
+
+              <!-- Bought At and Purchase Price fields -->
+              <div class="form-field">
+                <label>Bought At (Store / Vendor)</label>
+                <input class="ha-input" name="purchase_location" value="${escapeHtml(df.purchase_location || "")}" placeholder="e.g. Gall & Gall, Local Winery, Online" />
+              </div>
+              <div class="form-field">
+                <label>Purchase Price (${escapeHtml(this._currency)})</label>
+                <input class="ha-input" type="number" step="0.01" name="purchase_price" value="${escapeHtml(df.purchase_price !== '' && df.purchase_price !== null && df.purchase_price !== undefined ? String(df.purchase_price) : "")}" placeholder="e.g. 19.99" />
               </div>
 
               <div class="form-field full-width">
@@ -2326,6 +2443,12 @@ class WineInventoryCard extends HTMLElement {
     root.querySelector("#btn-re-research-wine")?.addEventListener("click", (e) => {
       const wineId = Number(e.currentTarget.dataset.id);
       this._handleResearchWine(wineId);
+    });
+
+    // Remove Vivino link button handler
+    root.querySelector("#btn-detail-unlink-vivino")?.addEventListener("click", (e) => {
+      const wineId = Number(e.currentTarget.dataset.id);
+      if (wineId) this._handleUnlinkVivino(wineId);
     });
 
     // Delete wine button handler

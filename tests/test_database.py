@@ -216,6 +216,52 @@ class TestWineDatabase(unittest.TestCase):
             self.assertEqual(detail["storage_location"], "Underground Cellar Bin 4")
             self.assertEqual(detail["batches"][0]["storage_location"], "Underground Cellar Bin 4")
 
+            # 3. Test editable purchase location and purchase price
+            updated_purchase = db.update_wine(
+                wine["id"],
+                {
+                    "purchase_location": "Boutique Wine Merchant",
+                    "purchase_price": 285.50,
+                },
+            )
+            self.assertEqual(updated_purchase["purchase_location"], "Boutique Wine Merchant")
+            self.assertEqual(updated_purchase["purchase_price"], 285.50)
+
+            detail_after_price = db.get_wine_detail(wine["id"])
+            assert detail_after_price is not None
+            self.assertEqual(detail_after_price["purchase_location"], "Boutique Wine Merchant")
+            self.assertEqual(detail_after_price["purchase_price"], 285.50)
+            self.assertEqual(detail_after_price["batches"][0]["purchase_location"], "Boutique Wine Merchant")
+            self.assertEqual(detail_after_price["batches"][0]["purchase_price"], 285.50)
+
+            # 4. Test Unlink Vivino
+            db.update_wine(
+                wine["id"],
+                {
+                    "vivino_rating": 4.6,
+                    "vivino_ratings_count": 1250,
+                    "vivino_url": "https://www.vivino.com/wines/sassicaia-2018",
+                    "vivino_price_estimate": 290.0,
+                    "rating_source": "vivino",
+                },
+            )
+            detail_with_vivino = db.get_wine_detail(wine["id"])
+            assert detail_with_vivino is not None
+            self.assertEqual(detail_with_vivino["vivino_rating"], 4.6)
+            self.assertEqual(detail_with_vivino["vivino_url"], "https://www.vivino.com/wines/sassicaia-2018")
+
+            unlinked = db.unlink_vivino(wine["id"])
+            self.assertIsNone(unlinked["vivino_rating"])
+            self.assertIsNone(unlinked["vivino_ratings_count"])
+            self.assertEqual(unlinked["vivino_url"], "")
+            self.assertIsNone(unlinked["vivino_price_estimate"])
+            self.assertEqual(unlinked["rating_source"], "")
+
+            detail_unlinked = db.get_wine_detail(wine["id"])
+            assert detail_unlinked is not None
+            self.assertIsNone(detail_unlinked["vivino_rating"])
+            self.assertEqual(detail_unlinked["vivino_url"], "")
+
 
 if __name__ == "__main__":
     unittest.main()

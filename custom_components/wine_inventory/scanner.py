@@ -390,6 +390,12 @@ Provide structured, engaging, sommelier-grade research covering:
 4. Serving & Food Pairings: Recommended serving temperature, decanting duration, glassware, and ideal culinary pairings.
 5. Fun Facts & Accolades: 1 or 2 fascinating historical anecdotes, awards, or trivia about the estate or wine.
 6. Summary: A 2-sentence executive summary highlighting what makes this wine and producer special.
+7. Taste Profile Characteristic Sliders:
+   Evaluate where this wine lands on three classic spectrums as integer percentages from 0 to 100:
+   - `soft_vs_acidic`: 0 = Very Soft, smooth, low acidity; 50 = Balanced acidity; 100 = Highly Acidic, crisp, tart, racy.
+   - `light_vs_bold`: 0 = Very Light-bodied, delicate; 50 = Medium-bodied; 100 = Bold, full-bodied, heavy, dense.
+   - `dry_vs_sweet`: 0 = Bone Dry; 50 = Off-dry; 100 = Very Sweet / Luscious dessert wine.
+   Also provide a concise descriptive label for each (e.g. `soft_vs_acidic_label`: "Crisp & Acidic" or "Soft & Round", `light_vs_bold_label`: "Medium-Bodied" or "Bold & Full", `dry_vs_sweet_label`: "Bone Dry" or "Sweet").
 """
 
 WINE_RESEARCH_SCHEMA: dict[str, Any] = {
@@ -401,6 +407,31 @@ WINE_RESEARCH_SCHEMA: dict[str, Any] = {
         "serving_and_pairing": {"type": "STRING"},
         "fun_facts": {"type": "STRING"},
         "summary": {"type": "STRING"},
+        "taste_profile": {
+            "type": "OBJECT",
+            "properties": {
+                "soft_vs_acidic": {
+                    "type": "INTEGER",
+                    "description": "0 = Very soft, 100 = Highly acidic/crisp",
+                },
+                "light_vs_bold": {
+                    "type": "INTEGER",
+                    "description": "0 = Light-bodied, 100 = Bold/full-bodied",
+                },
+                "dry_vs_sweet": {
+                    "type": "INTEGER",
+                    "description": "0 = Bone dry, 100 = Very sweet",
+                },
+                "soft_vs_acidic_label": {"type": "STRING"},
+                "light_vs_bold_label": {"type": "STRING"},
+                "dry_vs_sweet_label": {"type": "STRING"},
+            },
+            "required": [
+                "soft_vs_acidic",
+                "light_vs_bold",
+                "dry_vs_sweet",
+            ],
+        },
     },
     "required": [
         "producer_history",
@@ -408,6 +439,7 @@ WINE_RESEARCH_SCHEMA: dict[str, Any] = {
         "tasting_profile",
         "serving_and_pairing",
         "summary",
+        "taste_profile",
     ],
 }
 
