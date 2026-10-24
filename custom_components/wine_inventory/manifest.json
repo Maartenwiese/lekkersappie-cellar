@@ -1,6 +1,6 @@
 {
   "domain": "wine_inventory",
-  "name": "Wine Inventory & Cellar Scanner",
+  "name": "Lekkersappie",
   "codeowners": ["@maartenw"],
   "config_flow": true,
   "dependencies": ["frontend", "http"],

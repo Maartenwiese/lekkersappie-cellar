@@ -6,26 +6,26 @@
 # - Uses `type: distribution` card (2026.2+) for Red / White / Rosé / Sparkling breakdown
 # - Uses `type: custom:wine-inventory-card` for bottle scanning, Vivino ranking, +1/-1 stock, and notes
 
-title: Wine Cellar
+title: Lekkersappie
 views:
-  - title: Wine Cellar
-    path: wine-cellar
+  - title: Lekkersappie
+    path: lekkersappie
     type: sections
-    icon: mdi:bottle-wine
+    icon: mdi:glass-wine
     max_columns: 3
     badges:
       - type: entity
-        entity: sensor.wine_cellar_total_bottles
+        entity: sensor.lekkersappie_total_bottles
         show_name: true
         show_state: true
         color: red
       - type: entity
-        entity: sensor.wine_cellar_ready_to_drink
+        entity: sensor.lekkersappie_ready_to_drink
         show_name: true
         show_state: true
         color: green
       - type: entity
-        entity: sensor.wine_cellar_drink_soon
+        entity: sensor.lekkersappie_drink_soon
         show_name: true
         show_state: true
         color: amber
@@ -36,7 +36,7 @@ views:
           - type: heading
             heading: Cellar Overview
             heading_style: title
-            icon: mdi:chart-box-outline
+            icon: mdi:glass-wine
             badges:
               - type: button
                 icon: mdi:refresh
@@ -44,15 +44,15 @@ views:
                   action: perform-action
                   perform_action: wine_inventory.refresh_vivino
           - type: tile
-            entity: sensor.wine_cellar_total_bottles
+            entity: sensor.lekkersappie_total_bottles
             name: Total Stock
-            icon: mdi:bottle-wine
+            icon: mdi:glass-wine
             color: red
             grid_options:
               columns: 6
               rows: 1
           - type: tile
-            entity: sensor.wine_cellar_unique_wines
+            entity: sensor.lekkersappie_unique_wines
             name: Unique Wines
             icon: mdi:glass-wine
             color: purple
@@ -60,7 +60,7 @@ views:
               columns: 6
               rows: 1
           - type: tile
-            entity: sensor.wine_cellar_ready_to_drink
+            entity: sensor.lekkersappie_ready_to_drink
             name: Ready to Drink
             icon: mdi:check-decagram
             color: green
@@ -68,7 +68,7 @@ views:
               columns: 6
               rows: 1
           - type: tile
-            entity: sensor.wine_cellar_drink_soon
+            entity: sensor.lekkersappie_drink_soon
             name: Drink Soon
             icon: mdi:clock-alert-outline
             color: amber
@@ -76,7 +76,7 @@ views:
               columns: 6
               rows: 1
           - type: tile
-            entity: sensor.wine_cellar_estimated_value
+            entity: sensor.lekkersappie_estimated_value
             name: Cellar Valuation
             icon: mdi:cash-multiple
             color: teal
@@ -90,19 +90,19 @@ views:
           - type: distribution
             title: Wine Style Breakdown
             entities:
-              - entity: sensor.wine_cellar_red_wine_bottles
+              - entity: sensor.lekkersappie_red_wine_bottles
                 name: Red
                 color: "#b71c1c"
-              - entity: sensor.wine_cellar_white_wine_bottles
+              - entity: sensor.lekkersappie_white_wine_bottles
                 name: White
                 color: "#f57f17"
-              - entity: sensor.wine_cellar_rose_wine_bottles
+              - entity: sensor.lekkersappie_rose_wine_bottles
                 name: Rosé
                 color: "#ec407a"
-              - entity: sensor.wine_cellar_sparkling_wine_bottles
+              - entity: sensor.lekkersappie_sparkling_wine_bottles
                 name: Sparkling
                 color: "#0288d1"
-              - entity: sensor.wine_cellar_dessert_fortified_bottles
+              - entity: sensor.lekkersappie_dessert_fortified_bottles
                 name: Dessert / Fortified
                 color: "#6a1b9a"
             grid_options:
@@ -113,9 +113,9 @@ views:
         column_span: 2
         cards:
           - type: heading
-            heading: Wine Inventory & Gemini Bottle Scanner
+            heading: Lekkersappie — Wine Inventory & Gemini Scanner
             heading_style: title
-            icon: mdi:camera-iris
+            icon: mdi:glass-wine
             badges:
               - type: button
                 icon: mdi:file-export-outline
@@ -125,7 +125,7 @@ views:
                   data:
                     format: csv
           - type: custom:wine-inventory-card
-            title: Wine Cellar Inventory
+            title: Lekkersappie
             grid_options:
               columns: full
               rows: auto

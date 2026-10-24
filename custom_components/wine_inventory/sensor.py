@@ -40,7 +40,7 @@ SENSOR_DESCRIPTIONS: tuple[WineSensorDescription, ...] = (
     WineSensorDescription(
         key="total_bottles",
         name="Total Bottles",
-        icon="mdi:bottle-wine",
+        icon="mdi:glass-wine",
         native_unit_of_measurement="bottles",
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda c: c.statistics.get("total_bottles", 0),
@@ -91,7 +91,7 @@ SENSOR_DESCRIPTIONS: tuple[WineSensorDescription, ...] = (
     WineSensorDescription(
         key="red_bottles",
         name="Red Wine Bottles",
-        icon="mdi:bottle-wine",
+        icon="mdi:glass-wine",
         native_unit_of_measurement="bottles",
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda c: c.statistics.get("by_type", {}).get(WINE_TYPE_RED, 0),
@@ -166,7 +166,7 @@ class WineInventorySensor(SensorEntity):
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, coordinator.entry_id)},
             name=coordinator.cellar_name,
-            manufacturer="Wine Inventory",
+            manufacturer="Lekkersappie",
             model="Local SQLite Cellar & Gemini Scanner",
             sw_version=VERSION,
             entry_type=DeviceEntryType.SERVICE,

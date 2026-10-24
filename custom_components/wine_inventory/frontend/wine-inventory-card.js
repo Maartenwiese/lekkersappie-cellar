@@ -55,7 +55,7 @@ class WineInventoryCard extends HTMLElement {
     this._config = {};
     this._wines = [];
     this._statistics = {};
-    this._cellarName = "Wine Cellar";
+    this._cellarName = "Lekkersappie";
     this._currency = "EUR";
     this._tempEntity = "";
     this._humidityEntity = "";
@@ -154,7 +154,7 @@ class WineInventoryCard extends HTMLElement {
       });
       this._wines = res.wines || [];
       this._statistics = res.statistics || {};
-      this._cellarName = this._config.title || res.cellar_name || "Wine Cellar";
+      this._cellarName = this._config.title || res.cellar_name || "Lekkersappie";
       this._currency = res.currency || "EUR";
       this._tempEntity = res.temperature_entity || "";
       this._humidityEntity = res.humidity_entity || "";
@@ -553,7 +553,7 @@ class WineInventoryCard extends HTMLElement {
               wine.image_url
                 ? `<img class="wine-thumb" src="${escapeHtml(wine.image_url)}" alt="${escapeHtml(wine.name)}" />`
                 : `<div class="wine-thumb-placeholder type-${escapeHtml(wine.wine_type)}">
-                    <ha-icon icon="mdi:bottle-wine"></ha-icon>
+                    <ha-icon icon="mdi:glass-wine"></ha-icon>
                   </div>`
             }
           </div>
@@ -1634,7 +1634,7 @@ class WineInventoryCard extends HTMLElement {
         <div class="header-bar">
           <div class="title-block">
             <h1>
-              <ha-icon icon="mdi:bottle-wine"></ha-icon>
+              <ha-icon icon="mdi:glass-wine" style="color: #a61a2e;"></ha-icon>
               <span>${escapeHtml(this._cellarName)}</span>
             </h1>
             <div class="env-pills">
@@ -1709,7 +1709,7 @@ class WineInventoryCard extends HTMLElement {
         ${
           wines.length === 0
             ? `<div class="empty-state">
-                <ha-icon icon="mdi:bottle-wine-outline" style="--mdc-icon-size: 40px;"></ha-icon>
+                <ha-icon icon="mdi:glass-wine" style="--mdc-icon-size: 40px; color: #a61a2e;"></ha-icon>
                 <p>No wines match the current filter. Click <strong>Scan Bottle</strong> to scan a wine label with Gemini Flash-Lite!</p>
               </div>`
             : `<div class="wine-grid">
@@ -1737,8 +1737,8 @@ window.customCards = window.customCards || [];
 if (!window.customCards.some((c) => c.type === "wine-inventory-card")) {
   window.customCards.push({
     type: "wine-inventory-card",
-    name: "Wine Inventory & Scanner Card",
-    description: "Scan wine labels with Gemini Flash-Lite, enrich with Vivino ratings, and manage cellar stock & notes.",
+    name: "Lekkersappie Wine Cellar Card",
+    description: "Lekkersappie: Scan wine labels with Gemini Flash-Lite, enrich with Vivino ratings, and manage cellar stock & notes.",
     preview: true,
   });
 }

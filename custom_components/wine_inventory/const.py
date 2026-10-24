@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Final
 
 DOMAIN: Final = "wine_inventory"
-NAME: Final = "Wine Inventory"
+NAME: Final = "Lekkersappie"
 VERSION: Final = "1.0.0"
 
 # Config & Options keys
@@ -20,7 +20,7 @@ CONF_HUMIDITY_ENTITY: Final = "humidity_entity"
 CONF_LOW_STOCK_THRESHOLD: Final = "low_stock_threshold"
 
 # Defaults
-DEFAULT_CELLAR_NAME: Final = "Wine Cellar"
+DEFAULT_CELLAR_NAME: Final = "Lekkersappie"
 DEFAULT_GEMINI_MODEL: Final = "gemini-3.8-flash-lite"
 DEFAULT_CURRENCY: Final = "EUR"
 DEFAULT_VIVINO_COUNTRY_CODE: Final = "NL"

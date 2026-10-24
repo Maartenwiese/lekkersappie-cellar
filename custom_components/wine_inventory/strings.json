@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "Set up Wine Inventory & Cellar Scanner",
+        "title": "Set up Lekkersappie",
         "description": "Configure your local SQLite wine inventory, Gemini Flash-Lite bottle label scanner, and Vivino rating lookup.",
         "data": {
           "cellar_name": "Cellar Name",
@@ -18,13 +18,13 @@
       }
     },
     "abort": {
-      "already_configured": "This Wine Cellar is already configured."
+      "already_configured": "This Lekkersappie cellar is already configured."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "Wine Inventory Options",
+        "title": "Lekkersappie Options",
         "description": "Update your Gemini Flash-Lite model, Vivino country/currency settings, or linked Home Assistant cellar sensors.",
         "data": {
           "gemini_api_key": "Google Gemini API Key",

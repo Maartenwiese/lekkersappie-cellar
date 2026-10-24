@@ -29,7 +29,7 @@ class WineInventoryActivityEventEntity(EventEntity):
 
     _attr_has_entity_name = True
     _attr_name = "Activity"
-    _attr_icon = "mdi:bell-ring-outline"
+    _attr_icon = "mdi:glass-wine"
     _attr_event_types = CELLAR_EVENT_TYPES
 
     def __init__(self, coordinator: WineInventoryCoordinator) -> None:
@@ -39,7 +39,7 @@ class WineInventoryActivityEventEntity(EventEntity):
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, coordinator.entry_id)},
             name=coordinator.cellar_name,
-            manufacturer="Wine Inventory",
+            manufacturer="Lekkersappie",
             model="Local SQLite Cellar & Gemini Scanner",
             sw_version=VERSION,
             entry_type=DeviceEntryType.SERVICE,
