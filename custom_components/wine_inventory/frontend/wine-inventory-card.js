@@ -309,6 +309,8 @@ class WineInventoryCard extends HTMLElement {
     this._modalWine = wine;
     this._researchingWineId = null;
     this._researchError = "";
+    this._vivinoLinkError = "";
+    this._linkingVivinoId = null;
     this._detailForm = {
       wine_id: wine.id,
       winery: wine.winery || "",
@@ -676,7 +678,13 @@ class WineInventoryCard extends HTMLElement {
       const existing = res.existing_wine || null;
       this._scanState.vivinoCandidates = res.vivino_candidates || [];
       this._scanState.vivinoStatus = res.vivino_status || "";
-      this._scanState.selectedVivinoIndex = this._scanState.vivinoCandidates.length > 0 ? 0 : -1;
+      this._scanState.vivinoConfidence = res.vivino_confidence || "none";
+      this._scanState.vivinoSuggestedIndex =
+        res.vivino_selected_index === null || res.vivino_selected_index === undefined ? -1 : Number(res.vivino_selected_index);
+      this._scanState.vivinoJudgeReason = res.vivino_judge_reason || "";
+      // Only a HIGH-confidence verified match is pre-selected; otherwise default to "Do not link".
+      this._scanState.selectedVivinoIndex =
+        this._scanState.vivinoConfidence === "high" ? this._scanState.vivinoSuggestedIndex : -1;
       this._scanState.existingWine = existing;
 
       this._scanState.form = {
@@ -695,6 +703,8 @@ class WineInventoryCard extends HTMLElement {
         vivino_url: ext.vivino_url || "",
         vivino_price_estimate: ext.vivino_price_estimate ?? "",
         rating_source: ext.rating_source || "",
+        vivino_wine_id: ext.vivino_wine_id ?? null,
+        vivino_match_confidence: ext.vivino_match_confidence || "none",
         drink_from_year: ext.drink_from_year ?? (existing?.drink_from_year ?? ""),
         drink_until_year: ext.drink_until_year ?? (existing?.drink_until_year ?? ""),
         drink_window_note: ext.drink_window_note || existing?.drink_window_note || "",
@@ -707,7 +717,7 @@ class WineInventoryCard extends HTMLElement {
         quantity: 1,
         added_at: nowLocalIsoMinutes(),
         purchase_location: existing?.last_purchase_location || "",
-        purchase_price: existing?.last_purchase_price ?? (ext.vivino_price_estimate ?? ""),
+        purchase_price: existing?.last_purchase_price ?? "",
         storage_location: existing?.last_storage_location || "",
       };
     } catch (err) {
@@ -735,6 +745,8 @@ class WineInventoryCard extends HTMLElement {
       f.vivino_url = "";
       f.vivino_price_estimate = "";
       f.rating_source = "";
+      f.vivino_wine_id = null;
+      f.vivino_match_confidence = "none";
       this._render();
       return;
     }
@@ -744,7 +756,11 @@ class WineInventoryCard extends HTMLElement {
     f.vivino_ratings_count = cand.vivino_ratings_count ?? null;
     f.vivino_url = cand.vivino_url || "";
     f.vivino_price_estimate = cand.vivino_price_estimate ?? "";
-    f.rating_source = cand.rating_source || "vivino";
+    f.rating_source = "vivino";
+    f.vivino_wine_id = cand.vivino_wine_id ?? null;
+    // A verified auto-match keeps "high"; any manual pick is a user confirmation.
+    f.vivino_match_confidence =
+      this._scanState.vivinoConfidence === "high" && index === this._scanState.vivinoSuggestedIndex ? "high" : "confirmed";
     if (cand.region && !f.region) f.region = cand.region;
     if (cand.country && !f.country) f.country = cand.country;
     this._render();
@@ -776,7 +792,9 @@ class WineInventoryCard extends HTMLElement {
         vivino_ratings_count: toIntOrNull(f.vivino_ratings_count),
         vivino_url: f.vivino_url,
         vivino_price_estimate: toFloatOrNull(f.vivino_price_estimate),
-        rating_source: f.rating_source || "user",
+        rating_source: f.vivino_url ? (f.rating_source || "vivino") : "",
+        vivino_wine_id: f.vivino_url ? (toIntOrNull(f.vivino_wine_id)) : null,
+        vivino_match_confidence: f.vivino_url ? (f.vivino_match_confidence || "confirmed") : "none",
         drink_from_year: toIntOrNull(f.drink_from_year),
         drink_until_year: toIntOrNull(f.drink_until_year),
         drink_window_note: f.drink_window_note,
@@ -867,6 +885,39 @@ class WineInventoryCard extends HTMLElement {
     await this._fetchInventory();
   }
 
+  async _handleLinkVivinoUrl(wineId, url) {
+    if (!this._hass) return;
+    const clean = (url || "").trim();
+    this._vivinoLinkError = "";
+    if (!clean) {
+      this._vivinoLinkError = "Paste a Vivino wine link first (it contains /w/<number>).";
+      this._render();
+      return;
+    }
+    this._linkingVivinoId = Number(wineId);
+    this._render();
+    try {
+      const res = await this._hass.callWS({
+        type: "wine_inventory/link_vivino_url",
+        wine_id: Number(wineId),
+        url: clean,
+      });
+      if (this._modalWine && Number(this._modalWine.id) === Number(wineId) && res.wine) {
+        this._modalWine = res.wine;
+        if (this._detailForm) {
+          this._detailForm.vivino_url = res.wine.vivino_url || "";
+          this._detailForm.vivino_rating = res.wine.vivino_rating ?? "";
+        }
+      }
+      await this._fetchInventory();
+    } catch (err) {
+      this._vivinoLinkError = `Could not link: ${err?.message || err}`;
+    } finally {
+      this._linkingVivinoId = null;
+      this._render();
+    }
+  }
+
   async _handleUnlinkVivino(wineId) {
     if (!this._hass) return;
     const wine = this._wines.find((w) => Number(w.id) === Number(wineId));
@@ -944,8 +995,6 @@ class WineInventoryCard extends HTMLElement {
     const ratingVal = wine.vivino_rating ? Number(wine.vivino_rating).toFixed(1) : null;
     const ratingCount = wine.vivino_ratings_count
       ? `(${Number(wine.vivino_ratings_count).toLocaleString()})`
-      : wine.rating_source === "gemini_estimate"
-      ? "(est.)"
       : "";
     const drinkYears =
       wine.drink_from_year || wine.drink_until_year
@@ -1605,7 +1654,17 @@ class WineInventoryCard extends HTMLElement {
                     ${
                       s.vivinoCandidates && s.vivinoCandidates.length > 0
                         ? `<div class="form-field full-width">
-                            <label>Vivino Match Selection (select candidate or disconnect)</label>
+                            ${
+                              s.vivinoConfidence === "high"
+                                ? `<div class="vivino-tier-banner tier-high" style="margin-bottom:6px; padding:8px 12px; border-radius:8px; background:rgba(46,125,50,0.10); border:1px solid rgba(46,125,50,0.4); font-size:12px;">
+                                     <strong>✓ Verified Vivino match</strong>: producer and cuvée match exactly and the AI check confirmed the label.
+                                   </div>`
+                                : `<div class="vivino-tier-banner tier-medium" style="margin-bottom:6px; padding:8px 12px; border-radius:8px; background:rgba(245,124,0,0.10); border:1px solid rgba(245,124,0,0.45); font-size:12px;">
+                                     <strong>Please confirm</strong>: we found possible Vivino records but could not verify which one is your bottle. Nothing is linked unless you pick one.
+                                     ${s.vivinoSuggestedIndex >= 0 ? `<br/>AI suggestion: <em>${escapeHtml(s.vivinoCandidates[s.vivinoSuggestedIndex]?.name || "")}</em>` : ""}
+                                   </div>`
+                            }
+                            <label>Vivino Match Selection (select candidate or leave unlinked)</label>
                             <select id="vivino-candidate-select" class="ha-input">
                               <option value="-1" ${s.selectedVivinoIndex === -1 ? "selected" : ""}>
                                 🚫 Do not link to Vivino (Leave unlinked)
@@ -1614,7 +1673,7 @@ class WineInventoryCard extends HTMLElement {
                                 .map(
                                   (c, idx) =>
                                     `<option value="${idx}" ${s.selectedVivinoIndex === idx ? "selected" : ""}>
-                                      ★ ${c.vivino_rating ?? "?"} – ${escapeHtml(c.winery)}: ${escapeHtml(c.name)} (${c.vintage || "NV"}) [${c.vivino_ratings_count ? c.vivino_ratings_count.toLocaleString() : 0} ratings]
+                                      ${c.prefilter_exact ? "✓ " : ""}${escapeHtml(c.winery)}: ${escapeHtml(c.name)} (${c.vintage || "NV"}) – ★ ${c.vivino_rating ?? "?"} [${c.vivino_ratings_count ? c.vivino_ratings_count.toLocaleString() : 0} ratings]
                                     </option>`
                                 )
                                 .join("")}
@@ -1624,7 +1683,7 @@ class WineInventoryCard extends HTMLElement {
                         ? `<div class="form-field full-width">
                             <label>Vivino Match</label>
                             <div style="display:flex; justify-content:space-between; align-items:center; padding: 6px 12px; background:var(--secondary-background-color, rgba(127,127,127,0.08)); border-radius:8px;">
-                              <span style="font-size: 13px;">★ ${escapeHtml(s.form.vivino_rating)} (${escapeHtml(s.form.rating_source || "Vivino")})</span>
+                              <span style="font-size: 13px;">★ ${escapeHtml(s.form.vivino_rating)} (Vivino)</span>
                               <button type="button" class="ha-btn secondary-btn" id="btn-disconnect-vivino" style="padding: 4px 8px; font-size: 12px;">
                                 <ha-icon icon="mdi:link-variant-off"></ha-icon>
                                 <span>Do Not Link</span>
@@ -1946,8 +2005,21 @@ class WineInventoryCard extends HTMLElement {
                          </button>`
                       : ""
                   }
+                  ${
+                    w.vivino_url && (w.vivino_match_confidence === "high" || w.vivino_match_confidence === "confirmed")
+                      ? `<span class="filter-chip" style="padding: 2px 8px; font-size: 11px; border-color: rgba(46,125,50,0.5); color: #2e7d32;" title="${w.vivino_match_confidence === "high" ? "Automatically verified: exact producer + cuvée and AI label check" : "Confirmed by you"}">✓ ${w.vivino_match_confidence === "high" ? "Verified" : "Confirmed"}</span>`
+                      : ""
+                  }
                   ${w.personal_rating ? `<span class="personal-badge">My Rating: ★ ${w.personal_rating}</span>` : ""}
                 </div>
+                <div class="vivino-link-row" style="display: flex; gap: 6px; align-items: center; margin-top: 8px; flex-wrap: wrap;">
+                  <input class="ha-input" id="detail-vivino-link-input" type="url" placeholder="Paste exact Vivino link (…vivino.com/…/w/1234)" style="flex: 1; min-width: 180px; font-size: 12px; padding: 6px 8px;" />
+                  <button type="button" class="ha-btn secondary-btn" id="btn-detail-link-vivino" data-id="${w.id}" style="font-size: 11px; padding: 4px 10px;" title="Link this wine to an exact Vivino page (no matching involved)">
+                    <ha-icon icon="mdi:link-variant" style="--mdc-icon-size: 14px;"></ha-icon>
+                    <span>${this._linkingVivinoId === w.id ? "Linking…" : "Link Vivino"}</span>
+                  </button>
+                </div>
+                ${this._vivinoLinkError ? `<div class="scan-error-message" style="font-size: 12px; margin-top: 4px; color: var(--error-color, #c62828);">${escapeHtml(this._vivinoLinkError)}</div>` : ""}
 
                 <!-- Bottle Quantity Stepper (+ / -) with 0-Bottle Warning -->
                 <div class="detail-stepper-wrap" style="display: flex; align-items: center; gap: 10px; margin-top: 12px; flex-wrap: wrap;">
@@ -2443,6 +2515,13 @@ class WineInventoryCard extends HTMLElement {
     root.querySelector("#btn-re-research-wine")?.addEventListener("click", (e) => {
       const wineId = Number(e.currentTarget.dataset.id);
       this._handleResearchWine(wineId);
+    });
+
+    // Link exact Vivino URL handler
+    root.querySelector("#btn-detail-link-vivino")?.addEventListener("click", (e) => {
+      const wineId = Number(e.currentTarget.dataset.id);
+      const input = root.querySelector("#detail-vivino-link-input");
+      this._handleLinkVivinoUrl(wineId, input ? input.value : "");
     });
 
     // Remove Vivino link button handler

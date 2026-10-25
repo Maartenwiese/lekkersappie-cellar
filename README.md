@@ -28,8 +28,9 @@ Built following the [**`homeassistant-ai/skills`**](https://github.com/homeassis
   - Extracts Winery, Wine Name, Vintage (`YYYY` or `NV`), Wine Style (`red`, `white`, `rose`, `sparkling`, `dessert`, `fortified`), Varietal, Region, Country, Alcohol %, recommended Drinking Window (`drink_from_year`–`drink_until_year`), Food Pairings, and a concise label summary.
   - Automatically detects if the scanned bottle already exists in your cellar so you can increment your stock in one click without creating duplicate wine entries.
 - **⭐ Automatic Vivino Ranking Lookup**:
-  - Looks up the bottle on Vivino and populates the community star rating (`★ 4.3`), rating count, estimated price, and direct Vivino URL.
-  - Includes a **3-candidate selector dropdown** in the scan dialog if a label is ambiguous, plus an automatic Gemini rating estimation fallback if Vivino rate-limits requests (`HTTP 403/429`).
+  - Searches Vivino using only text that is verifiably **printed on the label**, keeps only records whose producer **and** cuvée match exactly, and lets Gemini pick from those real records (or reject them all) by comparing them with your photo.
+  - **Verified** matches (one exact record that the AI check confirms) are linked automatically. Ambiguous results are shown for you to confirm, with **🚫 Do not link** selected by default.
+  - Ratings are never estimated: if Vivino has no verified record (or blocks the request), the wine stays unlinked. You can always paste an exact Vivino link in the Details view or remove a link.
 - **➕ / ➖ 1-Tap Inventory Adjustments & Notes Overview**:
   - Clicking **`+`** on any wine opens a Quick-Add Batch dialog pre-filled with the current timestamp and your last used store & storage location—hit **Save** in 1 tap or add purchase context and notes.
   - Clicking **`-`** opens an **Open / Drink Bottle** dialog where you select which fridge/rack batch you pulled the bottle from, give it a `1–5` personal rating, and record tasting notes. Wines that reach `0` bottles stay preserved in the **Tasted Archive** tab so you always remember what you enjoyed.
@@ -67,7 +68,6 @@ Once Home Assistant has restarted:
    - **Gemini Flash-Lite Model ID**: Defaults to `gemini-3.8-flash-lite` (you can adjust this at any time in the integration's **Configure** options).
    - **Currency Code**: e.g., `EUR` or `USD`.
    - **Vivino Country Code**: e.g., `NL`, `US`, `FR`, `DE`, `IT`.
-   - **Estimate rating via Gemini if Vivino rate-limits**: Keep enabled (`true`) so ratings are still estimated if Vivino blocks automated requests.
    - **Low Stock Alert Threshold**: Number of remaining bottles (default `2`) that triggers a `stock_low` event when you consume a bottle.
    - **Optional Cellar/Fridge Temperature & Humidity Sensors**: Enter an existing Home Assistant entity ID (e.g., `sensor.wine_fridge_temperature` and `sensor.wine_fridge_humidity`) to display live cellar conditions inside the Lekkersappie header bar.
 5. Click **Submit**.

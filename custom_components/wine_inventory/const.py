@@ -6,7 +6,7 @@ from typing import Final
 
 DOMAIN: Final = "wine_inventory"
 NAME: Final = "Lekkersappie"
-VERSION: Final = "0.2.7"
+VERSION: Final = "0.2.8"
 
 # Config & Options keys
 CONF_CELLAR_NAME: Final = "cellar_name"
@@ -14,7 +14,6 @@ CONF_GEMINI_API_KEY: Final = "gemini_api_key"
 CONF_GEMINI_MODEL: Final = "gemini_model"
 CONF_CURRENCY: Final = "currency"
 CONF_VIVINO_COUNTRY_CODE: Final = "vivino_country_code"
-CONF_VIVINO_FALLBACK_TO_GEMINI: Final = "vivino_fallback_to_gemini"
 CONF_TEMPERATURE_ENTITY: Final = "temperature_entity"
 CONF_HUMIDITY_ENTITY: Final = "humidity_entity"
 CONF_LOW_STOCK_THRESHOLD: Final = "low_stock_threshold"
@@ -24,7 +23,6 @@ DEFAULT_CELLAR_NAME: Final = "Lekkersappie"
 DEFAULT_GEMINI_MODEL: Final = "gemini-3.8-flash-lite"
 DEFAULT_CURRENCY: Final = "EUR"
 DEFAULT_VIVINO_COUNTRY_CODE: Final = "NL"
-DEFAULT_VIVINO_FALLBACK_TO_GEMINI: Final = True
 DEFAULT_LOW_STOCK_THRESHOLD: Final = 2
 
 # Storage & Static Paths

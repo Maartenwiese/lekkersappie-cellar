@@ -262,6 +262,36 @@ class TestWineDatabase(unittest.TestCase):
             self.assertIsNone(detail_unlinked["vivino_rating"])
             self.assertEqual(detail_unlinked["vivino_url"], "")
 
+    def test_vivino_grounding_migration_clears_untrusted_links(self) -> None:
+        """Gemini-estimated ratings and legacy /wines/<id> links are cleared on startup."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = WineDatabase(Path(tmpdir) / "wine_inventory.db")
+            db.initialize()
+            est = db.add_or_increment_wine(
+                winery="Estate A", name="Cuvee A", vivino_rating=4.1, rating_source="gemini_estimate"
+            )
+            legacy = db.add_or_increment_wine(
+                winery="Antinori", name="Tignanello", vintage=2019, vivino_rating=4.6,
+                vivino_url="https://www.vivino.com/wines/1652?year=2019", rating_source="vivino",
+            )
+            good = db.add_or_increment_wine(
+                winery="Penfolds", name="Grange", vintage=2018, vivino_rating=4.7,
+                vivino_url="https://www.vivino.com/w/1136930?year=2018", rating_source="vivino",
+                vivino_wine_id=1136930, vivino_match_confidence="high",
+            )
+            db.initialize()  # simulate restart after upgrade
+
+            e = db.get_wine_detail(est["id"]); l = db.get_wine_detail(legacy["id"]); g = db.get_wine_detail(good["id"])
+            assert e and l and g
+            self.assertIsNone(e["vivino_rating"])
+            self.assertEqual(e["rating_source"], "")
+            self.assertEqual(l["vivino_url"], "")
+            self.assertIsNone(l["vivino_rating"])
+            self.assertEqual(g["vivino_url"], "https://www.vivino.com/w/1136930?year=2018")
+            self.assertEqual(g["vivino_rating"], 4.7)
+            self.assertEqual(g["vivino_wine_id"], 1136930)
+            self.assertEqual(g["vivino_match_confidence"], "high")
+
 
 if __name__ == "__main__":
     unittest.main()

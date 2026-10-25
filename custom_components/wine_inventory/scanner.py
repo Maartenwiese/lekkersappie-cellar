@@ -16,6 +16,7 @@ except ImportError:  # pragma: no cover - fallback when running standalone unit 
     aiohttp = None  # type: ignore[assignment]
 
 from .const import COVERS_SUBDIR, DEFAULT_GEMINI_MODEL, WINE_TYPE_RED, WINE_TYPES
+from .vivino import clean_tokens
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,6 +49,11 @@ Core Extraction Rules:
    - Suggest 2 to 4 concise `food_pairings` items (e.g. ["Grilled ribeye steak", "Aged Comté cheese", "Truffle risotto"]).
    - Provide a concise 1-sentence `label_summary` for the wine overview notes.
    - Return best-effort values even if parts of the label are partially weathered or in low contrast.
+9. Grounding (critical for database matching):
+   - `label_text_verbatim`: transcribe ALL legible text exactly as printed on the label, line by line. Do not correct, translate, or complete words.
+   - `winery_printed` / `name_printed`: true ONLY if that exact producer / cuvée text is literally printed on the label; false if you deduced or guessed it.
+   - `vintage_printed`: true ONLY if the 4-digit year is literally visible.
+   - Never invent a cuvée name. If no specific cuvée name is printed, set `name` to the printed varietal (or empty) and `name_printed` accordingly.
 """
 
 LABEL_RESPONSE_SCHEMA: dict[str, Any] = {
@@ -73,6 +79,10 @@ LABEL_RESPONSE_SCHEMA: dict[str, Any] = {
             "items": {"type": "STRING"},
         },
         "label_summary": {"type": "STRING"},
+        "label_text_verbatim": {"type": "STRING"},
+        "winery_printed": {"type": "BOOLEAN"},
+        "name_printed": {"type": "BOOLEAN"},
+        "vintage_printed": {"type": "BOOLEAN"},
     },
     "required": [
         "winery",
@@ -84,6 +94,10 @@ LABEL_RESPONSE_SCHEMA: dict[str, Any] = {
         "drink_window_note",
         "food_pairings",
         "label_summary",
+        "label_text_verbatim",
+        "winery_printed",
+        "name_printed",
+        "vintage_printed",
     ],
 }
 
@@ -183,7 +197,36 @@ def _normalize_extracted_payload(raw: dict[str, Any]) -> dict[str, Any]:
         "drink_window_note": str(raw.get("drink_window_note") or "").strip(),
         "food_pairings": pairings,
         "general_notes": str(raw.get("label_summary") or "").strip(),
+        "label_text_verbatim": str(raw.get("label_text_verbatim") or "").strip(),
+        # Missing flags (older/partial responses) are treated as NOT printed -> conservative.
+        "winery_printed": bool(raw.get("winery_printed", False)),
+        "name_printed": bool(raw.get("name_printed", False)),
+        "vintage_printed": bool(raw.get("vintage_printed", False)),
     }
+
+
+def grounded_search_fields(extracted: dict[str, Any]) -> dict[str, Any]:
+    """Return winery/name/vintage restricted to what is verifiably printed on the label.
+
+    A field counts as printed when Gemini flagged it as printed AND its distinctive words
+    appear in the verbatim transcription (when a transcription is available).
+    """
+    verbatim = str(extracted.get("label_text_verbatim") or "")
+    verbatim_tokens = set(clean_tokens(verbatim))
+
+    def _grounded(value: str, flag: bool) -> str:
+        value = (value or "").strip()
+        if not value or not flag:
+            return ""
+        if not verbatim_tokens:
+            return value
+        tokens = set(clean_tokens(value))
+        return value if tokens and tokens.issubset(verbatim_tokens) else ""
+
+    winery = _grounded(extracted.get("winery", ""), bool(extracted.get("winery_printed")))
+    name = _grounded(extracted.get("name", ""), bool(extracted.get("name_printed")))
+    vintage = extracted.get("vintage") if extracted.get("vintage_printed") else None
+    return {"winery": winery, "name": name, "vintage": vintage}
 
 
 async def async_scan_bottle_label(
@@ -287,89 +330,98 @@ async def async_scan_bottle_label(
     return normalized
 
 
-async def async_estimate_rating_via_gemini(
+VIVINO_JUDGE_PROMPT = """You verify whether a photographed wine label is one of the listed Vivino database records.
+Rules:
+- You may ONLY answer with the index of a listed record, or "NONE".
+- Choose a record only if producer AND specific cuvée on the label clearly correspond to it.
+- Different cuvées from the same producer (e.g. "Reserve" vs "Estate", "Rouge" vs "Blanc") are NOT the same wine.
+- The vintage year may differ; ignore vintage when deciding.
+- If unsure, answer "NONE". A wrong match is far worse than no match.
+
+Label transcription (may be partial): {verbatim}
+
+Candidate records:
+{candidates}
+"""
+
+
+async def async_judge_vivino_candidates(
     session: aiohttp.ClientSession,
     *,
     api_key: str,
-    winery: str,
-    name: str,
-    vintage: int | None,
+    image_bytes: bytes | None,
+    mime_type: str,
+    label_text_verbatim: str,
+    candidates: list[dict[str, Any]],
     model: str = DEFAULT_GEMINI_MODEL,
-    currency: str = "EUR",
-    timeout_seconds: float = 15.0,
-) -> dict[str, Any] | None:
-    """Fallback when Vivino HTTP endpoint is rate-limited (403/429) or unreachable."""
+    timeout_seconds: float = 20.0,
+) -> dict[str, Any]:
+    """Ask Gemini to pick one of the REAL Vivino candidates (by index) or NONE.
+
+    The response schema is an enum of valid indices plus "NONE", so the model cannot
+    produce a wine that does not exist in Vivino. Returns
+    ``{"status": "ok"|"error", "choice": int|None, "reason": str}``.
+    """
     clean_key = (api_key or "").strip()
-    if not clean_key or (not winery and not name):
-        return None
+    if not clean_key or not candidates:
+        return {"status": "error", "choice": None, "reason": "judge_unavailable"}
 
     model_id = (model or DEFAULT_GEMINI_MODEL).strip()
     if model_id.startswith("models/"):
         model_id = model_id[len("models/") :]
-
     url = f"{GEMINI_API_BASE_URL}/{model_id}:generateContent"
-    vintage_str = str(vintage) if vintage else "Non-Vintage"
-    prompt = (
-        f"Provide the typical community wine rating (on a 1.0 to 5.0 scale) and estimated "
-        f"retail price in {currency} for: Winery='{winery}', Wine='{name}', Vintage={vintage_str}. "
-        f"If completely unknown, return null for rating."
+
+    lines = []
+    for idx, cand in enumerate(candidates):
+        parts = [f"[{idx}] Producer: {cand.get('winery', '')}", f"Wine: {cand.get('name', '')}"]
+        if cand.get("region") or cand.get("country"):
+            parts.append(f"Origin: {', '.join(x for x in (cand.get('region'), cand.get('country')) if x)}")
+        lines.append(" | ".join(parts))
+    prompt = VIVINO_JUDGE_PROMPT.format(
+        verbatim=(label_text_verbatim or "(not available)")[:1500],
+        candidates="\n".join(lines),
     )
+    enum_values = [str(i) for i in range(len(candidates))] + ["NONE"]
     schema = {
         "type": "OBJECT",
         "properties": {
-            "estimated_rating": {"type": "NUMBER", "nullable": True},
-            "estimated_price": {"type": "NUMBER", "nullable": True},
+            "choice": {"type": "STRING", "enum": enum_values},
+            "reason": {"type": "STRING"},
         },
+        "required": ["choice", "reason"],
     }
+    parts_payload: list[dict[str, Any]] = [{"text": prompt}]
+    if image_bytes:
+        parts_payload.append(
+            {"inlineData": {"mimeType": mime_type or "image/jpeg", "data": base64.b64encode(image_bytes).decode("ascii")}}
+        )
     body = {
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "contents": [{"role": "user", "parts": parts_payload}],
         "generationConfig": {
-            "temperature": 0.1,
+            "temperature": 0.0,
             "responseMimeType": "application/json",
             "responseSchema": schema,
         },
     }
-
-    timeout = (
-        aiohttp.ClientTimeout(total=timeout_seconds)
-        if aiohttp is not None
-        else timeout_seconds
-    )
+    timeout = aiohttp.ClientTimeout(total=timeout_seconds) if aiohttp is not None else timeout_seconds
+    client_error_cls = aiohttp.ClientError if aiohttp is not None else OSError
     try:
-        async with session.post(
-            url,
-            params={"key": clean_key},
-            json=body,
-            timeout=timeout,
-        ) as resp:
+        async with session.post(url, params={"key": clean_key}, json=body, timeout=timeout) as resp:
+            text = await resp.text()
             if resp.status != 200:
-                return None
-            data = await resp.json()
-            parts = (
-                (data.get("candidates") or [{}])[0]
-                .get("content", {})
-                .get("parts")
-                or []
-            )
-            raw_text = "".join(str(p.get("text") or "") for p in parts).strip()
-            if not raw_text:
-                return None
-            parsed = json.loads(raw_text)
-            rating = parsed.get("estimated_rating")
-            price = parsed.get("estimated_price")
-            if rating is None:
-                return None
-            return {
-                "vivino_rating": round(float(rating), 2),
-                "vivino_ratings_count": None,
-                "vivino_url": f"https://www.vivino.com/search/wines?q={winery}+{name}",
-                "vivino_price_estimate": round(float(price), 2) if price else None,
-                "vivino_image_url": "",
-                "rating_source": "gemini_estimate",
-            }
-    except Exception as err:  # noqa: BLE001
-        _LOGGER.debug("Gemini rating fallback failed: %s", err)
-        return None
+                return {"status": "error", "choice": None, "reason": f"http_{resp.status}"}
+            payload = json.loads(text)
+        out_parts = ((payload.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
+        result = json.loads("".join(str(p.get("text") or "") for p in out_parts))
+    except (client_error_cls, json.JSONDecodeError, TimeoutError, ValueError, TypeError, IndexError) as err:
+        _LOGGER.debug("Vivino judge call failed: %s", err)
+        return {"status": "error", "choice": None, "reason": "judge_failed"}
+
+    choice_raw = str(result.get("choice") or "NONE").strip()
+    reason = str(result.get("reason") or "").strip()
+    if choice_raw.isdigit() and int(choice_raw) < len(candidates):
+        return {"status": "ok", "choice": int(choice_raw), "reason": reason}
+    return {"status": "ok", "choice": None, "reason": reason or "none"}
 
 
 WINE_RESEARCH_PROMPT = """You are a world-class master sommelier and esteemed wine historian.

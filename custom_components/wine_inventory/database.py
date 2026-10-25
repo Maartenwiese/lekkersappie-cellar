@@ -85,6 +85,8 @@ class WineDatabase:
                     vivino_url TEXT NOT NULL DEFAULT '',
                     vivino_price_estimate REAL NULL,
                     rating_source TEXT NOT NULL DEFAULT '',
+                    vivino_wine_id INTEGER NULL,
+                    vivino_match_confidence TEXT NOT NULL DEFAULT '',
                     drink_from_year INTEGER NULL,
                     drink_until_year INTEGER NULL,
                     drink_window_note TEXT NOT NULL DEFAULT '',
@@ -150,6 +152,41 @@ class WineDatabase:
                 conn.execute("ALTER TABLE wines ADD COLUMN purchase_price REAL NULL;")
             if "research_notes" not in cols:
                 conn.execute("ALTER TABLE wines ADD COLUMN research_notes TEXT NOT NULL DEFAULT '';")
+            if "vivino_wine_id" not in cols:
+                conn.execute("ALTER TABLE wines ADD COLUMN vivino_wine_id INTEGER NULL;")
+            if "vivino_match_confidence" not in cols:
+                conn.execute("ALTER TABLE wines ADD COLUMN vivino_match_confidence TEXT NOT NULL DEFAULT '';")
+            self._migrate_vivino_grounding(conn)
+
+    @staticmethod
+    def _migrate_vivino_grounding(conn: sqlite3.Connection) -> None:
+        """One-time v0.2.8 cleanup of unverifiable Vivino data (idempotent).
+
+        1. Ratings invented by the removed Gemini estimate fallback are cleared.
+        2. Legacy ``https://www.vivino.com/wines/<id>`` links (a route that redirects to
+           unrelated wines) are cleared together with their ratings, because the stored id
+           cannot be trusted.
+        3. Search-page URLs stored for unlinked wines are cleared.
+        """
+        conn.execute(
+            """
+            UPDATE wines
+            SET vivino_rating = NULL, vivino_ratings_count = NULL,
+                vivino_price_estimate = NULL, rating_source = '',
+                vivino_match_confidence = 'none'
+            WHERE rating_source IN ('gemini', 'gemini_estimate')
+            """
+        )
+        conn.execute(
+            """
+            UPDATE wines
+            SET vivino_url = '', vivino_rating = NULL, vivino_ratings_count = NULL,
+                vivino_price_estimate = NULL, rating_source = '', vivino_wine_id = NULL,
+                vivino_match_confidence = 'none'
+            WHERE vivino_url LIKE '%vivino.com/wines/%'
+               OR vivino_url LIKE '%vivino.com/search/%'
+            """
+        )
 
     def checkpoint_wal(self) -> None:
         """Flush the SQLite Write-Ahead Log before a Home Assistant backup."""
@@ -308,6 +345,8 @@ class WineDatabase:
         vivino_url: str = "",
         vivino_price_estimate: float | None = None,
         rating_source: str = "",
+        vivino_wine_id: int | None = None,
+        vivino_match_confidence: str = "",
         drink_from_year: int | None = None,
         drink_until_year: int | None = None,
         drink_window_note: str = "",
@@ -371,11 +410,12 @@ class WineDatabase:
                         winery, name, vintage, wine_type, varietal, region, country,
                         alcohol_pct, bottle_size_ml, vivino_rating, vivino_ratings_count,
                         vivino_url, vivino_price_estimate, rating_source,
+                        vivino_wine_id, vivino_match_confidence,
                         drink_from_year, drink_until_year, drink_window_note,
                         food_pairings, general_notes, personal_rating, image_url,
                         quantity, storage_location, purchase_location, purchase_price,
                         research_notes, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         winery.strip(),
@@ -392,6 +432,8 @@ class WineDatabase:
                         vivino_url.strip(),
                         vivino_price_estimate,
                         rating_source.strip(),
+                        vivino_wine_id,
+                        (vivino_match_confidence or "").strip(),
                         drink_from_year,
                         drink_until_year,
                         drink_window_note.strip(),
@@ -429,6 +471,8 @@ class WineDatabase:
                         vivino_url = CASE WHEN ? != '' THEN ? ELSE vivino_url END,
                         vivino_price_estimate = COALESCE(?, vivino_price_estimate),
                         rating_source = CASE WHEN ? != '' THEN ? ELSE rating_source END,
+                        vivino_wine_id = COALESCE(?, vivino_wine_id),
+                        vivino_match_confidence = CASE WHEN ? != '' THEN ? ELSE vivino_match_confidence END,
                         drink_from_year = COALESCE(?, drink_from_year),
                         drink_until_year = COALESCE(?, drink_until_year),
                         drink_window_note = CASE WHEN ? != '' THEN ? ELSE drink_window_note END,
@@ -452,6 +496,9 @@ class WineDatabase:
                         vivino_price_estimate,
                         rating_source.strip(),
                         rating_source.strip(),
+                        vivino_wine_id,
+                        (vivino_match_confidence or "").strip(),
+                        (vivino_match_confidence or "").strip(),
                         drink_from_year,
                         drink_until_year,
                         drink_window_note.strip(),
@@ -664,6 +711,8 @@ class WineDatabase:
             "vivino_url",
             "vivino_price_estimate",
             "rating_source",
+            "vivino_wine_id",
+            "vivino_match_confidence",
             "drink_from_year",
             "drink_until_year",
             "drink_window_note",
@@ -765,6 +814,8 @@ class WineDatabase:
                     vivino_url = '',
                     vivino_price_estimate = NULL,
                     rating_source = '',
+                    vivino_wine_id = NULL,
+                    vivino_match_confidence = 'none',
                     updated_at = ?
                 WHERE id = ?
                 """,

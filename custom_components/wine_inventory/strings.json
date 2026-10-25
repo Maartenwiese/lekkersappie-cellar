@@ -10,7 +10,6 @@
           "gemini_model": "Gemini Flash-Lite Model ID",
           "currency": "Currency Code (e.g., EUR, USD)",
           "vivino_country_code": "Vivino Country Code (e.g., NL, US, FR)",
-          "vivino_fallback_to_gemini": "Estimate rating via Gemini if Vivino rate-limits (HTTP 403/429)",
           "low_stock_threshold": "Low Stock Alert Threshold (bottles)",
           "temperature_entity": "Optional Cellar/Fridge Temperature Sensor (sensor.*)",
           "humidity_entity": "Optional Cellar/Fridge Humidity Sensor (sensor.*)"
@@ -40,7 +39,6 @@
           "gemini_model": "Gemini Flash-Lite Model ID",
           "currency": "Currency Code (e.g., EUR, USD)",
           "vivino_country_code": "Vivino Country Code (e.g., NL, US, FR)",
-          "vivino_fallback_to_gemini": "Estimate rating via Gemini if Vivino rate-limits (HTTP 403/429)",
           "low_stock_threshold": "Low Stock Alert Threshold (bottles)",
           "temperature_entity": "Optional Cellar/Fridge Temperature Sensor (sensor.*)",
           "humidity_entity": "Optional Cellar/Fridge Humidity Sensor (sensor.*)"

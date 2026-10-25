@@ -36,6 +36,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_update_wine)
     websocket_api.async_register_command(hass, ws_delete_wine)
     websocket_api.async_register_command(hass, ws_unlink_vivino)
+    websocket_api.async_register_command(hass, ws_link_vivino_url)
     websocket_api.async_register_command(hass, ws_research_wine)
     websocket_api.async_register_command(hass, ws_refresh_vivino)
     websocket_api.async_register_command(hass, ws_create_backup)
@@ -156,6 +157,8 @@ async def ws_scan_bottle(
         vol.Optional("vivino_url", default=""): str,
         vol.Optional("vivino_price_estimate"): vol.Any(float, int, None),
         vol.Optional("rating_source", default=""): str,
+        vol.Optional("vivino_wine_id"): vol.Any(int, None),
+        vol.Optional("vivino_match_confidence", default=""): str,
         vol.Optional("drink_from_year"): vol.Any(int, None),
         vol.Optional("drink_until_year"): vol.Any(int, None),
         vol.Optional("drink_window_note", default=""): str,
@@ -301,6 +304,29 @@ async def ws_unlink_vivino(
         )
     except Exception as err:  # noqa: BLE001
         connection.send_error(msg["id"], "unlink_failed", str(err))
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wine_inventory/link_vivino_url",
+        vol.Required("wine_id"): int,
+        vol.Required("url"): str,
+        vol.Optional("entry_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_link_vivino_url(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Link a wine to an exact Vivino wine page URL pasted by the user."""
+    try:
+        coordinator = _get_coordinator(hass, msg.get("entry_id"))
+        result = await coordinator.async_link_vivino_url(int(msg["wine_id"]), str(msg["url"]))
+        connection.send_result(msg["id"], {**result, "statistics": coordinator.statistics})
+    except Exception as err:  # noqa: BLE001
+        connection.send_error(msg["id"], "link_failed", str(err))
 
 
 @websocket_api.websocket_command(

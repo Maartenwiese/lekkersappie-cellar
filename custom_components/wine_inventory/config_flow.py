@@ -18,13 +18,11 @@ from .const import (
     CONF_LOW_STOCK_THRESHOLD,
     CONF_TEMPERATURE_ENTITY,
     CONF_VIVINO_COUNTRY_CODE,
-    CONF_VIVINO_FALLBACK_TO_GEMINI,
     DEFAULT_CELLAR_NAME,
     DEFAULT_CURRENCY,
     DEFAULT_GEMINI_MODEL,
     DEFAULT_LOW_STOCK_THRESHOLD,
     DEFAULT_VIVINO_COUNTRY_CODE,
-    DEFAULT_VIVINO_FALLBACK_TO_GEMINI,
     DOMAIN,
 )
 
@@ -60,13 +58,6 @@ def _build_schema(defaults: dict[str, Any], include_cellar_name: bool = True) ->
                     CONF_VIVINO_COUNTRY_CODE, DEFAULT_VIVINO_COUNTRY_CODE
                 ),
             ): str,
-            vol.Required(
-                CONF_VIVINO_FALLBACK_TO_GEMINI,
-                default=defaults.get(
-                    CONF_VIVINO_FALLBACK_TO_GEMINI,
-                    DEFAULT_VIVINO_FALLBACK_TO_GEMINI,
-                ),
-            ): bool,
             vol.Required(
                 CONF_LOW_STOCK_THRESHOLD,
                 default=defaults.get(

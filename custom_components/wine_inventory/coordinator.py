@@ -18,14 +18,12 @@ from .const import (
     CONF_LOW_STOCK_THRESHOLD,
     CONF_TEMPERATURE_ENTITY,
     CONF_VIVINO_COUNTRY_CODE,
-    CONF_VIVINO_FALLBACK_TO_GEMINI,
     DB_FILENAME,
     DEFAULT_CELLAR_NAME,
     DEFAULT_CURRENCY,
     DEFAULT_GEMINI_MODEL,
     DEFAULT_LOW_STOCK_THRESHOLD,
     DEFAULT_VIVINO_COUNTRY_CODE,
-    DEFAULT_VIVINO_FALLBACK_TO_GEMINI,
     EVENT_BOTTLE_ADDED,
     EVENT_BOTTLE_CONSUMED,
     EVENT_DRINK_WINDOW_ALERT,
@@ -37,13 +35,14 @@ from .const import (
 )
 from .database import WineDatabase, utc_now_iso
 from .scanner import (
-    async_estimate_rating_via_gemini,
+    async_judge_vivino_candidates,
     async_research_wine_with_gemini,
+    grounded_search_fields,
     async_scan_bottle_label,
     parse_image_data_uri,
     save_bottle_cover_image,
 )
-from .vivino import async_lookup_vivino
+from .vivino import async_fetch_vivino_wine, async_lookup_vivino, build_wine_url
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -97,16 +96,6 @@ class WineInventoryCoordinator:
     def vivino_country_code(self) -> str:
         """Return configured Vivino country code."""
         return str(self.config.get(CONF_VIVINO_COUNTRY_CODE) or DEFAULT_VIVINO_COUNTRY_CODE)
-
-    @property
-    def vivino_fallback_to_gemini(self) -> bool:
-        """Return whether to estimate rating via Gemini when Vivino rate-limits."""
-        return bool(
-            self.config.get(
-                CONF_VIVINO_FALLBACK_TO_GEMINI,
-                DEFAULT_VIVINO_FALLBACK_TO_GEMINI,
-            )
-        )
 
     @property
     def low_stock_threshold(self) -> int:
@@ -234,45 +223,13 @@ class WineInventoryCoordinator:
         )
         extracted["image_url"] = saved_image_url
 
-        vivino_result = await async_lookup_vivino(
+        match = await self.async_match_vivino(
             session,
-            winery=extracted.get("winery", ""),
-            name=extracted.get("name", ""),
-            vintage=extracted.get("vintage"),
-            country_code=self.vivino_country_code,
-            currency_code=self.currency,
+            extracted=extracted,
+            image_bytes=raw_bytes,
+            mime_type=mime_type,
         )
-
-        best_match = vivino_result.get("best_match")
-        if best_match is None and self.vivino_fallback_to_gemini:
-            best_match = await async_estimate_rating_via_gemini(
-                session,
-                api_key=self.gemini_api_key,
-                winery=extracted.get("winery", ""),
-                name=extracted.get("name", ""),
-                vintage=extracted.get("vintage"),
-                model=self.gemini_model,
-                currency=self.currency,
-            )
-
-        if best_match:
-            extracted["vivino_rating"] = best_match.get("vivino_rating")
-            extracted["vivino_ratings_count"] = best_match.get("vivino_ratings_count")
-            extracted["vivino_url"] = best_match.get("vivino_url") or vivino_result.get(
-                "search_url", ""
-            )
-            extracted["vivino_price_estimate"] = best_match.get("vivino_price_estimate")
-            extracted["rating_source"] = best_match.get("rating_source", "vivino")
-            if not extracted.get("region") and best_match.get("region"):
-                extracted["region"] = best_match["region"]
-            if not extracted.get("country") and best_match.get("country"):
-                extracted["country"] = best_match["country"]
-        else:
-            extracted["vivino_rating"] = None
-            extracted["vivino_ratings_count"] = None
-            extracted["vivino_url"] = vivino_result.get("search_url", "")
-            extracted["vivino_price_estimate"] = None
-            extracted["rating_source"] = ""
+        extracted.update(match["fields"])
 
         existing_match = await self.hass.async_add_executor_job(
             self.db.find_matching_wine,
@@ -283,11 +240,135 @@ class WineInventoryCoordinator:
 
         return {
             "extracted": extracted,
-            "vivino_status": vivino_result.get("status", "unknown"),
-            "vivino_candidates": vivino_result.get("candidates", []),
+            "vivino_status": match["status"],
+            "vivino_confidence": match["confidence"],
+            "vivino_selected_index": match["selected_index"],
+            "vivino_judge_reason": match["judge_reason"],
+            "vivino_candidates": match["candidates"],
             "existing_wine": existing_match,
             "suggested_added_at": utc_now_iso(),
         }
+
+    async def async_match_vivino(
+        self,
+        session: Any,
+        *,
+        extracted: dict[str, Any],
+        image_bytes: bytes | None,
+        mime_type: str,
+    ) -> dict[str, Any]:
+        """Grounded Vivino matching: retrieve -> strict pre-filter -> constrained judge -> tier.
+
+        Tiers:
+        - ``high``: exactly one pre-filter-exact candidate AND the Gemini judge picked it.
+          Fields are auto-filled.
+        - ``medium``: candidates exist but certainty is not high. Nothing is auto-filled;
+          the user must confirm (default selection in the UI is "Do not link").
+        - ``none``: no verified candidate. The wine stays unlinked.
+        A rating is never estimated or invented.
+        """
+        grounded = grounded_search_fields(extracted)
+        empty_fields = {
+            "vivino_rating": None,
+            "vivino_ratings_count": None,
+            "vivino_url": "",
+            "vivino_price_estimate": None,
+            "rating_source": "",
+            "vivino_wine_id": None,
+            "vivino_match_confidence": "none",
+        }
+        result: dict[str, Any] = {
+            "status": "empty_query",
+            "confidence": "none",
+            "selected_index": None,
+            "judge_reason": "",
+            "candidates": [],
+            "fields": dict(empty_fields),
+            "grounded_query": grounded,
+        }
+        if not grounded["winery"] and not grounded["name"]:
+            result["judge_reason"] = "No producer or cuvée text could be verified as printed on the label."
+            return result
+
+        lookup = await async_lookup_vivino(
+            session,
+            winery=grounded["winery"],
+            name=grounded["name"],
+            vintage=grounded["vintage"],
+            country_code=self.vivino_country_code,
+            currency_code=self.currency,
+        )
+        candidates = lookup.get("candidates") or []
+        result["status"] = lookup.get("status", "no_match")
+        result["candidates"] = candidates
+        if not candidates:
+            return result
+
+        judge = await async_judge_vivino_candidates(
+            session,
+            api_key=self.gemini_api_key,
+            image_bytes=image_bytes,
+            mime_type=mime_type,
+            label_text_verbatim=str(extracted.get("label_text_verbatim") or ""),
+            candidates=candidates,
+            model=self.gemini_model,
+        )
+        result["judge_reason"] = judge.get("reason", "")
+        choice = judge.get("choice")
+        exact_indices = [i for i, c in enumerate(candidates) if c.get("prefilter_exact")]
+
+        if judge.get("status") == "ok" and choice is None:
+            # Judge looked at real records and rejected all of them.
+            result["confidence"] = "none"
+            return result
+
+        if (
+            judge.get("status") == "ok"
+            and choice is not None
+            and grounded["winery"]
+            and grounded["name"]
+            and len(exact_indices) == 1
+            and exact_indices[0] == choice
+        ):
+            chosen = candidates[choice]
+            result["confidence"] = "high"
+            result["selected_index"] = choice
+            result["fields"] = {
+                "vivino_rating": chosen.get("vivino_rating"),
+                "vivino_ratings_count": chosen.get("vivino_ratings_count"),
+                "vivino_url": chosen.get("vivino_url", ""),
+                "vivino_price_estimate": chosen.get("vivino_price_estimate"),
+                "rating_source": "vivino",
+                "vivino_wine_id": chosen.get("vivino_wine_id"),
+                "vivino_match_confidence": "high",
+            }
+            return result
+
+        # Medium: show candidates for user confirmation; suggest the judge's pick if any.
+        result["confidence"] = "medium"
+        result["selected_index"] = choice
+        return result
+
+    async def async_link_vivino_url(self, wine_id: int, url: str) -> dict[str, Any]:
+        """Link a wine to an exact Vivino page pasted by the user (no matching involved)."""
+        wine = await self.hass.async_add_executor_job(self.db.get_wine_detail, int(wine_id))
+        if not wine:
+            raise ValueError(f"Wine ID {wine_id} not found")
+        page = await async_fetch_vivino_wine(
+            self._get_http_session(), url_or_id=url, vintage=wine.get("vintage")
+        )
+        updates = {
+            "vivino_rating": page.get("vivino_rating"),
+            "vivino_ratings_count": page.get("vivino_ratings_count"),
+            "vivino_url": page.get("vivino_url", ""),
+            "vivino_price_estimate": page.get("vivino_price_estimate"),
+            "rating_source": "vivino",
+            "vivino_wine_id": page.get("vivino_wine_id"),
+            "vivino_match_confidence": "confirmed",
+        }
+        updated = await self.hass.async_add_executor_job(self.db.update_wine, int(wine_id), updates)
+        await self.async_refresh()
+        return {"wine": updated, "vivino": page}
 
     async def async_add_wine(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Add a wine or increment an existing wine with batch metadata."""
@@ -308,6 +389,8 @@ class WineInventoryCoordinator:
                 vivino_url=str(payload.get("vivino_url") or ""),
                 vivino_price_estimate=payload.get("vivino_price_estimate"),
                 rating_source=str(payload.get("rating_source") or ""),
+                vivino_wine_id=payload.get("vivino_wine_id"),
+                vivino_match_confidence=str(payload.get("vivino_match_confidence") or ""),
                 drink_from_year=payload.get("drink_from_year"),
                 drink_until_year=payload.get("drink_until_year"),
                 drink_window_note=str(payload.get("drink_window_note") or ""),
@@ -478,7 +561,11 @@ class WineInventoryCoordinator:
         }
 
     async def async_refresh_vivino(self, wine_id: int | None = None) -> dict[str, Any]:
-        """Re-fetch Vivino ratings for one wine or all in-stock wines."""
+        """Re-fetch Vivino ratings for verified links only (high / user-confirmed).
+
+        Lookups go straight to the linked Vivino wine id; no re-searching, no estimation.
+        Wines without a verified link are skipped.
+        """
         session = self._get_http_session()
         if wine_id is not None:
             detail = await self.hass.async_add_executor_job(
@@ -489,47 +576,44 @@ class WineInventoryCoordinator:
             targets = [w for w in self.wines if int(w.get("quantity", 0)) > 0]
 
         updated_count = 0
+        skipped_unverified = 0
+        errors: list[str] = []
         for item in targets:
             if not item:
                 continue
-            res = await async_lookup_vivino(
-                session,
-                winery=item["winery"],
-                name=item["name"],
-                vintage=item.get("vintage"),
-                country_code=self.vivino_country_code,
-                currency_code=self.currency,
-            )
-            best = res.get("best_match")
-            if best is None and self.vivino_fallback_to_gemini:
-                best = await async_estimate_rating_via_gemini(
+            if item.get("vivino_match_confidence") not in ("high", "confirmed") or not item.get("vivino_wine_id"):
+                skipped_unverified += 1
+                continue
+            try:
+                page = await async_fetch_vivino_wine(
                     session,
-                    api_key=self.gemini_api_key,
-                    winery=item["winery"],
-                    name=item["name"],
+                    url_or_id=item["vivino_wine_id"],
                     vintage=item.get("vintage"),
-                    model=self.gemini_model,
-                    currency=self.currency,
                 )
-            if best:
-                updates: dict[str, Any] = {
-                    "vivino_rating": best.get("vivino_rating"),
-                    "vivino_ratings_count": best.get("vivino_ratings_count"),
-                    "vivino_url": best.get("vivino_url") or item.get("vivino_url", ""),
-                    "vivino_price_estimate": best.get("vivino_price_estimate"),
-                    "rating_source": best.get("rating_source", "vivino"),
-                }
-                if not item.get("image_url") and best.get("vivino_image_url"):
-                    updates["image_url"] = best["vivino_image_url"]
-                await self.hass.async_add_executor_job(
-                    self.db.update_wine,
-                    int(item["id"]),
-                    updates,
-                )
-                updated_count += 1
+            except Exception as err:  # noqa: BLE001
+                errors.append(f"{item.get('winery')} {item.get('name')}: {err}")
+                continue
+            updates: dict[str, Any] = {
+                "vivino_rating": page.get("vivino_rating"),
+                "vivino_ratings_count": page.get("vivino_ratings_count"),
+                "vivino_url": build_wine_url(item["vivino_wine_id"], item.get("vintage")),
+                "vivino_price_estimate": page.get("vivino_price_estimate"),
+                "rating_source": "vivino",
+            }
+            await self.hass.async_add_executor_job(
+                self.db.update_wine,
+                int(item["id"]),
+                updates,
+            )
+            updated_count += 1
 
         await self.async_refresh()
-        return {"updated_count": updated_count, "checked_count": len(targets)}
+        return {
+            "updated_count": updated_count,
+            "checked_count": len(targets),
+            "skipped_unverified": skipped_unverified,
+            "errors": errors,
+        }
 
     async def async_export_inventory(self, export_format: str = "csv") -> dict[str, Any]:
         """Export full wine inventory to <config>/www/wine_inventory/exports/."""

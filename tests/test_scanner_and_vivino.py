@@ -1,9 +1,16 @@
-"""Unit tests for Gemini Flash-Lite label scanner, Vivino parser, and Coordinator."""
+"""Unit tests for Gemini label scanner, grounded Vivino matching, and Coordinator.
+
+Vivino fixtures in tests/fixtures/vivino_search_fixtures.json were captured from the live
+https://www.vivino.com/search/wines?q=<query> page (data-ssr-props records, trimmed) on
+2026-10-25, so the matcher is exercised against real Vivino result sets.
+"""
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import base64
+import html
 import json
 from pathlib import Path
 import tempfile
@@ -12,23 +19,45 @@ import unittest
 
 from custom_components.wine_inventory.coordinator import WineInventoryCoordinator
 from custom_components.wine_inventory.scanner import (
+    grounded_search_fields,
     parse_image_data_uri,
     save_bottle_cover_image,
 )
-from custom_components.wine_inventory.vivino import parse_vivino_explore_payload
+from custom_components.wine_inventory.vivino import (
+    build_search_queries,
+    evaluate_candidate,
+    filter_and_rank_records,
+    parse_vivino_search_html,
+    parse_vivino_wine_id,
+    parse_vivino_wine_page,
+)
+
+FIXTURES = json.loads(
+    (Path(__file__).parent / "fixtures" / "vivino_search_fixtures.json").read_text(encoding="utf-8")
+)["queries"]
+
+
+def _search_html(records: list[dict[str, Any]]) -> str:
+    """Wrap records in the same SSR envelope the live Vivino search page uses."""
+    props = html.escape(json.dumps({"initialExploreResults": {"records": records}}))
+    return f'<html><body><div data-ssr-props="{props}"></div></body></html>'
+
+
+def _gemini(payload: dict[str, Any]) -> dict[str, Any]:
+    return {"candidates": [{"content": {"parts": [{"text": json.dumps(payload)}]}}]}
 
 
 class _StubHttpResponse:
-    """Test helper representing an async HTTP response."""
+    """Async HTTP response helper."""
 
-    def __init__(self, status: int, body: dict[str, Any]) -> None:
+    def __init__(self, status: int, body: Any) -> None:
         self.status = status
         self._body = body
 
     async def text(self) -> str:
-        return json.dumps(self._body)
+        return self._body if isinstance(self._body, str) else json.dumps(self._body)
 
-    async def json(self, content_type: str | None = None) -> dict[str, Any]:
+    async def json(self, content_type: str | None = None) -> Any:
         return self._body
 
     async def __aenter__(self) -> _StubHttpResponse:
@@ -39,23 +68,39 @@ class _StubHttpResponse:
 
 
 class _StubHttpSession:
-    """Test helper routing Gemini POST and Vivino GET calls."""
+    """Routes Gemini POSTs (label extraction vs. candidate judge) and Vivino GETs."""
 
     def __init__(
         self,
         gemini_payload: dict[str, Any],
         vivino_status: int = 200,
-        vivino_payload: dict[str, Any] | None = None,
+        vivino_html: str = "",
+        judge_payload: dict[str, Any] | None = None,
     ) -> None:
         self.gemini_payload = gemini_payload
         self.vivino_status = vivino_status
-        self.vivino_payload = vivino_payload or {}
+        self.vivino_html = vivino_html
+        self.judge_payload = judge_payload
+        self.get_urls: list[str] = []
+        self.judge_prompts: list[str] = []
 
     def post(self, url: str, **kwargs: Any) -> _StubHttpResponse:
+        body = kwargs.get("json") or {}
+        text = "".join(
+            str(p.get("text") or "")
+            for c in body.get("contents", [])
+            for p in c.get("parts", [])
+        )
+        if "listed Vivino database records" in text:
+            self.judge_prompts.append(text)
+            if self.judge_payload is None:
+                return _StubHttpResponse(500, "judge unavailable")
+            return _StubHttpResponse(200, _gemini(self.judge_payload))
         return _StubHttpResponse(200, self.gemini_payload)
 
     def get(self, url: str, **kwargs: Any) -> _StubHttpResponse:
-        return _StubHttpResponse(self.vivino_status, self.vivino_payload)
+        self.get_urls.append(url)
+        return _StubHttpResponse(self.vivino_status, self.vivino_html)
 
 
 class _StubHassConfig:
@@ -71,8 +116,30 @@ class _StubHass:
         return func(*args)
 
 
+TIGNANELLO_LABEL = {
+    "winery": "Antinori",
+    "name": "Tignanello",
+    "vintage": 2019,
+    "wine_type": "red",
+    "varietal": "Sangiovese, Cabernet Sauvignon",
+    "region": "Toscana",
+    "country": "Italy",
+    "alcohol_pct": 14.0,
+    "bottle_size_ml": 750,
+    "drink_from_year": 2024,
+    "drink_until_year": 2036,
+    "drink_window_note": "Decant 90 minutes before serving",
+    "food_pairings": ["Bistecca alla Fiorentina"],
+    "label_summary": "Super Tuscan blend.",
+    "label_text_verbatim": "TIGNANELLO\nToscana IGT\n2019\nMARCHESI ANTINORI",
+    "winery_printed": True,
+    "name_printed": True,
+    "vintage_printed": True,
+}
+
+
 class TestScannerVivinoAndCoordinator(unittest.TestCase):
-    """Test suite for image parsing, Vivino candidate ranking, and Coordinator workflows."""
+    """Image parsing, grounded Vivino matching, and coordinator workflows."""
 
     def test_parse_data_uri_and_save_cover(self) -> None:
         """Verify base64 data URI parsing and cover thumbnail saving."""
@@ -89,221 +156,201 @@ class TestScannerVivinoAndCoordinator(unittest.TestCase):
             self.assertTrue(local_url.startswith("/local/wine_inventory/covers/bottle_"))
             self.assertTrue(local_url.endswith(".jpg"))
 
-    def test_parse_vivino_explore_candidates(self) -> None:
-        """Verify Vivino explore response parsing and match scoring."""
-        sample_vivino = {
-            "explore_vintage": {
-                "matches": [
-                    {
-                        "vintage": {
-                            "year": 2019,
-                            "seo_name": "antinori-tignanello-2019",
-                            "statistics": {"ratings_average": 4.5, "ratings_count": 14820},
-                            "image": {"location": "//images.vivino.com/thumbs/tig.png"},
-                            "wine": {
-                                "id": 1652,
-                                "name": "Tignanello",
-                                "winery": {"name": "Antinori"},
-                                "region": {
-                                    "name": "Toscana",
-                                    "country": {"name": "Italy"},
-                                },
-                            },
-                        },
-                        "price": {"amount": 135.0},
-                    },
-                    {
-                        "vintage": {
-                            "year": 2020,
-                            "statistics": {"ratings_average": 4.4, "ratings_count": 9200},
-                            "wine": {
-                                "id": 1652,
-                                "name": "Tignanello",
-                                "winery": {"name": "Antinori"},
-                                "region": {"name": "Toscana", "country": {"name": "Italy"}},
-                            },
-                        },
-                        "price": {"amount": 130.0},
-                    },
-                ]
-            }
-        }
+    # ---------- deterministic pre-filter against real Vivino result sets ----------
 
-        candidates = parse_vivino_explore_payload(
-            sample_vivino,
-            target_winery="Antinori",
-            target_name="Tignanello",
-            target_vintage=2019,
+    def test_prefilter_exact_match_tignanello(self) -> None:
+        cands = filter_and_rank_records(
+            FIXTURES["Antinori Tignanello"], target_winery="Antinori", target_name="Tignanello", target_vintage=2019
         )
-        self.assertEqual(len(candidates), 2)
-        self.assertEqual(candidates[0]["vintage"], 2019)
-        self.assertEqual(candidates[0]["vivino_rating"], 4.5)
-        self.assertEqual(candidates[0]["vivino_ratings_count"], 14820)
-        self.assertEqual(candidates[0]["vivino_price_estimate"], 135.0)
+        self.assertTrue(cands)
+        top = cands[0]
+        self.assertEqual((top["winery"], top["name"], top["vintage"]), ("Antinori", "Tignanello", 2019))
+        self.assertTrue(top["prefilter_exact"])
+        self.assertEqual(top["vivino_url"], "https://www.vivino.com/w/1652?year=2019")
+        # Other Antinori cuvées containing "Tignanello" (e.g. Solaia) are NOT exact.
+        self.assertEqual(sum(1 for c in cands if c["prefilter_exact"]), 1)
+
+    def test_prefilter_rejects_different_cuvee_same_producer(self) -> None:
+        # Real Penfolds result set contains Grange but no Bin 389 -> must return nothing.
         self.assertEqual(
-            candidates[0]["vivino_image_url"],
-            "https://images.vivino.com/thumbs/tig.png",
+            filter_and_rank_records(FIXTURES["Penfolds Grange"], target_winery="Penfolds", target_name="Bin 389"),
+            [],
+        )
+        # Pavillon Rouge must not match Pavillon Blanc; accents are normalized.
+        cands = filter_and_rank_records(
+            FIXTURES["Chateau Margaux Pavillon Rouge"], target_winery="Château Margaux", target_name="Pavillon Rouge"
+        )
+        self.assertEqual([c["name"] for c in cands], ["Pavillon Rouge du Château Margaux"])
+
+    def test_prefilter_numbered_cuvees(self) -> None:
+        # Real Penfolds names seen on live Vivino search ("penfolds bin") on 2026-10-25.
+        live_names = [
+            "Reserve Bin A Chardonnay",
+            "Bin 707 Cabernet Sauvignon",
+            "Bin 169 Cabernet Sauvignon",
+            "Yattarna Chardonnay (BIN 144)",
+            "Bin 389 Cabernet - Shiraz",
+        ]
+        passing = [
+            n for n in live_names
+            if evaluate_candidate({"winery": "Penfolds", "name": n}, "Penfolds", "Bin 389")["passes"]
+        ]
+        self.assertEqual(passing, ["Bin 389 Cabernet - Shiraz"])
+
+    def test_prefilter_rejects_unrelated_popular_wine(self) -> None:
+        self.assertEqual(
+            filter_and_rank_records(FIXTURES["Antinori Tignanello"], target_winery="Casella", target_name="Yellow Tail"),
+            [],
+        )
+        self.assertFalse(
+            evaluate_candidate({"winery": "Casella Wines", "name": "Yellow Tail Shiraz"}, "Antinori", "Tignanello")["passes"]
         )
 
-    def test_parse_vivino_search_html_ssr(self) -> None:
-        """Verify parsing of real Vivino search page HTML containing SSR data-ssr-props."""
-        import html
-        from custom_components.wine_inventory.vivino import parse_vivino_search_html
+    def test_prefilter_varietal_name_is_ambiguous(self) -> None:
+        cands = filter_and_rank_records(
+            FIXTURES["Kleine Zalze Chenin Blanc"], target_winery="Kleine Zalze", target_name="Chenin Blanc"
+        )
+        # Several Kleine Zalze Chenin cuvées, none exact -> must require user confirmation.
+        self.assertGreater(len(cands), 1)
+        self.assertFalse(any(c["prefilter_exact"] for c in cands))
+        self.assertTrue(all(c["winery"] == "Kleine Zalze" for c in cands))
 
-        ssr_data = {
-            "initialExploreResults": {
-                "records": [
-                    {
-                        "vintage": {
-                            "year": 2015,
-                            "seo_name": "antinori-tignanello-2015",
-                            "statistics": {"ratings_average": 4.6, "ratings_count": 14699},
-                            "wine": {
-                                "id": 1652,
-                                "name": "Tignanello",
-                                "winery": {"name": "Antinori"},
-                                "region": {"name": "Toscana", "country": {"name": "Italy"}},
-                            },
-                        },
-                        "price": {"amount": 160.0},
-                    },
-                    {
-                        "vintage": {
-                            "year": 2019,
-                            "statistics": {"ratings_average": 4.6, "ratings_count": 8668},
-                            "wine": {
-                                "id": 1652,
-                                "name": "Tignanello",
-                                "winery": {"name": "Antinori"},
-                                "region": {"name": "Toscana", "country": {"name": "Italy"}},
-                            },
-                        },
-                        "price": {"amount": 145.0},
-                    },
-                ]
-            }
+    def test_empty_vivino_result_and_query_building(self) -> None:
+        self.assertEqual(FIXTURES["zzqx nonexistent wine 9999"], [])
+        self.assertEqual(parse_vivino_search_html(_search_html([]), target_winery="X", target_name="Y"), [])
+        self.assertEqual(build_search_queries("Château Margaux", "Pavillon Rouge")[0], "Château Margaux Pavillon Rouge")
+        self.assertEqual(build_search_queries("", ""), [])
+
+    def test_wine_id_and_wine_page_parsing(self) -> None:
+        self.assertEqual(parse_vivino_wine_id("https://www.vivino.com/nl/antinori-tuscany-tignanello/w/1652?year=2019"), 1652)
+        self.assertEqual(parse_vivino_wine_id("1652"), 1652)
+        self.assertIsNone(parse_vivino_wine_id("https://www.vivino.com/wines/1652"))
+        # JSON-LD block shape as served on the live Tignanello page (2026-10-25).
+        ld = {
+            "@context": "https://schema.org/", "@type": "Product", "name": "2019 Antinori Tignanello",
+            "url": "https://www.vivino.com/nl/antinori-tuscany-tignanello/w/1652?year=2019",
+            "image": ["https://images.vivino.com/thumbs/LtqnB-H2QFmN6ixL3FQcdw_pl_375x500.png"],
+            "brand": {"@type": "Brand", "name": "Antinori"},
+            "offers": {"@type": "Offer", "priceCurrency": "EUR", "price": "286.21"},
+            "aggregateRating": {"@type": "AggregateRating", "ratingValue": "4.6", "ratingCount": "8672"},
         }
-        encoded_json = html.escape(json.dumps(ssr_data))
-        mock_html = f'<html><body><div id="ssr-explore-page" data-ssr-component="ExplorePage" data-ssr-props="{encoded_json}"></div></body></html>'
+        page = parse_vivino_wine_page(f'<script type="application/ld+json">{json.dumps(ld)}</script>')
+        assert page is not None
+        self.assertEqual((page["winery"], page["name"], page["vintage"]), ("Antinori", "Tignanello", 2019))
+        self.assertEqual(page["vivino_rating"], 4.6)
+        self.assertEqual(page["vivino_url"], "https://www.vivino.com/w/1652?year=2019")
 
-        candidates = parse_vivino_search_html(
-            mock_html,
-            target_winery="Antinori",
-            target_name="Tignanello",
-            target_vintage=2015,
+    def test_grounded_search_fields_drop_inferred_values(self) -> None:
+        g = grounded_search_fields(TIGNANELLO_LABEL)
+        self.assertEqual((g["winery"], g["name"], g["vintage"]), ("Antinori", "Tignanello", 2019))
+        inferred = dict(TIGNANELLO_LABEL, name="Riserva Speciale", name_printed=True)
+        self.assertEqual(grounded_search_fields(inferred)["name"], "")  # not in transcription
+        flagged = dict(TIGNANELLO_LABEL, winery_printed=False, vintage_printed=False)
+        g2 = grounded_search_fields(flagged)
+        self.assertEqual(g2["winery"], "")
+        self.assertIsNone(g2["vintage"])
+
+    # ---------- coordinator tiers ----------
+
+    def _make_coordinator(self, tmp_path: Path, session: _StubHttpSession) -> WineInventoryCoordinator:
+        return WineInventoryCoordinator(
+            hass=_StubHass(tmp_path),
+            entry_id="test_entry",
+            config={"gemini_api_key": "test-key", "gemini_model": "gemini-flash-lite", "currency": "EUR"},
+            session_getter=lambda _h: session,
         )
-        self.assertEqual(len(candidates), 2)
-        self.assertEqual(candidates[0]["vintage"], 2015)
-        self.assertEqual(candidates[0]["vivino_rating"], 4.6)
-        self.assertEqual(candidates[0]["winery"], "Antinori")
-        self.assertEqual(candidates[0]["name"], "Tignanello")
 
-    def test_coordinator_end_to_end_scan_add_and_export(self) -> None:
-        """Verify full async workflow: Gemini scan -> Vivino lookup -> DB add -> CSV export."""
+    def _scan(self, session: _StubHttpSession) -> tuple[dict[str, Any], WineInventoryCoordinator, Path]:
+        result: dict[str, Any] = {}
 
         async def _run() -> None:
             with tempfile.TemporaryDirectory() as tmpdir:
-                tmp_path = Path(tmpdir)
-                gemini_extracted = {
-                    "winery": "Antinori",
-                    "name": "Tignanello",
-                    "vintage": 2019,
-                    "wine_type": "red",
-                    "varietal": "Sangiovese, Cabernet Sauvignon",
-                    "region": "Toscana",
-                    "country": "Italy",
-                    "alcohol_pct": 14.0,
-                    "bottle_size_ml": 750,
-                    "drink_from_year": 2024,
-                    "drink_until_year": 2036,
-                    "drink_window_note": "Decant 90 minutes before serving",
-                    "food_pairings": ["Bistecca alla Fiorentina", "Aged Pecorino"],
-                    "label_summary": "Iconic Super Tuscan blend from Marchesi Antinori.",
-                }
-                gemini_resp = {
-                    "candidates": [
-                        {
-                            "content": {
-                                "parts": [{"text": json.dumps(gemini_extracted)}],
-                            }
-                        }
-                    ]
-                }
-                vivino_resp = {
-                    "explore_vintage": {
-                        "matches": [
-                            {
-                                "vintage": {
-                                    "year": 2019,
-                                    "seo_name": "antinori-tignanello",
-                                    "statistics": {
-                                        "ratings_average": 4.5,
-                                        "ratings_count": 15000,
-                                    },
-                                    "wine": {
-                                        "id": 1652,
-                                        "name": "Tignanello",
-                                        "winery": {"name": "Antinori"},
-                                        "region": {
-                                            "name": "Toscana",
-                                            "country": {"name": "Italy"},
-                                        },
-                                    },
-                                },
-                                "price": {"amount": 140.0},
-                            }
-                        ]
-                    }
-                }
-
-                stub_session = _StubHttpSession(gemini_resp, 200, vivino_resp)
-                hass = _StubHass(tmp_path)
-                coordinator = WineInventoryCoordinator(
-                    hass=hass,
-                    entry_id="test_entry",
-                    config={
-                        "cellar_name": "Home Cellar",
-                        "gemini_api_key": "test-key",
-                        "gemini_model": "gemini-3.8-flash-lite",
-                        "currency": "EUR",
-                        "vivino_country_code": "NL",
-                    },
-                    session_getter=lambda _h: stub_session,
-                )
-                await coordinator.async_initialize()
-
-                events_fired: list[tuple[str, dict[str, Any]]] = []
-                coordinator.async_add_event_listener(
-                    lambda et, data: events_fired.append((et, data))
-                )
-
-                sample_img = "data:image/jpeg;base64," + base64.b64encode(
-                    b"test-jpg-payload"
-                ).decode("ascii")
-                scan_result = await coordinator.async_scan_bottle(image_data=sample_img)
-
-                self.assertEqual(scan_result["extracted"]["winery"], "Antinori")
-                self.assertEqual(scan_result["extracted"]["vivino_rating"], 4.5)
-                self.assertIsNone(scan_result["existing_wine"])
-
-                saved_wine = await coordinator.async_add_wine(
-                    {
-                        **scan_result["extracted"],
-                        "quantity": 3,
-                        "purchase_location": "Gall & Gall",
-                        "storage_location": "Cellar Rack B2",
-                        "batch_notes": "Bought a 3-pack case",
-                    }
-                )
-                self.assertEqual(saved_wine["quantity"], 3)
-                self.assertEqual(coordinator.statistics["total_bottles"], 3)
-                self.assertTrue(any(et == "bottle_added" for et, _ in events_fired))
-
-                export_res = await coordinator.async_export_inventory("csv")
-                self.assertEqual(export_res["exported_wines"], 1)
-                self.assertTrue(Path(export_res["file_path"]).exists())
+                coord = self._make_coordinator(Path(tmpdir), session)
+                await coord.async_initialize()
+                img = "data:image/jpeg;base64," + base64.b64encode(b"jpg").decode("ascii")
+                result["scan"] = await coord.async_scan_bottle(image_data=img)
+                if result["scan"]["vivino_confidence"] == "high":
+                    saved = await coord.async_add_wine({**result["scan"]["extracted"], "quantity": 2})
+                    result["saved"] = saved
+                    result["export"] = await coord.async_export_inventory("csv")
 
         asyncio.run(_run())
+        return result, None, None  # type: ignore[return-value]
+
+    def test_tier_high_auto_links_only_when_judge_agrees(self) -> None:
+        session = _StubHttpSession(
+            _gemini(TIGNANELLO_LABEL),
+            vivino_html=_search_html(FIXTURES["Antinori Tignanello"]),
+            judge_payload={"choice": "0", "reason": "Label reads Tignanello by Antinori."},
+        )
+        res, _, _ = self._scan(session)
+        scan = res["scan"]
+        self.assertEqual(scan["vivino_confidence"], "high")
+        self.assertEqual(scan["extracted"]["vivino_url"], "https://www.vivino.com/w/1652?year=2019")
+        self.assertEqual(scan["extracted"]["vivino_wine_id"], 1652)
+        self.assertEqual(scan["extracted"]["rating_source"], "vivino")
+        self.assertEqual(res["saved"]["vivino_match_confidence"], "high")
+        self.assertEqual(res["saved"]["vivino_wine_id"], 1652)
+        self.assertEqual(res["export"]["exported_wines"], 1)
+        self.assertTrue(session.get_urls[0].startswith("https://www.vivino.com/search/wines?q="))
+        self.assertFalse(any("/api/explore" in u for u in session.get_urls))
+
+    def test_tier_none_when_judge_rejects_all(self) -> None:
+        session = _StubHttpSession(
+            _gemini(TIGNANELLO_LABEL),
+            vivino_html=_search_html(FIXTURES["Antinori Tignanello"]),
+            judge_payload={"choice": "NONE", "reason": "Label does not match."},
+        )
+        scan = self._scan(session)[0]["scan"]
+        self.assertEqual(scan["vivino_confidence"], "none")
+        self.assertIsNone(scan["extracted"]["vivino_rating"])
+        self.assertEqual(scan["extracted"]["vivino_url"], "")
+
+    def test_tier_medium_when_judge_unavailable_or_ambiguous(self) -> None:
+        # Judge HTTP failure -> never auto-link.
+        session = _StubHttpSession(
+            _gemini(TIGNANELLO_LABEL), vivino_html=_search_html(FIXTURES["Antinori Tignanello"]), judge_payload=None
+        )
+        scan = self._scan(session)[0]["scan"]
+        self.assertEqual(scan["vivino_confidence"], "medium")
+        self.assertIsNone(scan["extracted"]["vivino_rating"])
+        self.assertTrue(scan["vivino_candidates"])
+
+        # Varietal-only name (several cuvées) -> medium even if the judge picks one.
+        kz = dict(
+            TIGNANELLO_LABEL, winery="Kleine Zalze", name="Chenin Blanc", vintage=2023,
+            label_text_verbatim="KLEINE ZALZE\nCHENIN BLANC\n2023\nStellenbosch",
+        )
+        session2 = _StubHttpSession(
+            _gemini(kz), vivino_html=_search_html(FIXTURES["Kleine Zalze Chenin Blanc"]),
+            judge_payload={"choice": "1", "reason": "Probably cellar selection."},
+        )
+        scan2 = self._scan(session2)[0]["scan"]
+        self.assertEqual(scan2["vivino_confidence"], "medium")
+        self.assertEqual(scan2["vivino_selected_index"], 1)
+        self.assertIsNone(scan2["extracted"]["vivino_rating"])
+
+    def test_vivino_blocked_never_estimates(self) -> None:
+        session = _StubHttpSession(_gemini(TIGNANELLO_LABEL), vivino_status=429, vivino_html="")
+        scan = self._scan(session)[0]["scan"]
+        self.assertEqual(scan["vivino_status"], "http_429")
+        self.assertEqual(scan["vivino_confidence"], "none")
+        self.assertIsNone(scan["extracted"]["vivino_rating"])
+        self.assertEqual(scan["extracted"]["rating_source"], "")
+        self.assertEqual(session.judge_prompts, [])
+
+    def test_no_gemini_rating_estimation_code_path(self) -> None:
+        """Static guard: no production module may produce Gemini-sourced ratings."""
+        root = Path(__file__).resolve().parents[1] / "custom_components" / "wine_inventory"
+        for py in root.glob("*.py"):
+            src = py.read_text(encoding="utf-8")
+            tree = ast.parse(src)
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    self.assertNotIn("estimate_rating", node.name, f"{py.name}: {node.name}")
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    self.assertNotIn(node.value, {"gemini_estimate"}, f"{py.name} emits gemini_estimate")
+            self.assertNotIn("/api/explore/explore", src, f"{py.name} still uses the explore endpoint")
 
     def test_gemini_scanner_error_reporting_on_http_failures(self) -> None:
         """Verify that GeminiScannerError reports descriptive, user-friendly messages for HTTP 400, 403, 429."""
@@ -366,84 +413,6 @@ class TestScannerVivinoAndCoordinator(unittest.TestCase):
             self.assertIn("Rate Limit", str(ctx_429.exception))
 
         asyncio.run(_run())
-
-    def test_vivino_similarity_filtering_guards(self) -> None:
-        """Verify strict similarity check: either wine name or maker must be similar."""
-        from custom_components.wine_inventory.vivino import (
-            is_text_similar,
-            is_vivino_candidate_similar,
-            parse_vivino_explore_payload,
-        )
-
-        # 1. Direct text similarity checks
-        self.assertTrue(is_text_similar("Château Margaux", "Margaux"))
-        self.assertTrue(is_text_similar("Antinori", "Marchesi Antinori"))
-        self.assertTrue(is_text_similar("Tignanello", "Tignanello Toscana"))
-        self.assertFalse(is_text_similar("Château Margaux", "Yellow Tail"))
-        self.assertFalse(is_text_similar("Tignanello", "Shiraz"))
-
-        # 2. Candidate similarity checks
-        matching_cand = {
-            "winery": "Marchesi Antinori",
-            "name": "Tignanello",
-            "vintage": 2019,
-        }
-        self.assertTrue(
-            is_vivino_candidate_similar(
-                matching_cand, target_winery="Antinori", target_name="Tignanello"
-            )
-        )
-
-        dissimilar_cand = {
-            "winery": "Casella Wines",
-            "name": "Yellow Tail Shiraz",
-            "vintage": 2020,
-        }
-        self.assertFalse(
-            is_vivino_candidate_similar(
-                dissimilar_cand, target_winery="Antinori", target_name="Tignanello"
-            )
-        )
-
-        # 3. Specific cuvée guard: Penfolds Grange must NOT match Penfolds Rawson's Retreat Semillon
-        self.assertFalse(
-            is_vivino_candidate_similar(
-                {"winery": "Penfolds", "name": "Rawson's Retreat Semillon"},
-                "Penfolds",
-                "Grange",
-            )
-        )
-        self.assertTrue(
-            is_vivino_candidate_similar(
-                {"winery": "Penfolds", "name": "Grange Shiraz"},
-                "Penfolds",
-                "Grange",
-            )
-        )
-
-        # 4. Payload filtering check: searching for Antinori Tignanello should reject Yellow Tail Shiraz
-        raw_payload = {
-            "explore_vintage": {
-                "matches": [
-                    {
-                        "vintage": {
-                            "year": 2020,
-                            "wine": {
-                                "id": 9999,
-                                "name": "Yellow Tail Shiraz",
-                                "winery": {"name": "Casella Wines"},
-                            },
-                        }
-                    }
-                ]
-            }
-        }
-        filtered = parse_vivino_explore_payload(
-            raw_payload,
-            target_winery="Antinori",
-            target_name="Tignanello",
-        )
-        self.assertEqual(filtered, [])
 
     def test_gemini_wine_research_scan(self) -> None:
         """Verify Gemini AI deep research scan on wine producer and cuvée history."""
