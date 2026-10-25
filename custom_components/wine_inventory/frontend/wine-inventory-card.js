@@ -68,6 +68,8 @@ class WineInventoryCard extends HTMLElement {
     this._sortBy = "recent";
     this._viewMode = "list";
     this._userToggledView = false;
+    this._searchDebounce = null;
+    this._fontScale = this._loadFontScale();
 
     // Active modal state: null | "scan" | "crop_rotate" | "quick_add" | "consume" | "detail" | "backup" | "image_preview"
     this._activeModal = null;
@@ -121,6 +123,103 @@ class WineInventoryCard extends HTMLElement {
       purchase_price: "",
       storage_location: "",
     };
+  }
+
+  static get FONT_SCALES() {
+    return [
+      { id: "S", value: 0.9 },
+      { id: "M", value: 1.0 },
+      { id: "L", value: 1.15 },
+      { id: "XL", value: 1.3 },
+    ];
+  }
+
+  _loadFontScale() {
+    try {
+      const stored = parseFloat(window.localStorage.getItem("lekkersappie_font_scale") || "");
+      if (stored >= 0.8 && stored <= 1.5) return stored;
+    } catch (_) {}
+    return null;
+  }
+
+  _effectiveFontScale() {
+    if (this._fontScale) return this._fontScale;
+    const cfg = parseFloat(this._config?.font_scale);
+    return cfg >= 0.8 && cfg <= 1.5 ? cfg : 1.0;
+  }
+
+  _fontScaleLabel() {
+    const cur = this._effectiveFontScale();
+    const scales = WineInventoryCard.FONT_SCALES;
+    let best = scales[1];
+    scales.forEach((s) => {
+      if (Math.abs(s.value - cur) < Math.abs(best.value - cur)) best = s;
+    });
+    return best.id;
+  }
+
+  _cycleFontScale() {
+    const scales = WineInventoryCard.FONT_SCALES;
+    const idx = scales.findIndex((s) => s.id === this._fontScaleLabel());
+    const next = scales[(idx + 1) % scales.length];
+    this._fontScale = next.value;
+    try {
+      window.localStorage.setItem("lekkersappie_font_scale", String(next.value));
+    } catch (_) {}
+    this._render();
+  }
+
+  _renderResults(wines) {
+    if (wines.length === 0) {
+      return `<div class="empty-state">
+          <ha-icon icon="mdi:glass-wine" style="--mdc-icon-size: 40px; color: #a61a2e;"></ha-icon>
+          <p>${
+            this._searchQuery
+              ? `No wines match “${escapeHtml(this._searchQuery)}”.`
+              : "No wines match the current filter. Tap <strong>Scan Bottle</strong> to add one."
+          }</p>
+        </div>`;
+    }
+    return this._viewMode === "list"
+      ? this._renderWineListView(wines)
+      : `<div class="wine-grid">${wines.map((w) => this._renderWineCard(w)).join("")}</div>`;
+  }
+
+  /** Update only the results area, so the search <input> keeps focus and the mobile keyboard. */
+  _refreshResultsOnly() {
+    const container = this.shadowRoot?.querySelector("#wine-results");
+    if (!container) {
+      this._render();
+      return;
+    }
+    container.innerHTML = this._renderResults(this._getFilteredAndSortedWines());
+    this._bindResultEvents(container);
+    const clearBtn = this.shadowRoot.querySelector("#btn-clear-search");
+    if (clearBtn) clearBtn.style.visibility = this._searchQuery ? "visible" : "hidden";
+  }
+
+  _bindResultEvents(scope) {
+    scope.querySelectorAll("[data-action]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const wineId = Number(btn.dataset.id);
+        const wine = this._wines.find((w) => Number(w.id) === wineId);
+        if (!wine) return;
+        const action = btn.dataset.action;
+        if (action === "quick-add") this._openQuickAddModal(wine);
+        else if (action === "consume") this._openConsumeModal(wine);
+        else if (action === "detail") this._openDetailModal(wine);
+      });
+    });
+    scope.querySelectorAll('[data-action="preview-image"]').forEach((el) => {
+      el.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const wineId = Number(el.dataset.id);
+        const wine = this._wines.find((w) => Number(w.id) === wineId) || this._modalWine;
+        if (wine && wine.image_url) {
+          this._openImagePreview(wine);
+        }
+      });
+    });
   }
 
   setConfig(config) {
@@ -2401,14 +2500,31 @@ class WineInventoryCard extends HTMLElement {
     if (searchInput) {
       searchInput.addEventListener("input", (e) => {
         this._searchQuery = e.target.value;
-        this._render();
-        const el = this.shadowRoot.querySelector("#wine-search-input");
-        if (el) {
-          el.focus();
-          el.setSelectionRange(el.value.length, el.value.length);
-        }
+        clearTimeout(this._searchDebounce);
+        this._searchDebounce = setTimeout(() => this._refreshResultsOnly(), 150);
+      });
+      searchInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") searchInput.blur();
       });
     }
+
+    root.querySelector("#btn-clear-search")?.addEventListener("click", () => {
+      this._searchQuery = "";
+      const input = root.querySelector("#wine-search-input");
+      if (input) {
+        input.value = "";
+        input.focus();
+      }
+      this._refreshResultsOnly();
+    });
+    root.querySelectorAll(".btn-font-scale").forEach((b) => b.addEventListener("click", () => this._cycleFontScale()));
+    root.querySelector("#btn-mobile-scan")?.addEventListener("click", () => this._openScanModal(false));
+    root.querySelector("#btn-mobile-add")?.addEventListener("click", () => this._openScanModal(true));
+    root.querySelector("#btn-mobile-view")?.addEventListener("click", () => {
+      this._viewMode = this._viewMode === "list" ? "grid" : "list";
+      this._userToggledView = true;
+      this._render();
+    });
 
     root.querySelector("#wine-sort-select")?.addEventListener("change", (e) => {
       this._sortBy = e.target.value;
@@ -2422,17 +2538,7 @@ class WineInventoryCard extends HTMLElement {
       });
     });
 
-    root.querySelectorAll("[data-action]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const wineId = Number(btn.dataset.id);
-        const wine = this._wines.find((w) => Number(w.id) === wineId);
-        if (!wine) return;
-        const action = btn.dataset.action;
-        if (action === "quick-add") this._openQuickAddModal(wine);
-        else if (action === "consume") this._openConsumeModal(wine);
-        else if (action === "detail") this._openDetailModal(wine);
-      });
-    });
+    this._bindResultEvents(root);
 
     // Modal handlers
     root.querySelector("#close-modal-btn")?.addEventListener("click", () => this._closeModal());
@@ -2444,17 +2550,6 @@ class WineInventoryCard extends HTMLElement {
       if (e.target.id === "image-preview-backdrop") {
         this._closeImagePreview();
       }
-    });
-
-    root.querySelectorAll('[data-action="preview-image"]').forEach((el) => {
-      el.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const wineId = Number(el.dataset.id);
-        const wine = this._wines.find((w) => Number(w.id) === wineId) || this._modalWine;
-        if (wine && wine.image_url) {
-          this._openImagePreview(wine);
-        }
-      });
     });
 
     // Details View: Bottle quantity stepper (+ / -) with 0-bottle warning
@@ -3355,9 +3450,164 @@ class WineInventoryCard extends HTMLElement {
           gap: 6px;
           white-space: nowrap;
         }
+
+        /* ================= Mobile-first responsive layer (v0.2.9) ================= */
+        /* The query container sits INSIDE the zoomed root, so larger text sizes
+           automatically fall back to the narrower (less detailed) layout tiers. */
+        .ls-root { zoom: var(--ls-scale, 1); }
+        .ls-cq {
+          container-type: inline-size;
+          container-name: lscard;
+        }
+        .modal-surface { zoom: ${this._effectiveFontScale()}; }
+        .search-wrap {
+          position: relative;
+          display: flex;
+          align-items: center;
+        }
+        .search-icon {
+          position: absolute;
+          left: 12px;
+          color: var(--secondary-text-color);
+          --mdc-icon-size: 20px;
+          pointer-events: none;
+        }
+        .search-input {
+          padding-left: 40px !important;
+          padding-right: 44px !important;
+          min-height: 48px;
+          font-size: 16px !important; /* >=16px prevents iOS zoom-on-focus */
+          border-radius: 12px !important;
+        }
+        .search-clear {
+          position: absolute;
+          right: 2px;
+          width: 44px;
+          height: 44px;
+          border: none;
+          background: transparent;
+          color: var(--secondary-text-color);
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .font-scale-label { font-weight: 700; letter-spacing: -0.5px; }
+        .font-scale-label small { font-weight: 500; font-size: 10px; margin-left: 2px; }
+        .stepper-group .ha-btn {
+          min-width: 44px !important;
+          min-height: 44px !important;
+        }
+        .wine-title-clickable { min-height: 44px; justify-content: center; }
+
+        /* Mobile action bar (thumb zone) - hidden on wide cards */
+        .mobile-action-bar { display: none; }
+
+        /* ---------- BASE = narrow phone (< 600px card width) ---------- */
+        @container lscard (max-width: 599px) {
+          .ls-root { padding-bottom: 4px; }
+          .desktop-actions { display: none !important; }
+          .header-bar { margin-bottom: 10px; }
+          .controls-bar { flex-direction: column; gap: 8px; }
+          .search-wrap, .sort-wrap { width: 100%; flex: 1 1 100%; }
+          .sort-wrap select { min-height: 48px; font-size: 15px; border-radius: 12px; }
+          .filter-chips {
+            flex-wrap: nowrap;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+            margin: 0 -4px 12px;
+            padding: 0 4px 4px;
+          }
+          .filter-chip { min-height: 40px; padding: 8px 14px; font-size: 13px; white-space: nowrap; flex-shrink: 0; }
+          .wine-grid { grid-template-columns: 1fr !important; gap: 10px; }
+          .wine-meta-grid, .wine-notes-preview { display: none; }
+          .wine-actions-bar .ha-btn { min-height: 44px; }
+
+          /* List view becomes a clean single-column card list */
+          .wine-list-table-container { border: none; background: transparent; }
+          .wine-list-table thead { display: none; }
+          .wine-list-table, .wine-list-table tbody { display: block; width: 100%; }
+          .wine-list-table tr {
+            display: grid;
+            grid-template-columns: 44px minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            margin-bottom: 8px;
+            border: 1px solid var(--divider-color, #e0e0e0);
+            border-radius: 12px;
+            background: var(--card-background-color, #fff);
+          }
+          .wine-list-table td { padding: 0 !important; border: none !important; }
+          .wine-list-table td:nth-child(3),
+          .wine-list-table td:nth-child(4),
+          .wine-list-table td:nth-child(5),
+          .wine-list-table td:nth-child(6),
+          .wine-list-table td:nth-child(8) { display: none; }
+          .wine-list-title-wrap { max-width: none !important; }
+          .wine-list-title-wrap strong { font-size: 15px; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+          .wine-list-title-wrap span { font-size: 13px; }
+          .wine-list-title-wrap span:nth-of-type(2) { display: none; }
+          .wine-list-thumb, .wine-list-thumb-placeholder { width: 44px; height: 58px; }
+          .stepper-group .qty-badge { min-width: 28px !important; font-size: 15px !important; }
+
+          /* Sticky bottom action bar in thumb reach */
+          .mobile-action-bar {
+            display: grid;
+            grid-template-columns: 56px 56px 56px 1fr;
+            gap: 8px;
+            position: sticky;
+            bottom: 0;
+            z-index: 5;
+            margin: 12px -4px -4px;
+            padding: 10px 4px calc(10px + env(safe-area-inset-bottom, 0px));
+            background: var(--ha-card-background, var(--card-background-color, #fff));
+            border-top: 1px solid var(--divider-color, #e0e0e0);
+          }
+          .mab-btn {
+            min-height: 56px;
+            flex-direction: column;
+            gap: 2px;
+            padding: 6px 4px;
+            border-radius: 14px;
+            font-size: 11px;
+          }
+          .mab-btn small { font-size: 11px; }
+          .mab-primary { flex-direction: row; gap: 8px; font-size: 16px; font-weight: 600; }
+          .mab-primary ha-icon { --mdc-icon-size: 26px; }
+        }
+
+        /* ---------- >= 380px: show vintage + rating in list ---------- */
+        @container lscard (min-width: 380px) and (max-width: 599px) {
+          .wine-list-table tr { grid-template-columns: 44px minmax(0, 1fr) auto auto auto; }
+          .wine-list-table td:nth-child(3),
+          .wine-list-table td:nth-child(6) { display: block; }
+        }
+
+        /* ---------- < 380px: trim grid cards to essentials ---------- */
+        @container lscard (max-width: 379px) {
+          .wine-list-table tr { grid-template-columns: 44px minmax(0, 1fr); row-gap: 6px; }
+          .wine-list-table td:nth-child(7) { grid-column: 2; justify-self: start; }
+          .wine-sub, .wine-ratings-row .personal-badge, .drink-pill { display: none; }
+          .env-pills .env-pill { display: none; }
+          .mobile-action-bar { grid-template-columns: 48px 48px 48px 1fr; gap: 6px; }
+        }
+
+        /* ---------- 600-899px: tablet - hide sub-meta line in list ---------- */
+        @container lscard (min-width: 600px) and (max-width: 899px) {
+          .wine-list-title-wrap span:nth-of-type(2) { display: none; }
+          .wine-list-table th:nth-child(8), .wine-list-table td:nth-child(8),
+          .wine-list-table th:nth-child(4), .wine-list-table td:nth-child(4) { display: none; }
+          .wine-list-table th, .wine-list-table td { padding: 8px !important; }
+          .wine-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+          .wine-notes-preview { display: none; }
+        }
       </style>
 
-      <ha-card>
+      <ha-card style="--ls-scale: ${this._effectiveFontScale()};">
+       <div class="ls-root">
+       <div class="ls-cq">
         <div class="header-bar">
           <div class="title-block">
             <h1>
@@ -3379,7 +3629,10 @@ class WineInventoryCard extends HTMLElement {
             </div>
           </div>
 
-          <div class="header-actions">
+          <div class="header-actions desktop-actions">
+            <button class="ha-btn secondary-btn icon-btn btn-font-scale" title="Text size (tap to change)" aria-label="Text size ${this._fontScaleLabel()}">
+              <span class="font-scale-label">Aa <small>${this._fontScaleLabel()}</small></span>
+            </button>
             <button class="ha-btn ${this._viewMode === "grid" ? "active-view" : "secondary-btn"} icon-btn" id="btn-toggle-grid" title="Grid View">
               <ha-icon icon="mdi:view-grid"></ha-icon>
             </button>
@@ -3402,15 +3655,26 @@ class WineInventoryCard extends HTMLElement {
 
         <div class="controls-bar">
           <div class="search-wrap">
+            <ha-icon icon="mdi:magnify" class="search-icon"></ha-icon>
             <input
               id="wine-search-input"
-              class="ha-input"
-              type="search"
-              placeholder="Search winery, wine, varietal, where bought, location, or notes…"
+              class="ha-input search-input"
+              type="text"
+              inputmode="search"
+              enterkeyhint="search"
+              autocomplete="off"
+              autocorrect="off"
+              autocapitalize="off"
+              spellcheck="false"
+              aria-label="Search wines"
+              placeholder="Search wines…"
               value="${escapeHtml(this._searchQuery)}"
             />
+            <button type="button" class="search-clear" id="btn-clear-search" aria-label="Clear search" style="visibility: ${this._searchQuery ? "visible" : "hidden"};">
+              <ha-icon icon="mdi:close-circle"></ha-icon>
+            </button>
           </div>
-          <div>
+          <div class="sort-wrap">
             <select id="wine-sort-select" class="ha-input">
               <option value="recent" ${this._sortBy === "recent" ? "selected" : ""}>Sort: Recently Added / Updated</option>
               <option value="rating" ${this._sortBy === "rating" ? "selected" : ""}>Sort: Vivino Rating (High → Low)</option>
@@ -3447,18 +3711,24 @@ class WineInventoryCard extends HTMLElement {
             : ""
         }
 
-        ${
-          wines.length === 0
-            ? `<div class="empty-state">
-                <ha-icon icon="mdi:glass-wine" style="--mdc-icon-size: 40px; color: #a61a2e;"></ha-icon>
-                <p>No wines match the current filter. Click <strong>Scan Bottle</strong> to scan a wine label with Gemini Flash-Lite!</p>
-              </div>`
-            : this._viewMode === "list"
-            ? this._renderWineListView(wines)
-            : `<div class="wine-grid">
-                ${wines.map((w) => this._renderWineCard(w)).join("")}
-              </div>`
-        }
+        <div id="wine-results">${this._renderResults(wines)}</div>
+
+        <nav class="mobile-action-bar" aria-label="Cellar actions">
+          <button class="ha-btn secondary-btn mab-btn btn-font-scale" aria-label="Text size ${this._fontScaleLabel()}">
+            <span class="font-scale-label">Aa</span><small>${this._fontScaleLabel()}</small>
+          </button>
+          <button class="ha-btn secondary-btn mab-btn" id="btn-mobile-view" aria-label="Switch to ${this._viewMode === "list" ? "grid" : "list"} view">
+            <ha-icon icon="${this._viewMode === "list" ? "mdi:view-grid" : "mdi:view-list"}"></ha-icon><small>${this._viewMode === "list" ? "Grid" : "List"}</small>
+          </button>
+          <button class="ha-btn secondary-btn mab-btn" id="btn-mobile-add" aria-label="Add wine manually">
+            <ha-icon icon="mdi:plus"></ha-icon><small>Add</small>
+          </button>
+          <button class="ha-btn primary-btn mab-btn mab-primary" id="btn-mobile-scan" aria-label="Scan bottle">
+            <ha-icon icon="mdi:camera-iris"></ha-icon><span>Scan Bottle</span>
+          </button>
+        </nav>
+       </div>
+       </div>
       </ha-card>
 
       ${this._activeModal === "scan" ? this._renderScanModal() : ""}

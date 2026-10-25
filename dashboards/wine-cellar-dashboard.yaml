@@ -5,6 +5,7 @@
 # - Uses `type: tile` cards for summary metrics and cellar environment
 # - Uses `type: distribution` card for Red / White / Rosé / Sparkling breakdown
 # - Uses `type: custom:wine-inventory-card` for bottle scanning, Vivino ranking, +1/-1 stock, and notes
+# - Mobile-first: on phones the sections stack into one column with the inventory card on top
 # - Features multiple dedicated views: Cellar Overview, Line-Item List View, Tasting Archive, and Cellar Operations & Backup
 
 title: Lekkersappie
@@ -31,6 +32,29 @@ views:
         show_state: true
         color: amber
     sections:
+      # Mobile-first: the inventory card comes first so phones show it at the top.
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Cellar Inventory & Label Scanner
+            heading_style: title
+            icon: mdi:glass-wine
+            badges:
+              - type: button
+                icon: mdi:file-export-outline
+                tap_action:
+                  action: perform-action
+                  perform_action: wine_inventory.export_inventory
+                  data:
+                    format: csv
+          - type: custom:wine-inventory-card
+            title: Lekkersappie
+            default_view: list
+            grid_options:
+              columns: full
+              rows: auto
+
       - type: grid
         column_span: 1
         cards:
@@ -109,28 +133,6 @@ views:
             grid_options:
               columns: full
               rows: 2
-
-      - type: grid
-        column_span: 2
-        cards:
-          - type: heading
-            heading: Cellar Inventory & Label Scanner
-            heading_style: title
-            icon: mdi:glass-wine
-            badges:
-              - type: button
-                icon: mdi:file-export-outline
-                tap_action:
-                  action: perform-action
-                  perform_action: wine_inventory.export_inventory
-                  data:
-                    format: csv
-          - type: custom:wine-inventory-card
-            title: Lekkersappie
-            default_view: list
-            grid_options:
-              columns: full
-              rows: auto
 
   - title: Wine List
     path: list-view

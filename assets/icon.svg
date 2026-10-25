@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="128" height="128" role="img" aria-label="Lekkersappie Red Wine Glass Icon">
   <defs>
     <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#2b0912" />
-      <stop offset="100%" stop-color="#4a0e1e" />
+      <stop offset="0%" stop-color="#ffffff" />
+      <stop offset="100%" stop-color="#ffffff" />
     </linearGradient>
     <linearGradient id="wineGrad" x1="0%" y1="0%" x2="0%" y2="100%">
       <stop offset="0%" stop-color="#d81b43" />
@@ -11,17 +11,17 @@
     </linearGradient>
   </defs>
   <!-- Rounded square badge background -->
-  <rect x="8" y="8" width="240" height="240" rx="52" fill="url(#bgGrad)" stroke="#7a1c33" stroke-width="4" />
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="#ffffff" stroke="#e6e0e2" stroke-width="4" />
   <!-- Ruby Red Wine Fill inside Bowl -->
-  <path d="M74 88 C74 134, 102 156, 128 156 C154 156, 182 134, 182 88 C164 93, 146 85, 128 89 C110 93, 92 84, 74 88 Z" fill="url(#wineGrad)" />
+  <path d="M74 88 C74 134, 102 156, 128 156 C154 156, 182 134, 182 88 C164 93, 146 85, 128 89 C110 93, 92 84, 74 88 Z" fill="#9e0f2d" />
   <!-- Wine Meniscus Highlight -->
   <ellipse cx="128" cy="88" rx="53" ry="7" fill="#ef476f" fill-opacity="0.45" />
   <!-- Glass Reflection Highlight -->
-  <path d="M86 62 C84 96, 94 128, 112 142" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-opacity="0.45" />
+  <path d="M86 62 C84 96, 94 128, 112 142" fill="none" stroke="#f3c6d0" stroke-width="5" stroke-linecap="round" stroke-opacity="0.9" />
   <!-- Crystal Wine Glass Bowl Outline -->
-  <path d="M78 46 L178 46 L184 86 C186 132, 158 158, 128 158 C98 158, 70 132, 72 86 Z" fill="none" stroke="#f8eef0" stroke-width="7" stroke-linejoin="round" />
+  <path d="M78 46 L178 46 L184 86 C186 132, 158 158, 128 158 C98 158, 70 132, 72 86 Z" fill="none" stroke="#7a1c33" stroke-width="7" stroke-linejoin="round" />
   <!-- Stem -->
-  <line x1="128" y1="158" x2="128" y2="212" stroke="#f8eef0" stroke-width="8" stroke-linecap="round" />
+  <line x1="128" y1="158" x2="128" y2="212" stroke="#7a1c33" stroke-width="8" stroke-linecap="round" />
   <!-- Foot / Base -->
-  <path d="M88 214 L168 214" stroke="#f8eef0" stroke-width="8" stroke-linecap="round" />
+  <path d="M88 214 L168 214" stroke="#7a1c33" stroke-width="8" stroke-linecap="round" />
 </svg>
