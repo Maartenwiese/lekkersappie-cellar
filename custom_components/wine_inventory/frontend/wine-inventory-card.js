@@ -222,6 +222,19 @@ class WineInventoryCard extends HTMLElement {
     });
   }
 
+  static getStubConfig() {
+    return {
+      title: "Lekkersappie",
+      default_view: "list",
+      default_tab: "all",
+      show_mobile_app_button: true,
+    };
+  }
+
+  static getConfigElement() {
+    return document.createElement("wine-inventory-card-editor");
+  }
+
   setConfig(config) {
     this._config = config || {};
     if (this._config.title) {
@@ -229,6 +242,9 @@ class WineInventoryCard extends HTMLElement {
     }
     if (!this._userToggledView) {
       this._viewMode = this._config.default_view === "grid" ? "grid" : "list";
+    }
+    if (this._config.default_tab && !this._userSelectedTab) {
+      this._filterTab = this._config.default_tab;
     }
     this._render();
   }
@@ -1665,12 +1681,19 @@ class WineInventoryCard extends HTMLElement {
     return `
       <div class="modal-backdrop" id="modal-backdrop">
         <div class="modal-surface">
+         <div class="modal-inner">
+          <div class="modal-cq">
           <div class="modal-header">
             <h2>
               <ha-icon icon="${s.manualOnly ? "mdi:plus-circle-outline" : "mdi:camera-iris"}"></ha-icon>
-              ${s.manualOnly ? "Add Wine to Inventory" : "Scan Wine Bottle with Gemini Flash-Lite"}
+              <span>${s.manualOnly ? "Add Wine to Inventory" : "Scan Wine Bottle with Gemini Flash-Lite"}</span>
             </h2>
-            <button class="ha-btn icon-btn" id="close-modal-btn"><ha-icon icon="mdi:close"></ha-icon></button>
+            <div class="modal-header-actions">
+              <button type="button" class="ha-btn secondary-btn icon-btn btn-font-scale" title="Text size (tap to change)" aria-label="Text size ${this._fontScaleLabel()}">
+                <span class="font-scale-label">Aa <small>${this._fontScaleLabel()}</small></span>
+              </button>
+              <button class="ha-btn icon-btn" id="close-modal-btn"><ha-icon icon="mdi:close"></ha-icon></button>
+            </div>
           </div>
 
           <div class="modal-body">
@@ -1897,6 +1920,8 @@ class WineInventoryCard extends HTMLElement {
               </div>
             </form>
           </div>
+          </div>
+         </div>
         </div>
       </div>
     `;
@@ -1912,9 +1937,16 @@ class WineInventoryCard extends HTMLElement {
     return `
       <div class="modal-backdrop" id="modal-backdrop">
         <div class="modal-surface compact">
+         <div class="modal-inner">
+          <div class="modal-cq">
           <div class="modal-header">
-            <h2><ha-icon icon="mdi:plus-circle"></ha-icon> Add Bottle(s): ${escapeHtml(w.winery)} – ${escapeHtml(w.name)}</h2>
-            <button class="ha-btn icon-btn" id="close-modal-btn"><ha-icon icon="mdi:close"></ha-icon></button>
+            <h2><ha-icon icon="mdi:plus-circle"></ha-icon> <span>Add Bottle(s): ${escapeHtml(w.winery)} – ${escapeHtml(w.name)}</span></h2>
+            <div class="modal-header-actions">
+              <button type="button" class="ha-btn secondary-btn icon-btn btn-font-scale" title="Text size (tap to change)" aria-label="Text size ${this._fontScaleLabel()}">
+                <span class="font-scale-label">Aa <small>${this._fontScaleLabel()}</small></span>
+              </button>
+              <button class="ha-btn icon-btn" id="close-modal-btn"><ha-icon icon="mdi:close"></ha-icon></button>
+            </div>
           </div>
           <div class="modal-body">
             <form id="quick-add-form" class="form-grid">
@@ -1960,6 +1992,8 @@ class WineInventoryCard extends HTMLElement {
               </div>
             </form>
           </div>
+          </div>
+         </div>
         </div>
       </div>
     `;
@@ -1974,9 +2008,16 @@ class WineInventoryCard extends HTMLElement {
     return `
       <div class="modal-backdrop" id="modal-backdrop">
         <div class="modal-surface compact">
+         <div class="modal-inner">
+          <div class="modal-cq">
           <div class="modal-header">
-            <h2><ha-icon icon="mdi:glass-wine"></ha-icon> Open / Drink Bottle: ${escapeHtml(w.winery)} – ${escapeHtml(w.name)}</h2>
-            <button class="ha-btn icon-btn" id="close-modal-btn"><ha-icon icon="mdi:close"></ha-icon></button>
+            <h2><ha-icon icon="mdi:glass-wine"></ha-icon> <span>Open / Drink Bottle: ${escapeHtml(w.winery)} – ${escapeHtml(w.name)}</span></h2>
+            <div class="modal-header-actions">
+              <button type="button" class="ha-btn secondary-btn icon-btn btn-font-scale" title="Text size (tap to change)" aria-label="Text size ${this._fontScaleLabel()}">
+                <span class="font-scale-label">Aa <small>${this._fontScaleLabel()}</small></span>
+              </button>
+              <button class="ha-btn icon-btn" id="close-modal-btn"><ha-icon icon="mdi:close"></ha-icon></button>
+            </div>
           </div>
           <div class="modal-body">
             <form id="consume-form" class="form-grid">
@@ -2020,6 +2061,8 @@ class WineInventoryCard extends HTMLElement {
               </div>
             </form>
           </div>
+          </div>
+         </div>
         </div>
       </div>
     `;
@@ -2049,56 +2092,63 @@ class WineInventoryCard extends HTMLElement {
 
     return `
       <div class="modal-backdrop" id="modal-backdrop">
-        <div class="modal-surface">
+        <div class="modal-surface detail-modal-surface">
+         <div class="modal-inner">
+          <div class="modal-cq">
           <div class="modal-header">
-            <h2><ha-icon icon="mdi:notebook-edit-outline"></ha-icon> ${escapeHtml(w.winery)} – ${escapeHtml(w.name)} (${w.vintage || "NV"})</h2>
-            <button class="ha-btn icon-btn" id="close-modal-btn"><ha-icon icon="mdi:close"></ha-icon></button>
+            <h2><ha-icon icon="mdi:notebook-edit-outline"></ha-icon> <span>${escapeHtml(w.winery)} – ${escapeHtml(w.name)} (${w.vintage || "NV"})</span></h2>
+            <div class="modal-header-actions">
+              <button type="button" class="ha-btn secondary-btn icon-btn btn-font-scale" id="btn-detail-font-scale" title="Adjust text size (S / M / L / XL)" aria-label="Text size ${this._fontScaleLabel()}">
+                <span class="font-scale-label">Aa <small>${this._fontScaleLabel()}</small></span>
+              </button>
+              <button class="ha-btn icon-btn" id="close-modal-btn" title="Close"><ha-icon icon="mdi:close"></ha-icon></button>
+            </div>
           </div>
-          <div class="modal-body">
-            <div class="detail-overview-header" style="display: flex; gap: 14px; margin-bottom: 16px; padding: 14px; border-radius: 12px; background: var(--secondary-background-color, rgba(127,127,127,0.06)); align-items: flex-start; border: 1px solid var(--divider-color, #e0e0e0);">
-              <div class="detail-thumb-wrap" style="position: relative; cursor: pointer; flex-shrink: 0;" title="Click to enlarge image">
+          <div class="modal-body detail-modal-body">
+            <div class="detail-overview-header">
+              <div class="detail-thumb-wrap" title="Click to enlarge image">
                 ${
                   w.image_url
-                    ? `<img class="detail-wine-thumb preview-image-clickable" src="${escapeHtml(w.image_url)}" alt="${escapeHtml(w.name)}" data-action="preview-image" data-id="${w.id}" style="width: 80px; height: 106px; border-radius: 8px; object-fit: cover; box-shadow: 0 2px 8px rgba(0,0,0,0.18);" />
-                       <div class="thumb-zoom-overlay" style="position: absolute; bottom: 4px; right: 4px; background: rgba(0,0,0,0.65); color: #fff; border-radius: 4px; padding: 2px 4px; font-size: 10px; display: flex; align-items: center; pointer-events: none;">
+                    ? `<img class="detail-wine-thumb preview-image-clickable" src="${escapeHtml(w.image_url)}" alt="${escapeHtml(w.name)}" data-action="preview-image" data-id="${w.id}" />
+                       <div class="thumb-zoom-overlay">
                          <ha-icon icon="mdi:magnify-plus-outline" style="--mdc-icon-size: 14px;"></ha-icon>
                        </div>`
-                    : `<div class="wine-thumb-placeholder type-${escapeHtml(w.wine_type)}" style="width: 80px; height: 106px; border-radius: 8px;">
+                    : `<div class="wine-thumb-placeholder detail-wine-thumb type-${escapeHtml(w.wine_type)}">
                          <ha-icon icon="mdi:glass-wine"></ha-icon>
                        </div>`
                 }
               </div>
-              <div style="flex: 1; min-width: 0;">
-                <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px;">
-                  <span class="type-pill type-${escapeHtml(w.wine_type)}">${escapeHtml(typeLabel)}</span>
-                  <span class="vintage-pill">📅 ${escapeHtml(w.vintage ? String(w.vintage) : "NV")}</span>
-                  ${w.varietal ? `<span class="filter-chip" style="padding: 2px 8px; font-size: 11px;">🍇 ${escapeHtml(w.varietal)}</span>` : ""}
-                  <span class="drink-pill" style="border-color:${statusMeta.color}; color:${statusMeta.color}; font-size: 11px;">
+              <div class="detail-overview-main">
+                <div class="detail-badges-row">
+                  <span class="type-pill detail-pill type-${escapeHtml(w.wine_type)}">${escapeHtml(typeLabel)}</span>
+                  <span class="vintage-pill detail-pill">📅 ${escapeHtml(w.vintage ? String(w.vintage) : "NV")}</span>
+                  ${w.varietal ? `<span class="filter-chip detail-pill">🍇 ${escapeHtml(w.varietal)}</span>` : ""}
+                  <span class="drink-pill detail-pill" style="border-color:${statusMeta.color}; color:${statusMeta.color};">
                     ${escapeHtml(statusMeta.label)} (${escapeHtml(drinkYears)})
                   </span>
                 </div>
-                <div style="font-size: 13px; font-weight: 500; color: var(--secondary-text-color);">${escapeHtml(w.winery)}</div>
-                <div style="font-size: 17px; font-weight: 700; margin: 2px 0 4px; line-height: 1.3;">${escapeHtml(w.name)}</div>
-                <div style="font-size: 12px; color: var(--secondary-text-color); margin-bottom: 6px;">
+                <div class="detail-winery-text">${escapeHtml(w.winery)}</div>
+                <div class="detail-wine-title">${escapeHtml(w.name)}</div>
+                <div class="detail-origin-line">
                   🌍 ${escapeHtml([w.region, w.country].filter(Boolean).join(" • ") || "Origin not specified")}
                   ${(w.storage_location || w.last_storage_location) ? ` • <strong style="color: var(--primary-color);">📍 ${escapeHtml(w.storage_location || w.last_storage_location)}</strong>` : ""}
                   ${(df.purchase_location || w.purchase_location || w.last_purchase_location) ? ` • <span>🛒 ${escapeHtml(df.purchase_location || w.purchase_location || w.last_purchase_location)}</span>` : ""}
                   ${(df.purchase_price !== "" && df.purchase_price !== null && df.purchase_price !== undefined) ? ` • <span>💰 ${escapeHtml(String(df.purchase_price))} ${escapeHtml(this._currency)}</span>` : (w.purchase_price !== null && w.purchase_price !== undefined) ? ` • <span>💰 ${escapeHtml(String(w.purchase_price))} ${escapeHtml(this._currency)}</span>` : ""}
                 </div>
-                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                <div class="detail-ratings-bar">
                   ${
                     w.vivino_url
-                      ? `<a class="vivino-badge" href="${escapeHtml(w.vivino_url)}" target="_blank" rel="noopener noreferrer" title="Open on Vivino (opens in new tab)" style="text-decoration: none;">
+                      ? `<a class="vivino-badge detail-vivino-badge" href="${escapeHtml(w.vivino_url)}" target="_blank" rel="noopener noreferrer" title="Open on Vivino (opens in new tab)">
                            ★ ${escapeHtml(w.vivino_rating ? Number(w.vivino_rating).toFixed(1) : "Vivino")}
                            <ha-icon icon="mdi:open-in-new" style="--mdc-icon-size: 13px; margin-left: 2px;"></ha-icon>
                          </a>`
                       : w.vivino_rating
-                      ? `<span class="vivino-badge">★ ${escapeHtml(Number(w.vivino_rating).toFixed(1))}</span>`
-                      : `<span class="vivino-badge muted">No Vivino rating</span>`
+                      ? `<span class="vivino-badge detail-vivino-badge">★ ${escapeHtml(Number(w.vivino_rating).toFixed(1))}</span>`
+                      : `<span class="vivino-badge muted detail-vivino-badge">No Vivino rating</span>`
                   }
                   ${
                     (w.vivino_url || w.vivino_rating || df.vivino_url || df.vivino_rating)
-                      ? `<button type="button" class="ha-btn secondary-btn" id="btn-detail-unlink-vivino" data-id="${w.id}" style="color: var(--error-color, #c62828); border-color: rgba(198, 40, 40, 0.35); font-size: 11px; padding: 2px 8px; display: inline-flex; align-items: center; gap: 4px;" title="Remove incorrect Vivino link and ratings">
+                      ? `<button type="button" class="ha-btn secondary-btn detail-small-btn" id="btn-detail-unlink-vivino" data-id="${w.id}" style="color: var(--error-color, #c62828); border-color: rgba(198, 40, 40, 0.35);" title="Remove incorrect Vivino link and ratings">
                            <ha-icon icon="mdi:link-off" style="--mdc-icon-size: 14px;"></ha-icon>
                            <span>Remove Vivino Link</span>
                          </button>`
@@ -2106,36 +2156,36 @@ class WineInventoryCard extends HTMLElement {
                   }
                   ${
                     w.vivino_url && (w.vivino_match_confidence === "high" || w.vivino_match_confidence === "confirmed")
-                      ? `<span class="filter-chip" style="padding: 2px 8px; font-size: 11px; border-color: rgba(46,125,50,0.5); color: #2e7d32;" title="${w.vivino_match_confidence === "high" ? "Automatically verified: exact producer + cuvée and AI label check" : "Confirmed by you"}">✓ ${w.vivino_match_confidence === "high" ? "Verified" : "Confirmed"}</span>`
+                      ? `<span class="filter-chip detail-pill" style="border-color: rgba(46,125,50,0.5); color: #2e7d32;" title="${w.vivino_match_confidence === "high" ? "Automatically verified: exact producer + cuvée and AI label check" : "Confirmed by you"}">✓ ${w.vivino_match_confidence === "high" ? "Verified" : "Confirmed"}</span>`
                       : ""
                   }
-                  ${w.personal_rating ? `<span class="personal-badge">My Rating: ★ ${w.personal_rating}</span>` : ""}
+                  ${w.personal_rating ? `<span class="personal-badge detail-personal-badge">My Rating: ★ ${w.personal_rating}</span>` : ""}
                 </div>
-                <div class="vivino-link-row" style="display: flex; gap: 6px; align-items: center; margin-top: 8px; flex-wrap: wrap;">
-                  <input class="ha-input" id="detail-vivino-link-input" type="url" placeholder="Paste exact Vivino link (…vivino.com/…/w/1234)" style="flex: 1; min-width: 180px; font-size: 12px; padding: 6px 8px;" />
-                  <button type="button" class="ha-btn secondary-btn" id="btn-detail-link-vivino" data-id="${w.id}" style="font-size: 11px; padding: 4px 10px;" title="Link this wine to an exact Vivino page (no matching involved)">
+                <div class="vivino-link-row">
+                  <input class="ha-input detail-vivino-input" id="detail-vivino-link-input" type="url" placeholder="Paste exact Vivino link (…vivino.com/…/w/1234)" />
+                  <button type="button" class="ha-btn secondary-btn detail-small-btn" id="btn-detail-link-vivino" data-id="${w.id}" title="Link this wine to an exact Vivino page (no matching involved)">
                     <ha-icon icon="mdi:link-variant" style="--mdc-icon-size: 14px;"></ha-icon>
                     <span>${this._linkingVivinoId === w.id ? "Linking…" : "Link Vivino"}</span>
                   </button>
                 </div>
-                ${this._vivinoLinkError ? `<div class="scan-error-message" style="font-size: 12px; margin-top: 4px; color: var(--error-color, #c62828);">${escapeHtml(this._vivinoLinkError)}</div>` : ""}
+                ${this._vivinoLinkError ? `<div class="scan-error-message" style="margin-top: 4px; color: var(--error-color, #c62828);">${escapeHtml(this._vivinoLinkError)}</div>` : ""}
 
                 <!-- Bottle Quantity Stepper (+ / -) with 0-Bottle Warning -->
-                <div class="detail-stepper-wrap" style="display: flex; align-items: center; gap: 10px; margin-top: 12px; flex-wrap: wrap;">
-                  <span style="font-size: 13px; font-weight: 600; color: var(--secondary-text-color);">In Cellar:</span>
-                  <div class="stepper-controls" style="display: inline-flex; align-items: center; background: var(--card-background-color, #fff); border: 1px solid var(--divider-color, #ccc); border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08);">
-                    <button type="button" class="ha-btn icon-btn" id="btn-detail-qty-minus" data-id="${w.id}" data-qty="${w.quantity}" title="Decrease bottle count (-1)" style="width: 36px; height: 36px; border: none; border-radius: 0; background: transparent; cursor: pointer;">
+                <div class="detail-stepper-wrap">
+                  <span class="detail-stepper-label">In Cellar:</span>
+                  <div class="stepper-controls">
+                    <button type="button" class="ha-btn icon-btn detail-step-btn" id="btn-detail-qty-minus" data-id="${w.id}" data-qty="${w.quantity}" title="Decrease bottle count (-1)">
                       <ha-icon icon="mdi:minus"></ha-icon>
                     </button>
-                    <span id="detail-qty-display" style="padding: 0 12px; font-weight: 700; font-size: 15px; min-width: 32px; text-align: center; color: var(--primary-color);">
+                    <span id="detail-qty-display" class="detail-qty-value">
                       ${Number(w.quantity || 0)}
                     </span>
-                    <button type="button" class="ha-btn icon-btn" id="btn-detail-qty-plus" data-id="${w.id}" data-qty="${w.quantity}" title="Increase bottle count (+1)" style="width: 36px; height: 36px; border: none; border-radius: 0; background: transparent; cursor: pointer;">
+                    <button type="button" class="ha-btn icon-btn detail-step-btn" id="btn-detail-qty-plus" data-id="${w.id}" data-qty="${w.quantity}" title="Increase bottle count (+1)">
                       <ha-icon icon="mdi:plus"></ha-icon>
                     </button>
                   </div>
-                  <span style="font-size: 12px; color: var(--secondary-text-color);">${Number(w.quantity) === 1 ? "bottle" : "bottles"}</span>
-                  <button type="button" class="ha-btn secondary-btn" id="btn-detail-research-wine" data-id="${w.id}" style="margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-weight: 600;" title="Deep Gemini AI research on producer, terroir & cuvée history" ${this._researchingWineId === w.id ? "disabled" : ""}>
+                  <span class="detail-stepper-unit">${Number(w.quantity) === 1 ? "bottle" : "bottles"}</span>
+                  <button type="button" class="ha-btn secondary-btn detail-research-btn" id="btn-detail-research-wine" data-id="${w.id}" title="Deep Gemini AI research on producer, terroir & cuvée history" ${this._researchingWineId === w.id ? "disabled" : ""}>
                     <ha-icon icon="mdi:auto-fix" style="color: var(--primary-color);"></ha-icon>
                     <span>${this._researchingWineId === w.id ? "Researching..." : "Research Wine (AI)"}</span>
                   </button>
@@ -2145,11 +2195,11 @@ class WineInventoryCard extends HTMLElement {
 
             ${
               this._researchingWineId === w.id
-                ? `<div class="research-loading-banner" style="margin: 14px 0; padding: 14px; border-radius: 10px; background: rgba(3, 169, 244, 0.08); border: 1px solid var(--primary-color); display: flex; align-items: center; gap: 12px;">
+                ? `<div class="research-loading-banner">
                      <ha-icon icon="mdi:loading" class="spin-icon" style="color: var(--primary-color); --mdc-icon-size: 24px; animation: spin 1s linear infinite;"></ha-icon>
                      <div>
-                       <div style="font-weight: 600; font-size: 13px; color: var(--primary-color);">Gemini AI is researching this wine...</div>
-                       <div style="font-size: 12px; color: var(--secondary-text-color);">Investigating winemaker heritage, cuvée history, terroir, tasting profile, and pairings.</div>
+                       <div class="research-loading-title">Gemini AI is researching this wine...</div>
+                       <div class="research-loading-sub">Investigating winemaker heritage, cuvée history, terroir, tasting profile, and pairings.</div>
                      </div>
                    </div>`
                 : ""
@@ -2165,113 +2215,113 @@ class WineInventoryCard extends HTMLElement {
 
             ${
               research
-                ? `<div class="research-results-card" style="margin: 16px 0; border: 1px solid var(--divider-color, #e0e0e0); border-radius: 12px; padding: 16px; background: var(--secondary-background-color, rgba(127,127,127,0.04)); box-shadow: 0 1px 4px rgba(0,0,0,0.05);">
-                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                       <div style="display: flex; align-items: center; gap: 8px;">
+                ? `<div class="research-results-card">
+                     <div class="research-header-row">
+                       <div class="research-header-title">
                          <ha-icon icon="mdi:auto-fix" style="color: var(--primary-color);"></ha-icon>
-                         <strong style="font-size: 14px;">Sommelier &amp; Producer AI Research</strong>
+                         <strong>Sommelier &amp; Producer AI Research</strong>
                        </div>
                        <button type="button" class="ha-btn secondary-btn icon-btn" id="btn-re-research-wine" data-id="${w.id}" title="Re-run Gemini AI Research">
                          <ha-icon icon="mdi:refresh"></ha-icon>
                        </button>
                      </div>
-                     ${research.summary ? `<div style="font-size: 13px; font-weight: 500; font-style: italic; margin-bottom: 12px; line-height: 1.5; color: var(--primary-text-color);">${escapeHtml(research.summary)}</div>` : ""}
+                     ${research.summary ? `<div class="research-summary-text">${escapeHtml(research.summary)}</div>` : ""}
                      ${
                        research.taste_profile
                          ? `
-                         <div class="taste-sliders-card" style="margin: 6px 0 12px; border: 1px solid var(--divider-color, #e0e0e0); border-radius: 10px; padding: 12px; background: var(--card-background-color, #fff);">
-                           <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 12px;">
+                         <div class="taste-sliders-card">
+                           <div class="taste-sliders-heading">
                              <ha-icon icon="mdi:tune-vertical-variant" style="color: var(--primary-color); --mdc-icon-size: 16px;"></ha-icon>
-                             <strong style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--primary-color);">Structural Taste Profile</strong>
+                             <strong>Structural Taste Profile</strong>
                            </div>
-                           <div style="display: flex; flex-direction: column; gap: 12px;">
+                           <div class="taste-sliders-list">
                              <!-- Soft vs Acidic -->
                              <div class="taste-slider-item">
-                               <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11px; margin-bottom: 4px;">
-                                 <span style="font-weight: 600; color: ${Number(research.taste_profile.soft_vs_acidic) <= 40 ? 'var(--primary-color)' : 'var(--secondary-text-color)'};">Soft / Round</span>
-                                 <span style="font-size: 11px; font-weight: 700; color: var(--primary-color); background: rgba(166,26,46,0.08); padding: 1px 8px; border-radius: 10px;">
+                               <div class="taste-slider-labels">
+                                 <span class="${Number(research.taste_profile.soft_vs_acidic) <= 40 ? 'taste-pole-active' : 'taste-pole-muted'}">Soft / Round</span>
+                                 <span class="taste-badge">
                                    ${escapeHtml(research.taste_profile.soft_vs_acidic_label || (Number(research.taste_profile.soft_vs_acidic) < 40 ? 'Soft & Mellow' : Number(research.taste_profile.soft_vs_acidic) > 60 ? 'Crisp & Acidic' : 'Balanced Acidity'))} (${Math.round(Number(research.taste_profile.soft_vs_acidic || 50))}%)
                                  </span>
-                                 <span style="font-weight: 600; color: ${Number(research.taste_profile.soft_vs_acidic) >= 60 ? 'var(--primary-color)' : 'var(--secondary-text-color)'};">Acidic / Crisp</span>
+                                 <span class="${Number(research.taste_profile.soft_vs_acidic) >= 60 ? 'taste-pole-active' : 'taste-pole-muted'}">Acidic / Crisp</span>
                                </div>
-                               <div style="position: relative; height: 8px; background: var(--secondary-background-color, #eee); border-radius: 6px; border: 1px solid var(--divider-color, #ddd);">
-                                 <div style="position: absolute; left: 0; top: 0; bottom: 0; width: ${Math.max(4, Math.min(100, Number(research.taste_profile.soft_vs_acidic || 50)))}%; background: linear-gradient(90deg, #c084fc, #a61a2e); border-radius: 5px;"></div>
-                                 <div style="position: absolute; left: ${Math.max(2, Math.min(98, Number(research.taste_profile.soft_vs_acidic || 50)))}%; top: 50%; transform: translate(-50%, -50%); width: 14px; height: 14px; background: #fff; border: 3px solid var(--primary-color, #a61a2e); border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,0.3);"></div>
-                                </div>
+                               <div class="taste-track">
+                                 <div class="taste-fill" style="width: ${Math.max(4, Math.min(100, Number(research.taste_profile.soft_vs_acidic || 50)))}%; background: linear-gradient(90deg, #c084fc, #a61a2e);"></div>
+                                 <div class="taste-thumb" style="left: ${Math.max(2, Math.min(98, Number(research.taste_profile.soft_vs_acidic || 50)))}%;"></div>
+                               </div>
                              </div>
 
                              <!-- Light vs Bold -->
                              <div class="taste-slider-item">
-                               <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11px; margin-bottom: 4px;">
-                                 <span style="font-weight: 600; color: ${Number(research.taste_profile.light_vs_bold) <= 40 ? 'var(--primary-color)' : 'var(--secondary-text-color)'};">Light-Bodied</span>
-                                 <span style="font-size: 11px; font-weight: 700; color: var(--primary-color); background: rgba(166,26,46,0.08); padding: 1px 8px; border-radius: 10px;">
+                               <div class="taste-slider-labels">
+                                 <span class="${Number(research.taste_profile.light_vs_bold) <= 40 ? 'taste-pole-active' : 'taste-pole-muted'}">Light-Bodied</span>
+                                 <span class="taste-badge">
                                    ${escapeHtml(research.taste_profile.light_vs_bold_label || (Number(research.taste_profile.light_vs_bold) < 40 ? 'Light & Elegant' : Number(research.taste_profile.light_vs_bold) > 60 ? 'Bold & Powerful' : 'Medium-Bodied'))} (${Math.round(Number(research.taste_profile.light_vs_bold || 50))}%)
                                  </span>
-                                 <span style="font-weight: 600; color: ${Number(research.taste_profile.light_vs_bold) >= 60 ? 'var(--primary-color)' : 'var(--secondary-text-color)'};">Bold / Full</span>
+                                 <span class="${Number(research.taste_profile.light_vs_bold) >= 60 ? 'taste-pole-active' : 'taste-pole-muted'}">Bold / Full</span>
                                </div>
-                               <div style="position: relative; height: 8px; background: var(--secondary-background-color, #eee); border-radius: 6px; border: 1px solid var(--divider-color, #ddd);">
-                                 <div style="position: absolute; left: 0; top: 0; bottom: 0; width: ${Math.max(4, Math.min(100, Number(research.taste_profile.light_vs_bold || 50)))}%; background: linear-gradient(90deg, #fcd34d, #831843); border-radius: 5px;"></div>
-                                 <div style="position: absolute; left: ${Math.max(2, Math.min(98, Number(research.taste_profile.light_vs_bold || 50)))}%; top: 50%; transform: translate(-50%, -50%); width: 14px; height: 14px; background: #fff; border: 3px solid var(--primary-color, #a61a2e); border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,0.3);"></div>
-                                </div>
+                               <div class="taste-track">
+                                 <div class="taste-fill" style="width: ${Math.max(4, Math.min(100, Number(research.taste_profile.light_vs_bold || 50)))}%; background: linear-gradient(90deg, #fcd34d, #831843);"></div>
+                                 <div class="taste-thumb" style="left: ${Math.max(2, Math.min(98, Number(research.taste_profile.light_vs_bold || 50)))}%;"></div>
+                               </div>
                              </div>
 
                              <!-- Dry vs Sweet -->
                              <div class="taste-slider-item">
-                               <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11px; margin-bottom: 4px;">
-                                 <span style="font-weight: 600; color: ${Number(research.taste_profile.dry_vs_sweet) <= 40 ? 'var(--primary-color)' : 'var(--secondary-text-color)'};">Bone Dry</span>
-                                 <span style="font-size: 11px; font-weight: 700; color: var(--primary-color); background: rgba(166,26,46,0.08); padding: 1px 8px; border-radius: 10px;">
+                               <div class="taste-slider-labels">
+                                 <span class="${Number(research.taste_profile.dry_vs_sweet) <= 40 ? 'taste-pole-active' : 'taste-pole-muted'}">Bone Dry</span>
+                                 <span class="taste-badge">
                                    ${escapeHtml(research.taste_profile.dry_vs_sweet_label || (Number(research.taste_profile.dry_vs_sweet) < 25 ? 'Bone Dry' : Number(research.taste_profile.dry_vs_sweet) < 50 ? 'Dry' : Number(research.taste_profile.dry_vs_sweet) < 75 ? 'Off-Dry' : 'Sweet'))} (${Math.round(Number(research.taste_profile.dry_vs_sweet || 10))}%)
                                  </span>
-                                 <span style="font-weight: 600; color: ${Number(research.taste_profile.dry_vs_sweet) >= 60 ? 'var(--primary-color)' : 'var(--secondary-text-color)'};">Sweet / Luscious</span>
+                                 <span class="${Number(research.taste_profile.dry_vs_sweet) >= 60 ? 'taste-pole-active' : 'taste-pole-muted'}">Sweet / Luscious</span>
                                </div>
-                               <div style="position: relative; height: 8px; background: var(--secondary-background-color, #eee); border-radius: 6px; border: 1px solid var(--divider-color, #ddd);">
-                                 <div style="position: absolute; left: 0; top: 0; bottom: 0; width: ${Math.max(4, Math.min(100, Number(research.taste_profile.dry_vs_sweet || 10)))}%; background: linear-gradient(90deg, #93c5fd, #f59e0b); border-radius: 5px;"></div>
-                                 <div style="position: absolute; left: ${Math.max(2, Math.min(98, Number(research.taste_profile.dry_vs_sweet || 10)))}%; top: 50%; transform: translate(-50%, -50%); width: 14px; height: 14px; background: #fff; border: 3px solid var(--primary-color, #a61a2e); border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,0.3);"></div>
-                                </div>
+                               <div class="taste-track">
+                                 <div class="taste-fill" style="width: ${Math.max(4, Math.min(100, Number(research.taste_profile.dry_vs_sweet || 10)))}%; background: linear-gradient(90deg, #93c5fd, #f59e0b);"></div>
+                                 <div class="taste-thumb" style="left: ${Math.max(2, Math.min(98, Number(research.taste_profile.dry_vs_sweet || 10)))}%;"></div>
+                               </div>
                              </div>
                            </div>
                          </div>
                          `
                          : ""
                      }
-                     <div style="display: flex; flex-direction: column; gap: 10px;">
+                     <div class="research-blocks-list">
                        ${
                          research.producer_history
-                           ? `<div class="research-block" style="padding: 10px; background: var(--card-background-color, #fff); border-radius: 8px; border: 1px solid var(--divider-color, #eee);">
-                                <strong style="display: block; font-size: 12px; color: var(--primary-color); margin-bottom: 4px;">🏰 Producer &amp; Winery Heritage</strong>
-                                <div style="font-size: 12px; line-height: 1.5; color: var(--primary-text-color);">${escapeHtml(research.producer_history)}</div>
+                           ? `<div class="research-block">
+                                <strong class="research-block-title">🏰 Producer &amp; Winery Heritage</strong>
+                                <div class="research-block-body">${escapeHtml(research.producer_history)}</div>
                               </div>`
                            : ""
                        }
                        ${
                          research.wine_and_terroir
-                           ? `<div class="research-block" style="padding: 10px; background: var(--card-background-color, #fff); border-radius: 8px; border: 1px solid var(--divider-color, #eee);">
-                                <strong style="display: block; font-size: 12px; color: var(--primary-color); margin-bottom: 4px;">🍇 The Wine, Vineyards &amp; Terroir</strong>
-                                <div style="font-size: 12px; line-height: 1.5; color: var(--primary-text-color);">${escapeHtml(research.wine_and_terroir)}</div>
+                           ? `<div class="research-block">
+                                <strong class="research-block-title">🍇 The Wine, Vineyards &amp; Terroir</strong>
+                                <div class="research-block-body">${escapeHtml(research.wine_and_terroir)}</div>
                               </div>`
                            : ""
                        }
                        ${
                          research.tasting_profile
-                           ? `<div class="research-block" style="padding: 10px; background: var(--card-background-color, #fff); border-radius: 8px; border: 1px solid var(--divider-color, #eee);">
-                                <strong style="display: block; font-size: 12px; color: var(--primary-color); margin-bottom: 4px;">🍷 Tasting Profile &amp; Cellar Longevity</strong>
-                                <div style="font-size: 12px; line-height: 1.5; color: var(--primary-text-color);">${escapeHtml(research.tasting_profile)}</div>
+                           ? `<div class="research-block">
+                                <strong class="research-block-title">🍷 Tasting Profile &amp; Cellar Longevity</strong>
+                                <div class="research-block-body">${escapeHtml(research.tasting_profile)}</div>
                               </div>`
                            : ""
                        }
                        ${
                          research.serving_and_pairing
-                           ? `<div class="research-block" style="padding: 10px; background: var(--card-background-color, #fff); border-radius: 8px; border: 1px solid var(--divider-color, #eee);">
-                                <strong style="display: block; font-size: 12px; color: var(--primary-color); margin-bottom: 4px;">🍽️ Serving &amp; Culinary Pairings</strong>
-                                <div style="font-size: 12px; line-height: 1.5; color: var(--primary-text-color);">${escapeHtml(research.serving_and_pairing)}</div>
+                           ? `<div class="research-block">
+                                <strong class="research-block-title">🍽️ Serving &amp; Culinary Pairings</strong>
+                                <div class="research-block-body">${escapeHtml(research.serving_and_pairing)}</div>
                               </div>`
                            : ""
                        }
                        ${
                          research.fun_facts
-                           ? `<div class="research-block" style="padding: 10px; background: var(--card-background-color, #fff); border-radius: 8px; border: 1px solid var(--divider-color, #eee);">
-                                <strong style="display: block; font-size: 12px; color: var(--primary-color); margin-bottom: 4px;">✨ Fascinating Trivia &amp; Accolades</strong>
-                                <div style="font-size: 12px; line-height: 1.5; color: var(--primary-text-color);">${escapeHtml(research.fun_facts)}</div>
+                           ? `<div class="research-block">
+                                <strong class="research-block-title">✨ Fascinating Trivia &amp; Accolades</strong>
+                                <div class="research-block-body">${escapeHtml(research.fun_facts)}</div>
                               </div>`
                            : ""
                        }
@@ -2355,7 +2405,7 @@ class WineInventoryCard extends HTMLElement {
                   <span>Vivino URL</span>
                   ${
                     df.vivino_url
-                      ? `<a href="${escapeHtml(df.vivino_url)}" target="_blank" rel="noopener noreferrer" style="font-size: 11px; color: var(--primary-color); display: inline-flex; align-items: center; gap: 2px; text-decoration: none;">
+                      ? `<a href="${escapeHtml(df.vivino_url)}" target="_blank" rel="noopener noreferrer" class="detail-vivino-open-link">
                            <span>Open in Vivino</span>
                            <ha-icon icon="mdi:open-in-new" style="--mdc-icon-size: 13px;"></ha-icon>
                          </a>`
@@ -2364,7 +2414,7 @@ class WineInventoryCard extends HTMLElement {
                 </label>
                 <input class="ha-input" name="vivino_url" value="${escapeHtml(df.vivino_url)}" />
               </div>
-              <div class="modal-actions full-width" style="display: flex; justify-content: space-between; align-items: center;">
+              <div class="modal-actions full-width detail-form-actions">
                 <button type="button" class="ha-btn danger-btn" id="btn-delete-wine" data-id="${w.id}" style="background: rgba(198, 40, 40, 0.12); color: var(--error-color, #c62828); border-color: rgba(198, 40, 40, 0.35);">
                   <ha-icon icon="mdi:trash-can-outline"></ha-icon>
                   <span>Delete Wine</span>
@@ -2430,6 +2480,8 @@ class WineInventoryCard extends HTMLElement {
               }
             </div>
           </div>
+          </div>
+         </div>
         </div>
       </div>
     `;
@@ -2532,8 +2584,10 @@ class WineInventoryCard extends HTMLElement {
     });
 
     root.querySelectorAll(".filter-chip").forEach((chip) => {
+      if (!chip.dataset.tab) return;
       chip.addEventListener("click", () => {
         this._filterTab = chip.dataset.tab;
+        this._userSelectedTab = true;
         this._render();
       });
     });
@@ -2755,6 +2809,7 @@ class WineInventoryCard extends HTMLElement {
     this.shadowRoot.innerHTML = `
       <style>
         :host {
+          --ls-scale: ${this._effectiveFontScale()};
           display: block;
           color: var(--primary-text-color);
           font-family: var(--paper-font-body1_-_font-family, Roboto, sans-serif);
@@ -3451,7 +3506,7 @@ class WineInventoryCard extends HTMLElement {
           white-space: nowrap;
         }
 
-        /* ================= Mobile-first responsive layer (v0.2.9) ================= */
+        /* ================= Mobile-first responsive layer (v0.2.9 / v0.3.0) ================= */
         /* The query container sits INSIDE the zoomed root, so larger text sizes
            automatically fall back to the narrower (less detailed) layout tiers. */
         .ls-root { zoom: var(--ls-scale, 1); }
@@ -3459,7 +3514,361 @@ class WineInventoryCard extends HTMLElement {
           container-type: inline-size;
           container-name: lscard;
         }
-        .modal-surface { zoom: ${this._effectiveFontScale()}; }
+        /* Modal inner zoom & container query so Detailed view scales cleanly without overflowing viewport */
+        .modal-inner {
+          zoom: var(--ls-scale, 1);
+        }
+        .modal-cq {
+          container-type: inline-size;
+          container-name: lsmodal;
+        }
+        .modal-header-actions {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          flex-shrink: 0;
+        }
+        .modal-header h2 {
+          min-width: 0;
+          flex: 1;
+          line-height: 1.3;
+        }
+        .modal-header h2 span {
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        /* Detailed view scalable styles */
+        .detail-overview-header {
+          display: flex;
+          gap: 14px;
+          margin-bottom: 16px;
+          padding: 14px;
+          border-radius: 12px;
+          background: var(--secondary-background-color, rgba(127, 127, 127, 0.06));
+          align-items: flex-start;
+          border: 1px solid var(--divider-color, #e0e0e0);
+        }
+        .detail-thumb-wrap {
+          position: relative;
+          cursor: pointer;
+          flex-shrink: 0;
+        }
+        .detail-wine-thumb {
+          width: 84px;
+          height: 112px;
+          border-radius: 8px;
+          object-fit: cover;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .thumb-zoom-overlay {
+          position: absolute;
+          bottom: 4px;
+          right: 4px;
+          background: rgba(0, 0, 0, 0.65);
+          color: #fff;
+          border-radius: 4px;
+          padding: 2px 4px;
+          font-size: 10px;
+          display: flex;
+          align-items: center;
+          pointer-events: none;
+        }
+        .detail-overview-main {
+          flex: 1;
+          min-width: 0;
+        }
+        .detail-badges-row {
+          display: flex;
+          gap: 6px;
+          flex-wrap: wrap;
+          margin-bottom: 6px;
+        }
+        .detail-pill {
+          font-size: 11px !important;
+          padding: 3px 8px !important;
+          cursor: default;
+        }
+        .detail-winery-text {
+          font-size: 13px;
+          font-weight: 500;
+          color: var(--secondary-text-color);
+        }
+        .detail-wine-title {
+          font-size: 18px;
+          font-weight: 700;
+          margin: 2px 0 6px;
+          line-height: 1.3;
+          color: var(--primary-text-color);
+        }
+        .detail-origin-line {
+          font-size: 12.5px;
+          color: var(--secondary-text-color);
+          margin-bottom: 8px;
+          line-height: 1.45;
+        }
+        .detail-ratings-bar {
+          display: flex;
+          gap: 8px;
+          align-items: center;
+          flex-wrap: wrap;
+        }
+        .detail-vivino-badge {
+          text-decoration: none;
+          font-size: 12.5px;
+          padding: 3px 9px;
+        }
+        .detail-personal-badge {
+          font-size: 12px;
+        }
+        .detail-small-btn {
+          font-size: 12px;
+          padding: 4px 10px;
+          min-height: 34px;
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+        }
+        .vivino-link-row {
+          display: flex;
+          gap: 6px;
+          align-items: center;
+          margin-top: 8px;
+          flex-wrap: wrap;
+        }
+        .detail-vivino-input {
+          flex: 1;
+          min-width: 180px;
+          font-size: 13px;
+          padding: 7px 10px;
+        }
+        .detail-stepper-wrap {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          margin-top: 12px;
+          flex-wrap: wrap;
+        }
+        .detail-stepper-label {
+          font-size: 13px;
+          font-weight: 600;
+          color: var(--secondary-text-color);
+        }
+        .stepper-controls {
+          display: inline-flex;
+          align-items: center;
+          background: var(--card-background-color, #fff);
+          border: 1px solid var(--divider-color, #ccc);
+          border-radius: 8px;
+          overflow: hidden;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+        }
+        .detail-step-btn {
+          width: 40px;
+          height: 40px;
+          border: none;
+          border-radius: 0;
+          background: transparent;
+          cursor: pointer;
+        }
+        .detail-qty-value {
+          padding: 0 12px;
+          font-weight: 700;
+          font-size: 16px;
+          min-width: 32px;
+          text-align: center;
+          color: var(--primary-color);
+        }
+        .detail-stepper-unit {
+          font-size: 12.5px;
+          color: var(--secondary-text-color);
+        }
+        .detail-research-btn {
+          margin-left: auto;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          font-weight: 600;
+          min-height: 40px;
+        }
+        .research-loading-banner {
+          margin: 14px 0;
+          padding: 14px;
+          border-radius: 10px;
+          background: rgba(3, 169, 244, 0.08);
+          border: 1px solid var(--primary-color);
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+        .research-loading-title {
+          font-weight: 600;
+          font-size: 13.5px;
+          color: var(--primary-color);
+        }
+        .research-loading-sub {
+          font-size: 12px;
+          color: var(--secondary-text-color);
+        }
+        .research-results-card {
+          margin: 16px 0;
+          border: 1px solid var(--divider-color, #e0e0e0);
+          border-radius: 12px;
+          padding: 16px;
+          background: var(--secondary-background-color, rgba(127, 127, 127, 0.04));
+          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+        }
+        .research-header-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 12px;
+        }
+        .research-header-title {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 14.5px;
+        }
+        .research-summary-text {
+          font-size: 13.5px;
+          font-weight: 500;
+          font-style: italic;
+          margin-bottom: 12px;
+          line-height: 1.5;
+          color: var(--primary-text-color);
+        }
+        .taste-sliders-card {
+          margin: 6px 0 12px;
+          border: 1px solid var(--divider-color, #e0e0e0);
+          border-radius: 10px;
+          padding: 12px;
+          background: var(--card-background-color, #fff);
+        }
+        .taste-sliders-heading {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          margin-bottom: 12px;
+          font-size: 12px;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          color: var(--primary-color);
+        }
+        .taste-sliders-list {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+        .taste-slider-labels {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          font-size: 11.5px;
+          margin-bottom: 5px;
+          gap: 4px;
+          flex-wrap: wrap;
+        }
+        .taste-pole-active {
+          font-weight: 700;
+          color: var(--primary-color);
+        }
+        .taste-pole-muted {
+          font-weight: 600;
+          color: var(--secondary-text-color);
+        }
+        .taste-badge {
+          font-size: 11.5px;
+          font-weight: 700;
+          color: var(--primary-color);
+          background: rgba(166, 26, 46, 0.08);
+          padding: 1px 8px;
+          border-radius: 10px;
+        }
+        .taste-track {
+          position: relative;
+          height: 8px;
+          background: var(--secondary-background-color, #eee);
+          border-radius: 6px;
+          border: 1px solid var(--divider-color, #ddd);
+        }
+        .taste-fill {
+          position: absolute;
+          left: 0;
+          top: 0;
+          bottom: 0;
+          border-radius: 5px;
+        }
+        .taste-thumb {
+          position: absolute;
+          top: 50%;
+          transform: translate(-50%, -50%);
+          width: 14px;
+          height: 14px;
+          background: #fff;
+          border: 3px solid var(--primary-color, #a61a2e);
+          border-radius: 50%;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+        }
+        .research-blocks-list {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+        .research-block {
+          padding: 10px 12px;
+          background: var(--card-background-color, #fff);
+          border-radius: 8px;
+          border: 1px solid var(--divider-color, #eee);
+        }
+        .research-block-title {
+          display: block;
+          font-size: 12.5px;
+          color: var(--primary-color);
+          margin-bottom: 4px;
+        }
+        .research-block-body {
+          font-size: 12.5px;
+          line-height: 1.5;
+          color: var(--primary-text-color);
+        }
+        .detail-vivino-open-link {
+          font-size: 11.5px;
+          color: var(--primary-color);
+          display: inline-flex;
+          align-items: center;
+          gap: 2px;
+          text-decoration: none;
+        }
+        .detail-form-actions {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }
+        /* Container query inside modal so L / XL font scale or mobile stacks cleanly */
+        @container lsmodal (max-width: 520px) {
+          .detail-overview-header {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 10px;
+          }
+          .form-grid, .split-2 {
+            grid-template-columns: 1fr !important;
+          }
+          .detail-research-btn {
+            margin-left: 0;
+            width: 100%;
+          }
+          .detail-form-actions {
+            flex-direction: column-reverse;
+            align-items: stretch;
+          }
+          .detail-form-actions button {
+            width: 100%;
+          }
+        }
         .search-wrap {
           position: relative;
           display: flex;
@@ -3639,6 +4048,14 @@ class WineInventoryCard extends HTMLElement {
             <button class="ha-btn ${this._viewMode === "list" ? "active-view" : "secondary-btn"} icon-btn" id="btn-toggle-list" title="Line-Item List View">
               <ha-icon icon="mdi:view-list"></ha-icon>
             </button>
+            ${
+              this._config?.show_mobile_app_button !== false
+                ? `<a class="ha-btn secondary-btn" href="/lekkersappie/index.html" target="_blank" rel="noopener noreferrer" title="Open Standalone Mobile App (Installable PWA)" style="text-decoration: none;">
+                    <ha-icon icon="mdi:cellphone-arrow-down"></ha-icon>
+                    <span>Mobile App</span>
+                  </a>`
+                : ""
+            }
             <button class="ha-btn primary-btn" id="btn-scan-bottle">
               <ha-icon icon="mdi:camera-iris"></ha-icon>
               <span>Scan Bottle</span>
@@ -3744,8 +4161,696 @@ class WineInventoryCard extends HTMLElement {
   }
 }
 
+class WineInventoryCardEditor extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._config = {};
+    this._hass = null;
+  }
+
+  setConfig(config) {
+    this._config = {
+      title: "Lekkersappie",
+      default_view: "list",
+      default_tab: "all",
+      font_scale: "",
+      show_mobile_app_button: true,
+      ...(config || {}),
+    };
+    this._render();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+  }
+
+  _emitConfigChanged() {
+    const cfg = { ...this._config };
+    if (!cfg.font_scale) delete cfg.font_scale;
+    this.dispatchEvent(
+      new CustomEvent("config-changed", {
+        detail: { config: cfg },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
+  _render() {
+    if (!this.shadowRoot) return;
+    const c = this._config;
+    this.shadowRoot.innerHTML = `
+      <style>
+        .editor-wrap {
+          display: flex;
+          flex-direction: column;
+          gap: 14px;
+          padding: 12px 4px;
+          font-family: var(--paper-font-body1_-_font-family, Roboto, sans-serif);
+          color: var(--primary-text-color);
+        }
+        .editor-row {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+        .editor-row label {
+          font-size: 13px;
+          font-weight: 600;
+          color: var(--secondary-text-color);
+        }
+        .editor-input {
+          padding: 9px 12px;
+          border-radius: 8px;
+          border: 1px solid var(--divider-color, #ccc);
+          background: var(--card-background-color, #fff);
+          color: var(--primary-text-color);
+          font-size: 14px;
+        }
+        .editor-checkbox {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 14px;
+          cursor: pointer;
+        }
+        .editor-note {
+          font-size: 12px;
+          color: var(--secondary-text-color);
+          background: var(--secondary-background-color, rgba(127,127,127,0.08));
+          padding: 10px 12px;
+          border-radius: 8px;
+          line-height: 1.45;
+        }
+      </style>
+      <div class="editor-wrap">
+        <div class="editor-row">
+          <label for="ed-title">Card Title</label>
+          <input id="ed-title" class="editor-input" type="text" value="${escapeHtml(c.title || "Lekkersappie")}" placeholder="Lekkersappie" />
+        </div>
+        <div class="editor-row">
+          <label for="ed-view">Default Layout View</label>
+          <select id="ed-view" class="editor-input">
+            <option value="list" ${c.default_view !== "grid" ? "selected" : ""}>Line-Item List View (Default)</option>
+            <option value="grid" ${c.default_view === "grid" ? "selected" : ""}>Bottle Card Grid View</option>
+          </select>
+        </div>
+        <div class="editor-row">
+          <label for="ed-tab">Initial Filter Tab</label>
+          <select id="ed-tab" class="editor-input">
+            <option value="all" ${c.default_tab === "all" || !c.default_tab ? "selected" : ""}>In Stock (All Bottles)</option>
+            <option value="ready" ${c.default_tab === "ready" ? "selected" : ""}>Ready to Drink</option>
+            <option value="drink_soon" ${c.default_tab === "drink_soon" ? "selected" : ""}>Drink Soon</option>
+            <option value="red" ${c.default_tab === "red" ? "selected" : ""}>Red Wines</option>
+            <option value="white" ${c.default_tab === "white" ? "selected" : ""}>White Wines</option>
+            <option value="rose" ${c.default_tab === "rose" ? "selected" : ""}>Rosé Wines</option>
+            <option value="sparkling" ${c.default_tab === "sparkling" ? "selected" : ""}>Sparkling Wines</option>
+            <option value="archived" ${c.default_tab === "archived" ? "selected" : ""}>Tasted Archive (0 Stock)</option>
+          </select>
+        </div>
+        <div class="editor-row">
+          <label for="ed-scale">Default Text Size (S / M / L / XL)</label>
+          <select id="ed-scale" class="editor-input">
+            <option value="" ${!c.font_scale ? "selected" : ""}>Use Device Preference (Default M)</option>
+            <option value="0.9" ${String(c.font_scale) === "0.9" ? "selected" : ""}>S (90%)</option>
+            <option value="1" ${String(c.font_scale) === "1" || String(c.font_scale) === "1.0" ? "selected" : ""}>M (100%)</option>
+            <option value="1.15" ${String(c.font_scale) === "1.15" ? "selected" : ""}>L (115%)</option>
+            <option value="1.3" ${String(c.font_scale) === "1.3" ? "selected" : ""}>XL (130%)</option>
+          </select>
+        </div>
+        <label class="editor-checkbox">
+          <input id="ed-mobile-btn" type="checkbox" ${c.show_mobile_app_button !== false ? "checked" : ""} />
+          <span>Show "Mobile App" launcher button in header (<code>/lekkersappie</code>)</span>
+        </label>
+        <div class="editor-note">
+          💡 <strong>Tip:</strong> You can also open the standalone installable mobile app at <code>/lekkersappie/index.html</code> on your phone and add it to your Home Screen.
+        </div>
+      </div>
+    `;
+
+    this.shadowRoot.querySelector("#ed-title")?.addEventListener("input", (e) => {
+      this._config = { ...this._config, title: e.target.value };
+      this._emitConfigChanged();
+    });
+    this.shadowRoot.querySelector("#ed-view")?.addEventListener("change", (e) => {
+      this._config = { ...this._config, default_view: e.target.value };
+      this._emitConfigChanged();
+    });
+    this.shadowRoot.querySelector("#ed-tab")?.addEventListener("change", (e) => {
+      this._config = { ...this._config, default_tab: e.target.value };
+      this._emitConfigChanged();
+    });
+    this.shadowRoot.querySelector("#ed-scale")?.addEventListener("change", (e) => {
+      const val = e.target.value ? parseFloat(e.target.value) : "";
+      this._config = { ...this._config, font_scale: val };
+      this._emitConfigChanged();
+    });
+    this.shadowRoot.querySelector("#ed-mobile-btn")?.addEventListener("change", (e) => {
+      this._config = { ...this._config, show_mobile_app_button: e.target.checked };
+      this._emitConfigChanged();
+    });
+  }
+}
+
+/**
+ * Compact Addable Dashboard Card (`custom:wine-cellar-summary-card`)
+ * Designed to fit neatly on any Home Assistant room/overview page alongside normal HA cards.
+ * Includes KPI tiles, quick Scan/Add actions, standalone Mobile App launcher, and top/recent wines
+ * with 1-tap Wine Detail modal & bottle stepper support.
+ */
+class WineCellarSummaryCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._hass = null;
+    this._config = {};
+    this._wines = [];
+    this._statistics = {};
+    this._cellarName = "Lekkersappie";
+    this._currency = "EUR";
+    this._tempEntity = "";
+    this._humidityEntity = "";
+    this._fontScale = this._loadFontScale();
+    this._helperCard = null;
+  }
+
+  static getStubConfig() {
+    return {
+      title: "Wine Cellar",
+      max_items: 4,
+      filter: "ready_or_recent",
+      show_kpis: true,
+      show_mobile_app_button: true,
+    };
+  }
+
+  static getConfigElement() {
+    return document.createElement("wine-cellar-summary-card-editor");
+  }
+
+  setConfig(config) {
+    this._config = {
+      title: "Wine Cellar",
+      max_items: 4,
+      filter: "ready_or_recent",
+      show_kpis: true,
+      show_mobile_app_button: true,
+      ...(config || {}),
+    };
+    this._render();
+  }
+
+  set hass(hass) {
+    const first = !this._hass;
+    this._hass = hass;
+    if (this._helperCard) {
+      this._helperCard.hass = hass;
+    }
+    if (first) {
+      this._fetchData();
+    } else {
+      this._updateEnv();
+    }
+  }
+
+  getCardSize() {
+    return 4;
+  }
+
+  getGridOptions() {
+    return {
+      columns: 12,
+      min_columns: 6,
+      rows: "auto",
+    };
+  }
+
+  _loadFontScale() {
+    try {
+      const stored = parseFloat(window.localStorage.getItem("lekkersappie_font_scale") || "");
+      if (stored >= 0.8 && stored <= 1.5) return stored;
+    } catch (_) {}
+    return 1.0;
+  }
+
+  _fontScaleLabel() {
+    const scales = WineInventoryCard.FONT_SCALES;
+    let best = scales[1];
+    scales.forEach((s) => {
+      if (Math.abs(s.value - this._fontScale) < Math.abs(best.value - this._fontScale)) best = s;
+    });
+    return best.id;
+  }
+
+  _cycleFontScale() {
+    const scales = WineInventoryCard.FONT_SCALES;
+    const idx = scales.findIndex((s) => s.id === this._fontScaleLabel());
+    const next = scales[(idx + 1) % scales.length];
+    this._fontScale = next.value;
+    try {
+      window.localStorage.setItem("lekkersappie_font_scale", String(next.value));
+    } catch (_) {}
+    if (this._helperCard) {
+      this._helperCard._fontScale = next.value;
+      this._helperCard._render();
+    }
+    this._render();
+  }
+
+  async _fetchData() {
+    if (!this._hass) return;
+    try {
+      const res = await this._hass.callWS({
+        type: "wine_inventory/list",
+        include_out_of_stock: true,
+      });
+      this._wines = res.wines || [];
+      this._statistics = res.statistics || {};
+      this._cellarName = this._config.title || res.cellar_name || "Wine Cellar";
+      this._currency = res.currency || "EUR";
+      this._tempEntity = res.temperature_entity || "";
+      this._humidityEntity = res.humidity_entity || "";
+      this._render();
+    } catch (err) {
+      console.warn("WineCellarSummaryCard failed to load inventory:", err);
+    }
+  }
+
+  _updateEnv() {
+    if (!this.shadowRoot || !this._hass) return;
+    const tEl = this.shadowRoot.querySelector("#sum-temp");
+    if (tEl && this._tempEntity && this._hass.states[this._tempEntity]) {
+      const st = this._hass.states[this._tempEntity];
+      tEl.textContent = `${st.state}${st.attributes.unit_of_measurement || "°C"}`;
+    }
+    const hEl = this.shadowRoot.querySelector("#sum-hum");
+    if (hEl && this._humidityEntity && this._hass.states[this._humidityEntity]) {
+      const st = this._hass.states[this._humidityEntity];
+      hEl.textContent = `${st.state}${st.attributes.unit_of_measurement || "%"}`;
+    }
+  }
+
+  _ensureHelperCard() {
+    if (!this.shadowRoot) return null;
+    let host = this.shadowRoot.querySelector("#summary-modal-host");
+    if (!host) return null;
+    if (!this._helperCard) {
+      this._helperCard = document.createElement("wine-inventory-card");
+      this._helperCard.setConfig({ title: this._cellarName });
+      this._helperCard.hass = this._hass;
+      const origFetch = this._helperCard._fetchInventory.bind(this._helperCard);
+      this._helperCard._fetchInventory = async () => {
+        await origFetch();
+        await this._fetchData();
+      };
+    }
+    this._helperCard._wines = this._wines;
+    this._helperCard._statistics = this._statistics;
+    this._helperCard._currency = this._currency;
+    this._helperCard._fontScale = this._fontScale;
+    if (!host.contains(this._helperCard)) {
+      host.innerHTML = "";
+      host.appendChild(this._helperCard);
+      const style = document.createElement("style");
+      style.textContent = `ha-card { display: none !important; }`;
+      this._helperCard.shadowRoot?.appendChild(style);
+    }
+    return this._helperCard;
+  }
+
+  _getDisplayWines() {
+    const inStock = this._wines.filter((w) => Number(w.quantity || 0) > 0);
+    const mode = this._config.filter || "ready_or_recent";
+    let list = [...inStock];
+    if (mode === "ready") {
+      list = inStock.filter((w) => w.drink_status === "ready" || w.drink_status === "drink_soon");
+    } else if (mode === "top_rated") {
+      list.sort((a, b) => Number(b.vivino_rating || 0) - Number(a.vivino_rating || 0));
+    } else if (mode === "ready_or_recent") {
+      list.sort((a, b) => {
+        const aReady = a.drink_status === "ready" || a.drink_status === "drink_soon" ? 1 : 0;
+        const bReady = b.drink_status === "ready" || b.drink_status === "drink_soon" ? 1 : 0;
+        if (aReady !== bReady) return bReady - aReady;
+        return String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
+      });
+    }
+    const maxItems = Math.max(1, Math.min(12, Number(this._config.max_items || 4)));
+    return list.slice(0, maxItems);
+  }
+
+  _render() {
+    if (!this.shadowRoot) return;
+    const stats = this._statistics || {};
+    const wines = this._getDisplayWines();
+
+    this.shadowRoot.innerHTML = `
+      <style>
+        :host {
+          --ls-scale: ${this._fontScale || 1};
+          display: block;
+          font-family: var(--paper-font-body1_-_font-family, Roboto, sans-serif);
+          color: var(--primary-text-color);
+        }
+        ha-card {
+          padding: 16px;
+          border-radius: var(--ha-card-border-radius, 14px);
+          background: var(--ha-card-background, var(--card-background-color, #fff));
+        }
+        .sum-root {
+          zoom: var(--ls-scale, 1);
+        }
+        .sum-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 12px;
+          flex-wrap: wrap;
+        }
+        .sum-title {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 17px;
+          font-weight: 700;
+          margin: 0;
+        }
+        .sum-brand-badge {
+          width: 28px;
+          height: 28px;
+          border-radius: 7px;
+          background: #ffffff;
+          border: 1px solid #e6e0e2;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          color: #a61a2e;
+          flex-shrink: 0;
+        }
+        .sum-actions {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          flex-wrap: wrap;
+        }
+        .sum-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 5px;
+          padding: 6px 11px;
+          min-height: 36px;
+          border-radius: 9px;
+          font-size: 12.5px;
+          font-weight: 600;
+          border: 1px solid var(--divider-color, #e0e0e0);
+          background: var(--secondary-background-color, rgba(127,127,127,0.08));
+          color: var(--primary-text-color);
+          cursor: pointer;
+          text-decoration: none;
+        }
+        .sum-btn.primary {
+          background: var(--primary-color, #a61a2e);
+          color: var(--text-primary-color, #fff);
+          border-color: transparent;
+        }
+        .sum-kpis {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 8px;
+          margin-bottom: 12px;
+        }
+        .sum-kpi {
+          padding: 8px 10px;
+          border-radius: 10px;
+          background: var(--secondary-background-color, rgba(127,127,127,0.06));
+          border: 1px solid var(--divider-color, #ebebeb);
+          text-align: center;
+        }
+        .sum-kpi strong {
+          display: block;
+          font-size: 16px;
+          color: var(--primary-color, #a61a2e);
+        }
+        .sum-kpi span {
+          font-size: 11px;
+          color: var(--secondary-text-color);
+        }
+        .sum-list {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+        .sum-row {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 8px 10px;
+          border-radius: 10px;
+          border: 1px solid var(--divider-color, #e6e6e6);
+          background: var(--card-background-color, #fff);
+          cursor: pointer;
+        }
+        .sum-row:hover {
+          background: var(--secondary-background-color, rgba(127,127,127,0.04));
+        }
+        .sum-thumb {
+          width: 34px;
+          height: 46px;
+          border-radius: 5px;
+          object-fit: cover;
+          flex-shrink: 0;
+          background: rgba(166,26,46,0.1);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #a61a2e;
+        }
+        .sum-info {
+          flex: 1;
+          min-width: 0;
+        }
+        .sum-wine-name {
+          font-size: 13.5px;
+          font-weight: 600;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          color: var(--primary-text-color);
+        }
+        .sum-wine-sub {
+          font-size: 11.5px;
+          color: var(--secondary-text-color);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .sum-qty-pill {
+          padding: 3px 9px;
+          border-radius: 999px;
+          font-size: 12px;
+          font-weight: 700;
+          background: rgba(166, 26, 46, 0.12);
+          color: #a61a2e;
+          flex-shrink: 0;
+        }
+      </style>
+      <ha-card>
+        <div class="sum-root">
+          <div class="sum-header">
+            <h2 class="sum-title">
+              <span class="sum-brand-badge"><ha-icon icon="mdi:glass-wine" style="--mdc-icon-size: 18px;"></ha-icon></span>
+              <span>${escapeHtml(this._cellarName)}</span>
+            </h2>
+            <div class="sum-actions">
+              <button class="sum-btn" id="sum-font-btn" title="Adjust text size">Aa ${this._fontScaleLabel()}</button>
+              ${
+                this._config.show_mobile_app_button !== false
+                  ? `<a class="sum-btn" href="/lekkersappie/index.html" target="_blank" rel="noopener noreferrer" title="Open Standalone Mobile App">
+                      <ha-icon icon="mdi:cellphone" style="--mdc-icon-size: 16px;"></ha-icon>
+                      <span>App</span>
+                    </a>`
+                  : ""
+              }
+              <button class="sum-btn primary" id="sum-scan-btn">
+                <ha-icon icon="mdi:camera-iris" style="--mdc-icon-size: 16px;"></ha-icon>
+                <span>Scan</span>
+              </button>
+            </div>
+          </div>
+
+          ${
+            this._config.show_kpis !== false
+              ? `<div class="sum-kpis">
+                  <div class="sum-kpi">
+                    <strong>${stats.total_bottles || 0}</strong>
+                    <span>Bottles</span>
+                  </div>
+                  <div class="sum-kpi">
+                    <strong>${stats.ready_to_drink_bottles || 0}</strong>
+                    <span>Ready Now</span>
+                  </div>
+                  <div class="sum-kpi">
+                    <strong>${stats.estimated_cellar_value ? `${Math.round(stats.estimated_cellar_value)} ${escapeHtml(this._currency)}` : (stats.unique_wines || 0)}</strong>
+                    <span>${stats.estimated_cellar_value ? "Est. Value" : "Unique Wines"}</span>
+                  </div>
+                </div>`
+              : ""
+          }
+
+          <div class="sum-list">
+            ${
+              wines.length === 0
+                ? `<div style="text-align: center; padding: 14px; font-size: 12.5px; color: var(--secondary-text-color);">No bottles in stock yet. Tap <strong>Scan</strong> to add one.</div>`
+                : wines
+                    .map(
+                      (w) => `
+                      <div class="sum-row" data-wine-id="${w.id}" title="Tap to open wine details">
+                        ${
+                          w.image_url
+                            ? `<img class="sum-thumb" src="${escapeHtml(w.image_url)}" alt="${escapeHtml(w.name)}" />`
+                            : `<div class="sum-thumb"><ha-icon icon="mdi:glass-wine" style="--mdc-icon-size: 18px;"></ha-icon></div>`
+                        }
+                        <div class="sum-info">
+                          <div class="sum-wine-name">${escapeHtml(w.name)} (${escapeHtml(w.vintage || "NV")})</div>
+                          <div class="sum-wine-sub">
+                            ${escapeHtml(w.winery)}
+                            ${w.vivino_rating ? ` • ★ ${Number(w.vivino_rating).toFixed(1)}` : ""}
+                            ${w.last_storage_location ? ` • 📍 ${escapeHtml(w.last_storage_location)}` : ""}
+                          </div>
+                        </div>
+                        <span class="sum-qty-pill">${Number(w.quantity || 0)}x</span>
+                      </div>
+                    `
+                    )
+                    .join("")
+            }
+          </div>
+        </div>
+      </ha-card>
+      <div id="summary-modal-host"></div>
+    `;
+
+    this._updateEnv();
+    this.shadowRoot.querySelector("#sum-font-btn")?.addEventListener("click", () => this._cycleFontScale());
+    this.shadowRoot.querySelector("#sum-scan-btn")?.addEventListener("click", () => {
+      const helper = this._ensureHelperCard();
+      if (helper) helper._openScanModal(false);
+    });
+    this.shadowRoot.querySelectorAll(".sum-row").forEach((row) => {
+      row.addEventListener("click", () => {
+        const wineId = Number(row.dataset.wineId);
+        const wine = this._wines.find((w) => Number(w.id) === wineId);
+        if (!wine) return;
+        const helper = this._ensureHelperCard();
+        if (helper) helper._openDetailModal(wine);
+      });
+    });
+  }
+}
+
+class WineCellarSummaryCardEditor extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._config = {};
+  }
+
+  setConfig(config) {
+    this._config = {
+      title: "Wine Cellar",
+      max_items: 4,
+      filter: "ready_or_recent",
+      show_kpis: true,
+      show_mobile_app_button: true,
+      ...(config || {}),
+    };
+    this._render();
+  }
+
+  _emit() {
+    this.dispatchEvent(
+      new CustomEvent("config-changed", {
+        detail: { config: { ...this._config } },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
+  _render() {
+    if (!this.shadowRoot) return;
+    const c = this._config;
+    this.shadowRoot.innerHTML = `
+      <style>
+        .ed-wrap { display: flex; flex-direction: column; gap: 12px; padding: 10px 4px; font-family: Roboto, sans-serif; }
+        .ed-row { display: flex; flex-direction: column; gap: 5px; }
+        .ed-row label { font-size: 13px; font-weight: 600; color: var(--secondary-text-color); }
+        .ed-input { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--divider-color, #ccc); font-size: 14px; }
+        .ed-check { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+      </style>
+      <div class="ed-wrap">
+        <div class="ed-row">
+          <label>Card Title</label>
+          <input id="s-title" class="ed-input" type="text" value="${escapeHtml(c.title || "Wine Cellar")}" />
+        </div>
+        <div class="ed-row">
+          <label>Wines to Display</label>
+          <select id="s-filter" class="ed-input">
+            <option value="ready_or_recent" ${c.filter === "ready_or_recent" ? "selected" : ""}>Ready to Drink &amp; Recent</option>
+            <option value="ready" ${c.filter === "ready" ? "selected" : ""}>Ready to Drink Only</option>
+            <option value="top_rated" ${c.filter === "top_rated" ? "selected" : ""}>Highest Vivino Rating</option>
+          </select>
+        </div>
+        <div class="ed-row">
+          <label>Max Bottles Shown (1–12)</label>
+          <input id="s-max" class="ed-input" type="number" min="1" max="12" value="${Number(c.max_items || 4)}" />
+        </div>
+        <label class="ed-check">
+          <input id="s-kpis" type="checkbox" ${c.show_kpis !== false ? "checked" : ""} />
+          <span>Show Summary KPI Tiles</span>
+        </label>
+        <label class="ed-check">
+          <input id="s-app" type="checkbox" ${c.show_mobile_app_button !== false ? "checked" : ""} />
+          <span>Show Mobile App Button (<code>/lekkersappie</code>)</span>
+        </label>
+      </div>
+    `;
+    this.shadowRoot.querySelector("#s-title")?.addEventListener("input", (e) => {
+      this._config = { ...this._config, title: e.target.value };
+      this._emit();
+    });
+    this.shadowRoot.querySelector("#s-filter")?.addEventListener("change", (e) => {
+      this._config = { ...this._config, filter: e.target.value };
+      this._emit();
+    });
+    this.shadowRoot.querySelector("#s-max")?.addEventListener("change", (e) => {
+      this._config = { ...this._config, max_items: Number(e.target.value || 4) };
+      this._emit();
+    });
+    this.shadowRoot.querySelector("#s-kpis")?.addEventListener("change", (e) => {
+      this._config = { ...this._config, show_kpis: e.target.checked };
+      this._emit();
+    });
+    this.shadowRoot.querySelector("#s-app")?.addEventListener("change", (e) => {
+      this._config = { ...this._config, show_mobile_app_button: e.target.checked };
+      this._emit();
+    });
+  }
+}
+
+if (!customElements.get("wine-inventory-card-editor")) {
+  customElements.define("wine-inventory-card-editor", WineInventoryCardEditor);
+}
 if (!customElements.get("wine-inventory-card")) {
   customElements.define("wine-inventory-card", WineInventoryCard);
+}
+if (!customElements.get("wine-cellar-summary-card-editor")) {
+  customElements.define("wine-cellar-summary-card-editor", WineCellarSummaryCardEditor);
+}
+if (!customElements.get("wine-cellar-summary-card")) {
+  customElements.define("wine-cellar-summary-card", WineCellarSummaryCard);
 }
 
 window.customCards = window.customCards || [];
@@ -3753,7 +4858,17 @@ if (!window.customCards.some((c) => c.type === "wine-inventory-card")) {
   window.customCards.push({
     type: "wine-inventory-card",
     name: "Lekkersappie Wine Cellar Card",
-    description: "Lekkersappie: Scan wine labels with Gemini Flash-Lite, enrich with Vivino ratings, and manage cellar stock & notes.",
+    description: "Full interactive Wine Cellar list & grid with Gemini label scanner, Vivino ratings, taste sliders, and stock management.",
     preview: true,
+    documentationURL: "https://github.com/Maartenwiese/lekkersappie-cellar",
+  });
+}
+if (!window.customCards.some((c) => c.type === "wine-cellar-summary-card")) {
+  window.customCards.push({
+    type: "wine-cellar-summary-card",
+    name: "Lekkersappie Cellar Quick Card",
+    description: "Compact Wine Cellar overview card for any Home Assistant page: KPIs, Quick Scan, Mobile App link, and top/ready bottles.",
+    preview: true,
+    documentationURL: "https://github.com/Maartenwiese/lekkersappie-cellar",
   });
 }

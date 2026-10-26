@@ -1,0 +1,200 @@
+"""Unit tests for the standalone Lekkersappie Mobile PWA HTTP API and card editors."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import tempfile
+import unittest
+
+from custom_components.wine_inventory.const import DOMAIN, MOBILE_APP_URL_BASE, VERSION
+from custom_components.wine_inventory.coordinator import WineInventoryCoordinator
+from custom_components.wine_inventory.http_api import (
+    async_handle_pwa_get,
+    async_handle_pwa_post,
+)
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+INTEGRATION_DIR = REPO_ROOT / "custom_components" / "wine_inventory"
+MOBILE_DIR = INTEGRATION_DIR / "frontend" / "mobile"
+
+
+class _StubConfig:
+    def __init__(self, root: str) -> None:
+        self._root = Path(root)
+
+    def path(self, *parts: str) -> str:
+        return str(self._root.joinpath(*parts))
+
+
+class _StubBus:
+    def async_fire(self, event_type: str, event_data: dict) -> None:
+        pass
+
+
+class _StubHass:
+    def __init__(self, root: str) -> None:
+        self.config = _StubConfig(root)
+        self.bus = _StubBus()
+        self.states: dict = {}
+        self.data: dict = {}
+
+    async def async_add_executor_job(self, func, *args):
+        return func(*args)
+
+
+class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
+    """Test the standalone mobile PWA REST backend, manifest, and card registrations."""
+
+    async def asyncSetUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.hass = _StubHass(self._tmpdir.name)
+        self.coordinator = WineInventoryCoordinator(
+            hass=self.hass,
+            entry_id="test_entry",
+            config={"cellar_name": "Test Cellar", "currency": "EUR"},
+        )
+        await self.coordinator.async_initialize()
+        self.hass.data[DOMAIN] = {"test_entry": {"coordinator": self.coordinator}}
+
+    async def asyncTearDown(self) -> None:
+        self._tmpdir.cleanup()
+
+    async def test_pwa_lifecycle_endpoints(self) -> None:
+        """Verify state, add, detail, adjust, update, unlink_vivino, and delete via HTTP API."""
+        status, state = await async_handle_pwa_get(self.hass, "state", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(state["version"], VERSION)
+        self.assertEqual(state["cellar_name"], "Test Cellar")
+        self.assertEqual(state["statistics"]["total_bottles"], 0)
+        self.assertIn("Wine Fridge", state["areas"])
+
+        # Add a bottle via POST /api/wine_inventory/pwa/add
+        status, added = await async_handle_pwa_post(
+            self.hass,
+            "add",
+            {
+                "winery": "Domaine Tempier",
+                "name": "Bandol Rosé",
+                "vintage": 2023,
+                "wine_type": "rose",
+                "varietal": "Mourvèdre, Grenache, Cinsault",
+                "country": "France",
+                "region": "Provence",
+                "quantity": 3,
+                "storage_location": "Wine Fridge",
+                "purchase_location": "Chabrol Wines",
+                "purchase_price": 38.5,
+                "vivino_rating": 4.3,
+                "vivino_url": "https://www.vivino.com/w/12345?year=2023",
+            },
+        )
+        self.assertEqual(status, 200)
+        wine_id = added["wine"]["id"]
+        self.assertEqual(added["statistics"]["total_bottles"], 3)
+
+        # Fetch detail via GET /api/wine_inventory/pwa/detail
+        status, detail = await async_handle_pwa_get(
+            self.hass, "detail", {"wine_id": str(wine_id)}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(detail["wine"]["name"], "Bandol Rosé")
+        self.assertEqual(detail["wine"]["quantity"], 3)
+
+        # Adjust bottle count (-1) via POST /api/wine_inventory/pwa/adjust
+        status, adjusted = await async_handle_pwa_post(
+            self.hass, "adjust", {"wine_id": wine_id, "delta": -1}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(adjusted["wine"]["quantity"], 2)
+
+        # Update metadata via POST /api/wine_inventory/pwa/update
+        status, updated = await async_handle_pwa_post(
+            self.hass,
+            "update",
+            {
+                "wine_id": wine_id,
+                "updates": {
+                    "storage_location": "Wine Cellar",
+                    "purchase_price": 41.0,
+                },
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(updated["wine"]["storage_location"], "Wine Cellar")
+        self.assertEqual(updated["wine"]["purchase_price"], 41.0)
+
+        # Unlink Vivino via POST /api/wine_inventory/pwa/unlink_vivino
+        status, unlinked = await async_handle_pwa_post(
+            self.hass, "unlink_vivino", {"wine_id": wine_id}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(unlinked["wine"]["vivino_url"], "")
+        self.assertIsNone(unlinked["wine"]["vivino_rating"])
+
+        # Delete wine via POST /api/wine_inventory/pwa/delete
+        status, deleted = await async_handle_pwa_post(
+            self.hass, "delete", {"wine_id": wine_id}
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(deleted["deleted"])
+        self.assertEqual(deleted["statistics"]["total_bottles"], 0)
+
+    def test_mobile_pwa_manifest_and_assets_compliance(self) -> None:
+        """Verify PWA manifest and assets meet installable standalone standards."""
+        self.assertEqual(MOBILE_APP_URL_BASE, "/lekkersappie")
+        manifest_path = MOBILE_DIR / "manifest.webmanifest"
+        self.assertTrue(manifest_path.exists())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(manifest["id"], "/lekkersappie/")
+        self.assertEqual(manifest["display"], "standalone")
+        self.assertEqual(manifest["start_url"], "/lekkersappie/index.html")
+        self.assertEqual(manifest["scope"], "/lekkersappie/")
+        self.assertLessEqual(len(manifest["short_name"]), 12)
+
+        icon_sizes = {i["sizes"] for i in manifest["icons"]}
+        self.assertIn("192x192", icon_sizes)
+        self.assertIn("512x512", icon_sizes)
+        purposes = {i["purpose"] for i in manifest["icons"]}
+        self.assertIn("any", purposes)
+        self.assertIn("maskable", purposes)
+
+        for asset in (
+            "index.html",
+            "app.js",
+            "styles.css",
+            "sw.js",
+            "icon-192.png",
+            "icon-512.png",
+            "icon-maskable-512.png",
+            "apple-touch-icon.png",
+            "icon.svg",
+        ):
+            self.assertTrue(
+                (MOBILE_DIR / asset).exists(),
+                f"Expected mobile PWA asset missing: {asset}",
+            )
+
+        html = (MOBILE_DIR / "index.html").read_text(encoding="utf-8")
+        self.assertIn('rel="manifest" href="/lekkersappie/manifest.webmanifest"', html)
+        self.assertIn('rel="apple-touch-icon" href="/lekkersappie/apple-touch-icon.png"', html)
+        self.assertIn('name="apple-mobile-web-app-capable" content="yes"', html)
+
+    def test_lovelace_cards_and_detailed_view_text_sizing(self) -> None:
+        """Verify custom:wine-inventory-card and custom:wine-cellar-summary-card registrations and detail scaling."""
+        card_js = (INTEGRATION_DIR / "frontend" / "wine-inventory-card.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("static getStubConfig()", card_js)
+        self.assertIn("static getConfigElement()", card_js)
+        self.assertIn("wine-inventory-card-editor", card_js)
+        self.assertIn("wine-cellar-summary-card", card_js)
+        self.assertIn("wine-cellar-summary-card-editor", card_js)
+        self.assertIn("btn-detail-font-scale", card_js)
+        self.assertIn(".modal-inner", card_js)
+        self.assertIn("@container lsmodal", card_js)
+
+
+if __name__ == "__main__":
+    unittest.main()

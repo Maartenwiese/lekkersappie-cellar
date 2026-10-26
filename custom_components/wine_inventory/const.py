@@ -6,7 +6,7 @@ from typing import Final
 
 DOMAIN: Final = "wine_inventory"
 NAME: Final = "Lekkersappie"
-VERSION: Final = "0.2.9"
+VERSION: Final = "0.3.0"
 
 # Config & Options keys
 CONF_CELLAR_NAME: Final = "cellar_name"
@@ -32,6 +32,7 @@ COVERS_SUBDIR: Final = "www/wine_inventory/covers"
 EXPORTS_SUBDIR: Final = "www/wine_inventory/exports"
 BACKUPS_SUBDIR: Final = "www/wine_inventory/backups"
 FRONTEND_URL_BASE: Final = "/wine_inventory"
+MOBILE_APP_URL_BASE: Final = "/lekkersappie"
 CARD_JS_FILENAME: Final = "wine-inventory-card.js"
 CARD_RESOURCE_URL: Final = f"{FRONTEND_URL_BASE}/{CARD_JS_FILENAME}?v={VERSION}"
 

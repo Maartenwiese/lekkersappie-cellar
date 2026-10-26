@@ -1,0 +1,56 @@
+{
+  "id": "/lekkersappie/",
+  "name": "Lekkersappie Wine Cellar",
+  "short_name": "Lekkersappie",
+  "description": "AI Wine Cellar Scanner, Sommelier Research & Inventory App for Home Assistant",
+  "start_url": "/lekkersappie/index.html",
+  "scope": "/lekkersappie/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#a61a2e",
+  "categories": ["food", "lifestyle", "utilities"],
+  "icons": [
+    {
+      "src": "/lekkersappie/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/lekkersappie/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/lekkersappie/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/lekkersappie/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Scan Bottle Label",
+      "short_name": "Scan Bottle",
+      "description": "Snap a wine label photo and recognize with Gemini AI",
+      "url": "/lekkersappie/index.html?action=scan",
+      "icons": [{ "src": "/lekkersappie/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Ready to Drink",
+      "short_name": "Ready Now",
+      "description": "View bottles ready to open right now",
+      "url": "/lekkersappie/index.html?filter=ready",
+      "icons": [{ "src": "/lekkersappie/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ]
+}

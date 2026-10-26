@@ -108,6 +108,14 @@ views:
             grid_options:
               columns: 12
               rows: 1
+          - type: custom:wine-cellar-summary-card
+            title: Quick Cellar & Mobile App
+            show_recent: true
+            show_style_bar: true
+            dashboard_path: /lekkersappie-cellar/overview
+            grid_options:
+              columns: full
+              rows: auto
           - type: heading
             heading: Stock by Wine Style
             heading_style: subtitle

@@ -35,6 +35,7 @@ from .const import (
     CARD_RESOURCE_URL,
     DOMAIN,
     FRONTEND_URL_BASE,
+    MOBILE_APP_URL_BASE,
     SERVICE_ADD_WINE,
     SERVICE_ADJUST_QUANTITY,
     SERVICE_CREATE_BACKUP,
@@ -46,30 +47,43 @@ from .const import (
     SERVICE_UPDATE_WINE,
 )
 from .coordinator import WineInventoryCoordinator
+from .http_api import async_register_http_views
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def _async_register_frontend(hass: HomeAssistant) -> None:
-    """Serve wine-inventory-card.js via hass.http and auto-register Lovelace resource."""
+    """Serve wine-inventory-card.js and standalone mobile PWA (/lekkersappie) via hass.http."""
     domain_meta = hass.data.setdefault(DOMAIN, {})
     frontend_dir = Path(__file__).parent / "frontend"
     card_js_path = frontend_dir / CARD_JS_FILENAME
+    mobile_dir = frontend_dir / "mobile"
 
     if not domain_meta.get("_frontend_registered"):
         if hasattr(hass, "http") and hass.http is not None:
             try:
-                await hass.http.async_register_static_paths(
-                    [
+                static_configs = [
+                    StaticPathConfig(
+                        f"{FRONTEND_URL_BASE}/{CARD_JS_FILENAME}",
+                        str(card_js_path),
+                        cache_headers=True,
+                    )
+                ]
+                if mobile_dir.exists():
+                    static_configs.append(
                         StaticPathConfig(
-                            f"{FRONTEND_URL_BASE}/{CARD_JS_FILENAME}",
-                            str(card_js_path),
-                            cache_headers=True,
+                            MOBILE_APP_URL_BASE,
+                            str(mobile_dir),
+                            cache_headers=False,
                         )
-                    ]
-                )
+                    )
+                await hass.http.async_register_static_paths(static_configs)
             except Exception as err:  # noqa: BLE001
                 _LOGGER.debug("Static path already registered or failed: %s", err)
+            try:
+                async_register_http_views(hass)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug("HTTP views already registered or failed: %s", err)
         domain_meta["_frontend_registered"] = True
 
     # Auto-register or update version in Lovelace storage resources if available

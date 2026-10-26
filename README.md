@@ -34,9 +34,15 @@ Built following the [**`homeassistant-ai/skills`**](https://github.com/homeassis
 - **➕ / ➖ 1-Tap Inventory Adjustments & Notes Overview**:
   - Clicking **`+`** on any wine opens a Quick-Add Batch dialog pre-filled with the current timestamp and your last used store & storage location—hit **Save** in 1 tap or add purchase context and notes.
   - Clicking **`-`** opens an **Open / Drink Bottle** dialog where you select which fridge/rack batch you pulled the bottle from, give it a `1–5` personal rating, and record tasting notes. Wines that reach `0` bottles stay preserved in the **Tasted Archive** tab so you always remember what you enjoyed.
-- **🏠 100% Home Assistant-Native Visuals**:
-  - Automatically registers `/wine_inventory/wine-inventory-card.js?v=1.0.0`.
-  - Ships with a complete Home Assistant **`sections` dashboard** (`dashboards/wine-cellar-dashboard.yaml`) featuring native `heading`, `tile`, and `distribution` cards alongside `custom:wine-inventory-card`.
+- **🏠 100% Home Assistant-Native Visuals & Addable Lovelace Cards**:
+  - Automatically registers `/wine_inventory/wine-inventory-card.js`.
+  - Ships with two cards in the Home Assistant UI Card Picker (with visual GUI editors):
+    1. **Lekkersappie Wine Cellar Card** (`custom:wine-inventory-card`) — full cellar manager, label scanner, and tasting archive.
+    2. **Lekkersappie Cellar Quick Card** (`custom:wine-cellar-summary-card`) — compact summary widget you can drop onto any existing Home Assistant dashboard page (showing total bottles, ready-now count, style bar, recent bottles, and 1-tap Scan / Mobile App buttons).
+  - Ships with a complete Home Assistant **`sections` dashboard** (`dashboards/wine-cellar-dashboard.yaml`) featuring native `heading`, `tile`, and `distribution` cards alongside `custom:wine-inventory-card` and `custom:wine-cellar-summary-card`.
+- **📱 Standalone Installable Mobile Web App (`/lekkersappie`)**:
+  - Runs a modern, mobile-first Progressive Web App (PWA) at **`http://<your-home-assistant>:8123/lekkersappie`** in parallel to the native Home Assistant UI.
+  - Installable directly to your iPhone/iPad or Android Home Screen (`display: standalone`) with a thumb-friendly bottom navigation bar, floating `SCAN` camera button, slide-up Wine Details sheet, `Aa` text scaling (`S` / `M` / `L` / `XL`) across all views and modals, and Service Worker caching.
 
 ---
 
@@ -92,14 +98,36 @@ You can either create a dedicated **Lekkersappie** dashboard using our pre-built
    - **Left column (`Cellar Overview`)**: Native `tile` cards for *Total Stock*, *Unique Wines*, *Ready to Drink*, *Drink Soon*, and *Cellar Valuation*, plus a native Home Assistant `distribution` bar chart showing your *Red / White / Rosé / Sparkling / Dessert* split.
    - **Right column (`Lekkersappie — Wine Inventory & Gemini Scanner`)**: The full interactive `custom:wine-inventory-card`.
 
-#### Option B: Add the Lekkersappie Card to an Existing View
-1. Open any dashboard view and click the **Edit (pencil)** icon.
-2. Click **+ Add Card** and search for **Lekkersappie Wine Cellar Card** (or choose **Manual** and enter):
-   ```yaml
-   type: custom:wine-inventory-card
-   title: Lekkersappie
-   ```
+#### Option B: Add a Lekkersappie Card to Any Existing Home Assistant Page
+Both Lekkersappie cards appear directly in the Home Assistant **+ Add Card** picker with a visual GUI editor:
+
+1. Open any dashboard view and click the **Edit (pencil)** icon, then click **+ Add Card**.
+2. Search for **Lekkersappie** and choose either:
+   - **Lekkersappie Cellar Quick Card** (`custom:wine-cellar-summary-card`) — a compact card ideal for your main home/kitchen overview page:
+     ```yaml
+     type: custom:wine-cellar-summary-card
+     title: Lekkersappie Cellar
+     show_recent: true
+     show_style_bar: true
+     dashboard_path: /lekkersappie-cellar/overview
+     ```
+   - **Lekkersappie Wine Cellar Card** (`custom:wine-inventory-card`) — the full interactive cellar inventory and scanner:
+     ```yaml
+     type: custom:wine-inventory-card
+     title: Lekkersappie
+     default_view: list
+     font_scale: 1
+     ```
 3. Click **Save**. *(Tip: If the card doesn't appear right away on mobile or desktop, do a hard browser refresh `Ctrl+Shift+R` / `Cmd+Shift+R` or go to **Settings → Companion App → Debugging → Reset frontend cache**).*
+
+#### Option C: Launch & Install the Standalone Mobile Web App (`/lekkersappie`)
+Lekkersappie serves a parallel, mobile-first web app designed for one-handed phone use in your cellar or kitchen:
+
+1. Open **`http://<your-home-assistant>:8123/lekkersappie`** in Chrome (Android) or Safari (iOS), or tap the **📱 Mobile App** button in the header of any Lekkersappie card.
+2. Tap **📲 Install** in the top bar (or the install banner):
+   - **Android (Chrome / Edge)**: Prompts the native **Install app** dialog and adds **Lekkersappie** to your app drawer.
+   - **iPhone / iPad (Safari)**: Tap Safari’s **Share** button → **Add to Home Screen** to launch Lekkersappie full-screen (`standalone`) with its own white wine-glass app icon.
+3. Adjust text size (`S` / `M` / `L` / `XL`) at any time using the **`Aa`** button in the top bar, in the **Wine Details** header, or in the **App** tab.
 
 ---
 
