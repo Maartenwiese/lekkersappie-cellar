@@ -247,7 +247,7 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
         self.assertIn('id="detail-sheet-body"', app_js)
         self.assertIn("min-height: 0;", styles_css)
         self.assertIn("overflow-y: auto;", styles_css)
-        self.assertIn("touch-action: pan-y;", styles_css)
+        self.assertIn("overscroll-behavior: contain;", styles_css)
 
         # 4b. Real asset view serves every mobile file (regression: HTTP 500 when
         # charset was passed inside content_type to aiohttp web.Response).
@@ -281,6 +281,77 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
         self.assertIn('id="mobile-scan-file"', app_js)
         self.assertIn('id="mobile-scan-library"', app_js)
         self.assertIn("Choose from Library", app_js)
+
+
+    def test_hacs_json_follows_publish_guidance(self) -> None:
+        """hacs.json uses only documented keys, has a name, and avoids the zip_release that broke installs."""
+        hacs = json.loads((REPO_ROOT / "hacs.json").read_text(encoding="utf-8"))
+        allowed = {
+            "name",
+            "content_in_root",
+            "zip_release",
+            "filename",
+            "hide_default_branch",
+            "country",
+            "homeassistant",
+            "hacs",
+            "persistent_directory",
+            "render_readme",
+        }
+        self.assertTrue(set(hacs).issubset(allowed), set(hacs) - allowed)
+        self.assertEqual(hacs["name"], "Lekkersappie")
+        self.assertFalse(hacs.get("content_in_root", False))
+        self.assertNotIn("zip_release", hacs)
+        self.assertRegex(hacs["homeassistant"], r"^\d{4}\.\d{1,2}\.\d+$")
+        manifest = json.loads((INTEGRATION_DIR / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["codeowners"], ["@Maartenwiese"])
+        for key in ("domain", "name", "version", "documentation", "issue_tracker", "codeowners"):
+            self.assertIn(key, manifest)
+
+    def test_v033_mobile_touch_first_stats_config_and_crop(self) -> None:
+        """Stats/Config tabs, touch targets, touch crop, confirm sheet, toast, scroll preservation."""
+        app_js = (MOBILE_DIR / "app.js").read_text(encoding="utf-8")
+        css = (MOBILE_DIR / "styles.css").read_text(encoding="utf-8")
+
+        # Navigation renamed
+        self.assertIn('data-nav="stats"', app_js)
+        self.assertIn('data-nav="config"', app_js)
+        self.assertIn("<span>Stats</span>", app_js)
+        self.assertIn("<span>Config</span>", app_js)
+        self.assertNotIn("<span>Areas</span>", app_js)
+        self.assertNotIn("<span>App</span>", app_js)
+        self.assertIn("⚙️", app_js)
+
+        # Expanded statistics
+        for label in ("Avg. Price / Bottle", "Top Countries", "Top Grapes", "Top Stores",
+                      "Drinking Window", "Highest rated", "Drink first", "Bottles added (30 days)"):
+            self.assertIn(label, app_js)
+
+        # Larger touch targets
+        self.assertIn("min-height: 48px;", css)
+        self.assertIn("touch-action: manipulation;", css)
+        self.assertNotRegex(app_js, r"min-height:\s*[0-3]\dpx")
+
+        # Touch-native crop & rotate
+        for token in ('addEventListener("pointerdown"', 'addEventListener("pointermove"',
+                      "setPointerCapture", 'id="crop-fine-slider"', "_cropGeometry", "devicePixelRatio"):
+            self.assertIn(token, app_js)
+        self.assertIn("touch-action: none; /* finger drags", css)
+
+        # No blocking native dialogs; toast doesn't re-render
+        self.assertNotIn("window.confirm(", app_js)
+        self.assertNotIn("alert(", app_js)
+        self.assertIn("confirmAction(", app_js)
+        toast_body = app_js.split("showToast(msg, kind")[1].split("showError(")[0]
+        self.assertNotIn("this.render()", toast_body)
+
+        # Scroll preservation, form binding, numeric keyboards, pull-to-refresh
+        self.assertIn("_lastRenderedSheet", app_js)
+        self.assertIn("_bindFormState", app_js)
+        self.assertIn('inputmode="numeric"', app_js)
+        self.assertIn('inputmode="decimal"', app_js)
+        self.assertIn("ptr-indicator", app_js)
+        self.assertIn("calc(16px / var(--ls-app-scale", css)
 
 
 if __name__ == "__main__":

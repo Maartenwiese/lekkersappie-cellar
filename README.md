@@ -45,6 +45,9 @@ Built following the [**`homeassistant-ai/skills`**](https://github.com/homeassis
   - **Inherits Home Assistant Authentication**: Automatically reuses your Home Assistant login session (`hassTokens` / synced token with automatic OAuth2 refresh and native `/auth/authorize` login fallback) and enforces `requires_auth = True` on all mobile API endpoints.
   - **Rich Mobile List View & Large (`L`) Default Text**: Defaults to Large (`L`, `115%`) font sizing and displays grape variety (`🍇`), bought/added date (`🗓️`), store (`🛒`), price (`💰`), vintage (`📅`), storage area (`📍`), origin (`🌍`), Vivino badge (`★`), and drinking window status on each line item.
   - **Camera & Photo Library Support**: Scanning a bottle offers both **📷 Take Photo (Camera)** and **🖼️ Choose from Library** with interactive crop & rotate.
+  - **Touch-first design**: 48 px+ tap targets, a finger-friendly **Crop & Rotate** (drag the frame, drag corners/edges to resize, ±90° rotation plus a −20°…+20° straighten slider), swipe-down to close sheets, pull-to-refresh, bottom-sheet confirmations, and numeric keypads for years, quantities and prices.
+  - **📊 Stats tab**: bottles, value, average price, average Vivino rating, drinking-window breakdown, highest-rated and drink-first wines, vintage spread, top countries, grapes and stores, recent activity, and storage areas.
+  - **⚙️ Config tab**: text size, appearance, app installation, and Vivino refresh.
   - Installable directly to your iPhone/iPad or Android Home Screen (`display: standalone`) with a thumb-friendly bottom navigation bar, floating `SCAN` button, smooth-scrolling slide-up Wine Details sheet, `Aa` text scaling (`S` / `M` / `L` / `XL`) across all views and modals, and Service Worker caching.
 
 ---
@@ -130,7 +133,7 @@ Lekkersappie serves a parallel, mobile-first web app designed for one-handed pho
 2. Tap **📲 Install** in the top bar (or the install banner):
    - **Android (Chrome / Edge)**: Prompts the native **Install app** dialog and adds **Lekkersappie** to your app drawer.
    - **iPhone / iPad (Safari)**: Tap Safari’s **Share** button → **Add to Home Screen** to launch Lekkersappie full-screen (`standalone`) with its own white wine-glass app icon.
-3. Adjust text size (`S` / `M` / `L` / `XL`) at any time using the **`Aa`** button in the top bar, in the **Wine Details** header, or in the **App** tab.
+3. Adjust text size (`S` / `M` / `L` / `XL`) at any time using the **`Aa`** button in the top bar, in the **Wine Details** header, or in the **⚙️ Config** tab.
 
 ---
 

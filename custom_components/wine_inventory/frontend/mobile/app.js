@@ -1,5 +1,5 @@
 /**
- * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.3.1)
+ * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.3.3)
  * Runs parallel to the native Home Assistant UI, inherits Home Assistant OAuth2
  * authentication, defaults to Large (L) text scale, and supports Home Screen installation.
  */
@@ -68,7 +68,7 @@ class LekkersappieMobileApp {
       authenticatedUser: null,
       isOnline: navigator.onLine,
 
-      // Navigation: "cellar" | "areas" | "add" | "settings"
+      // Navigation: "cellar" | "stats" | "add" | "config"
       activeNav: "cellar",
       filterTab: "all",
       areaFilter: "",
@@ -115,12 +115,181 @@ class LekkersappieMobileApp {
 
     this._searchDebounce = null;
     this._toastTimer = null;
+    this._cropDrag = null;
+    this._cropRaf = null;
 
     this._applyThemeAndScale();
     this._setupPWAEvents();
+    this._setupTouchGestures();
     this._parseUrlParams();
     this.render();
     this._initAuthAndFetchState();
+  }
+
+  /* ================= Touch helpers: confirm sheet, toast, gestures ================= */
+
+  /**
+   * Touch-friendly replacement for the native confirm dialog: a bottom sheet with large
+   * buttons. Rendered in its own DOM node so it never disturbs app state.
+   */
+  confirmAction({ title, message, confirmLabel = "Confirm", cancelLabel = "Cancel", danger = false }) {
+    return new Promise((resolve) => {
+      const host = document.createElement("div");
+      host.className = "confirm-backdrop";
+      host.setAttribute("role", "dialog");
+      host.setAttribute("aria-modal", "true");
+      host.innerHTML = `
+        <div class="confirm-sheet">
+          <div class="sheet-handle"></div>
+          <h3 class="confirm-title">${esc(title)}</h3>
+          <p class="confirm-message">${esc(message)}</p>
+          <div class="confirm-actions">
+            <button type="button" class="btn btn-lg ${danger ? "btn-danger-solid" : "btn-primary"}" data-confirm="yes">${esc(confirmLabel)}</button>
+            <button type="button" class="btn btn-lg" data-confirm="no">${esc(cancelLabel)}</button>
+          </div>
+        </div>
+      `;
+      const finish = (val) => {
+        host.remove();
+        resolve(val);
+      };
+      host.addEventListener("click", (e) => {
+        if (e.target === host) finish(false);
+        const btn = e.target.closest("[data-confirm]");
+        if (btn) finish(btn.dataset.confirm === "yes");
+      });
+      document.body.appendChild(host);
+      host.querySelector('[data-confirm="no"]')?.focus({ preventScroll: true });
+    });
+  }
+
+  _setupTouchGestures() {
+    // Pull-to-refresh on the Cellar list (native PTR is disabled by overscroll-behavior).
+    let startY = null;
+    let pulling = false;
+    const indicator = () => document.getElementById("ptr-indicator");
+    window.addEventListener(
+      "touchstart",
+      (e) => {
+        if (this.state.activeSheet || this.state.activeNav !== "cellar" || window.scrollY > 0) {
+          startY = null;
+          return;
+        }
+        if (e.touches.length !== 1) return;
+        startY = e.touches[0].clientY;
+        pulling = false;
+      },
+      { passive: true }
+    );
+    window.addEventListener(
+      "touchmove",
+      (e) => {
+        if (startY === null) return;
+        const dy = e.touches[0].clientY - startY;
+        const el = indicator();
+        if (!el) return;
+        if (dy > 8 && window.scrollY <= 0) {
+          pulling = true;
+          const pull = Math.min(dy, 110);
+          el.style.transform = `translate(-50%, ${pull - 50}px) rotate(${pull * 3}deg)`;
+          el.style.opacity = String(Math.min(1, pull / 70));
+          el.classList.toggle("ready", pull >= 75);
+        }
+      },
+      { passive: true }
+    );
+    window.addEventListener(
+      "touchend",
+      () => {
+        const el = indicator();
+        if (pulling && el) {
+          const ready = el.classList.contains("ready");
+          el.style.transform = "";
+          el.style.opacity = "";
+          el.classList.remove("ready");
+          if (ready && this.state.isOnline) {
+            el.classList.add("spinning");
+            this.fetchState().finally(() => {
+              const again = indicator();
+              if (again) again.classList.remove("spinning");
+              this.showToast("Cellar refreshed");
+            });
+          }
+        }
+        startY = null;
+        pulling = false;
+      },
+      { passive: true }
+    );
+
+    // Redraw the crop canvas after orientation / viewport changes.
+    window.addEventListener("resize", () => {
+      if (this.state.activeSheet === "crop") this._drawCropCanvas();
+    });
+  }
+
+  /** Swipe the sheet down by its handle/header to dismiss it. */
+  _bindSheetSwipe() {
+    const surface = this.root.querySelector(".sheet-surface");
+    if (!surface) return;
+    const grips = surface.querySelectorAll(".sheet-handle, .sheet-header");
+    grips.forEach((grip) => {
+      grip.addEventListener("pointerdown", (e) => {
+        if (e.target.closest("button, a, input, select, textarea")) return;
+        if (e.pointerType === "mouse" && e.button !== 0) return;
+        const startY = e.clientY;
+        let dy = 0;
+        try {
+          grip.setPointerCapture(e.pointerId);
+        } catch (_) {
+          /* ignore */
+        }
+        surface.style.transition = "none";
+        const move = (ev) => {
+          dy = Math.max(0, ev.clientY - startY);
+          surface.style.transform = `translateY(${dy}px)`;
+        };
+        const up = () => {
+          grip.removeEventListener("pointermove", move);
+          grip.removeEventListener("pointerup", up);
+          grip.removeEventListener("pointercancel", up);
+          surface.style.transition = "transform 0.18s ease";
+          if (dy > 110) {
+            surface.style.transform = "translateY(100%)";
+            setTimeout(() => this.closeSheet(), 160);
+          } else {
+            surface.style.transform = "";
+          }
+        };
+        grip.addEventListener("pointermove", move);
+        grip.addEventListener("pointerup", up);
+        grip.addEventListener("pointercancel", up);
+      });
+    });
+  }
+
+  closeSheet() {
+    if (this.state.activeSheet === "preview") {
+      this.state.activeSheet = this.state.previousSheet || null;
+      this.state.previewWine = null;
+    } else if (this.state.activeSheet === "crop") {
+      this.state.activeSheet = "scan";
+    } else {
+      this.state.activeSheet = null;
+    }
+    this.render();
+  }
+
+  /** Two-way bind form fields into state so re-renders never discard unsaved edits. */
+  _bindFormState(form, target) {
+    if (!form || !target) return;
+    const sync = (e) => {
+      const el = e.target;
+      if (!el || !el.name) return;
+      target[el.name] = el.value;
+    };
+    form.addEventListener("input", sync);
+    form.addEventListener("change", sync);
   }
 
   async _initAuthAndFetchState() {
@@ -379,14 +548,34 @@ class LekkersappieMobileApp {
     }
   }
 
-  showToast(msg) {
+  /**
+   * Show a toast in its own DOM node. Never calls render(): a full re-render
+   * would steal focus, close the on-screen keyboard, and reset scroll position.
+   */
+  showToast(msg, kind = "info") {
     this.state.toastMessage = msg;
-    this.render();
+    let host = document.getElementById("ls-toast-host");
+    if (!host) {
+      host = document.createElement("div");
+      host.id = "ls-toast-host";
+      host.setAttribute("role", "status");
+      host.setAttribute("aria-live", "polite");
+      document.body.appendChild(host);
+    }
+    host.innerHTML = `<div class="toast ${kind === "error" ? "toast-error" : ""}">${esc(msg)}</div>`;
     clearTimeout(this._toastTimer);
-    this._toastTimer = setTimeout(() => {
-      this.state.toastMessage = "";
-      this.render();
-    }, 2600);
+    this._toastTimer = setTimeout(
+      () => {
+        this.state.toastMessage = "";
+        const h = document.getElementById("ls-toast-host");
+        if (h) h.innerHTML = "";
+      },
+      kind === "error" ? 4200 : 2400
+    );
+  }
+
+  showError(prefix, err) {
+    this.showToast(`${prefix}: ${err?.message || err}`, "error");
   }
 
   async apiGet(action, params = {}) {
@@ -590,9 +779,12 @@ class LekkersappieMobileApp {
     const cur = Number(wine.quantity || 0);
     if (delta < 0 && cur <= 0) return;
     if (delta < 0 && cur === 1) {
-      const ok = window.confirm(
-        `⚠️ WARNING: Reducing the bottle count to 0 will mark "${wine.winery ? wine.winery + " – " : ""}${wine.name}" as consumed / out of stock.\n\nConfirm reducing quantity to 0?`
-      );
+      const ok = await this.confirmAction({
+        title: "Last bottle",
+        message: `Reducing to 0 marks "${wine.winery ? wine.winery + " – " : ""}${wine.name}" as consumed. It moves to the Archive and can be restocked later.`,
+        confirmLabel: "Yes, set to 0",
+        danger: true,
+      });
       if (!ok) return;
     }
     try {
@@ -603,7 +795,7 @@ class LekkersappieMobileApp {
       await this.fetchState();
       this.showToast(delta > 0 ? "Added +1 bottle" : "Opened 1 bottle (-1)");
     } catch (err) {
-      alert(`Failed to update stock: ${err?.message || err}`);
+      this.showError("Failed to update stock", err);
     }
   }
 
@@ -748,8 +940,8 @@ class LekkersappieMobileApp {
                 <span>Launch full-screen from your phone’s Home Screen</span>
               </div>
               <div style="display:flex; gap:6px; align-items:center;">
-                <button class="btn btn-primary" id="btn-banner-install" style="padding:7px 12px; min-height:36px; font-size:12.5px;">Install</button>
-                <button class="btn btn-icon" id="btn-banner-dismiss" style="min-width:34px; min-height:34px; padding:4px;" aria-label="Dismiss">✕</button>
+                <button class="btn btn-primary" id="btn-banner-install" style="padding:8px 14px;">Install</button>
+                <button class="btn btn-icon" id="btn-banner-dismiss" aria-label="Dismiss">✕</button>
               </div>
             </div>`
           : ""
@@ -793,7 +985,7 @@ class LekkersappieMobileApp {
           this.state.areaFilter
             ? `<div style="margin-bottom:8px; display:flex; align-items:center; justify-content:space-between; padding:6px 12px; border-radius:10px; background:var(--brand-soft); color:var(--brand); font-size:12.5px; font-weight:700;">
                 <span>📍 Filtered by Area: ${esc(this.state.areaFilter)}</span>
-                <button class="btn" id="btn-clear-area-filter" style="min-height:28px; padding:2px 8px; font-size:11.5px;">Show All</button>
+                <button class="btn" id="btn-clear-area-filter" style="min-height:40px; padding:4px 12px; font-size:13px;">Show All</button>
               </div>`
             : ""
         }
@@ -817,49 +1009,220 @@ class LekkersappieMobileApp {
     `;
   }
 
-  _renderAreasAndStatsView() {
-    const stats = this.state.statistics || {};
-    const inStock = this.state.wines.filter((w) => Number(w.quantity || 0) > 0);
-    const areaCounts = {};
-    inStock.forEach((w) => {
-      const loc =
-        (w.active_storage_locations || [])[0] ||
-        w.storage_location ||
-        w.last_storage_location ||
-        "Unassigned Area";
-      areaCounts[loc] = (areaCounts[loc] || 0) + Number(w.quantity || 0);
+  /** Count helper: returns top-N [label, bottles] entries for a key function. */
+  _topCounts(wines, keyFn, limit = 5) {
+    const counts = {};
+    wines.forEach((w) => {
+      const keys = keyFn(w);
+      (Array.isArray(keys) ? keys : [keys]).forEach((k) => {
+        const label = String(k || "").trim();
+        if (!label) return;
+        counts[label] = (counts[label] || 0) + Number(w.quantity || 0);
+      });
     });
-    const areaEntries = Object.entries(areaCounts).sort((a, b) => b[1] - a[1]);
+    return Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit);
+  }
+
+  _renderBarList(entries, total, emptyText) {
+    if (!entries.length) {
+      return `<div class="stat-empty">${esc(emptyText)}</div>`;
+    }
+    return `<div class="bar-list">
+      ${entries
+        .map(([label, count]) => {
+          const pct = total ? Math.round((count / total) * 100) : 0;
+          return `
+            <div class="bar-row">
+              <div class="bar-row-head">
+                <span class="bar-label">${esc(label)}</span>
+                <span class="bar-value">${count} <small>(${pct}%)</small></span>
+              </div>
+              <div class="taste-bar"><div class="taste-bar-fill" style="width:${Math.max(pct, 2)}%; background:var(--brand);"></div></div>
+            </div>`;
+        })
+        .join("")}
+    </div>`;
+  }
+
+  _renderStatsView() {
+    const stats = this.state.statistics || {};
+    const cur = esc(this.state.currency);
+    const inStock = this.state.wines.filter((w) => Number(w.quantity || 0) > 0);
+    const totalBottles = inStock.reduce((s, w) => s + Number(w.quantity || 0), 0);
+    const nowYear = new Date().getFullYear();
+
+    // Price & value (real data only; "—" when unknown)
+    const priced = inStock
+      .map((w) => ({ w, p: w.purchase_price ?? w.last_purchase_price }))
+      .filter((x) => x.p !== null && x.p !== undefined && x.p !== "" && !Number.isNaN(Number(x.p)));
+    const pricedBottles = priced.reduce((s, x) => s + Number(x.w.quantity || 0), 0);
+    const avgPrice = pricedBottles
+      ? priced.reduce((s, x) => s + Number(x.p) * Number(x.w.quantity || 0), 0) / pricedBottles
+      : null;
+    const value = stats.estimated_value ?? stats.estimated_cellar_value ?? null;
+
+    // Ratings
+    const rated = inStock.filter((w) => w.vivino_rating);
+    const avgRating = rated.length
+      ? rated.reduce((s, w) => s + Number(w.vivino_rating), 0) / rated.length
+      : null;
+    const topRated = rated.slice().sort((a, b) => Number(b.vivino_rating) - Number(a.vivino_rating))[0];
+
+    // Vintages
+    const vintages = inStock.map((w) => Number(w.vintage)).filter((v) => v > 1800);
+    const oldest = vintages.length ? Math.min(...vintages) : null;
+    const newest = vintages.length ? Math.max(...vintages) : null;
+    const avgAge = vintages.length
+      ? Math.round((vintages.reduce((s, v) => s + (nowYear - v), 0) / vintages.length) * 10) / 10
+      : null;
+
+    // Drinking window buckets
+    const windowCounts = { ready: 0, drink_soon: 0, hold: 0, past_peak: 0, unknown: 0 };
+    inStock.forEach((w) => {
+      const k = windowCounts[w.drink_status] !== undefined ? w.drink_status : "unknown";
+      windowCounts[k] += Number(w.quantity || 0);
+    });
+    const drinkFirst = inStock
+      .filter((w) => w.drink_until_year)
+      .sort((a, b) => Number(a.drink_until_year) - Number(b.drink_until_year))[0];
+
+    // Activity
+    const cutoff = Date.now() - 30 * 24 * 3600 * 1000;
+    const recentlyAdded = this.state.wines
+      .filter((w) => w.latest_added_at || w.created_at)
+      .sort((a, b) =>
+        String(b.latest_added_at || b.created_at).localeCompare(String(a.latest_added_at || a.created_at))
+      );
+    const addedLast30 = recentlyAdded
+      .filter((w) => new Date(w.latest_added_at || w.created_at).getTime() >= cutoff)
+      .reduce((s, w) => s + Math.max(Number(w.quantity || 0), 1), 0);
+
+    const areaEntries = this._topCounts(
+      inStock,
+      (w) => (w.active_storage_locations || [])[0] || w.storage_location || w.last_storage_location || "Unassigned Area",
+      50
+    );
+    const countryEntries = this._topCounts(inStock, (w) => w.country);
+    const grapeEntries = this._topCounts(inStock, (w) =>
+      String(w.varietal || "")
+        .split(/[,/&+]| and /i)
+        .map((g) => g.trim())
+    );
+    const storeEntries = this._topCounts(inStock, (w) => w.purchase_location || w.last_purchase_location);
+
+    const kpi = (value, label, color = "") => `
+      <div class="kpi-card">
+        <div class="kpi-value" ${color ? `style="color:${color};"` : ""}>${value}</div>
+        <div class="kpi-label">${esc(label)}</div>
+      </div>`;
+
+    const wineLink = (w, sub) =>
+      w
+        ? `<button class="highlight-row" data-detail-id="${w.id}">
+            <span class="highlight-main">
+              <strong>${esc(w.winery)} – ${esc(w.name)}</strong>
+              <small>${esc(sub)}</small>
+            </span>
+            <span class="highlight-chevron">›</span>
+          </button>`
+        : `<div class="stat-empty">—</div>`;
 
     return `
       <div class="section-wrap">
         <div class="kpi-grid">
-          <div class="kpi-card">
-            <div class="kpi-value">${stats.total_bottles || 0}</div>
-            <div class="kpi-label">Bottles in Cellar</div>
+          ${kpi(stats.total_bottles ?? totalBottles, "Bottles in Cellar")}
+          ${kpi(stats.unique_wines ?? inStock.length, "Unique Wines")}
+          ${kpi(value ? `${Math.round(value)} ${cur}` : "—", "Estimated Value")}
+          ${kpi(avgPrice !== null ? `${avgPrice.toFixed(2)} ${cur}` : "—", "Avg. Price / Bottle")}
+          ${kpi(avgRating !== null ? `★ ${avgRating.toFixed(2)}` : "—", `Avg. Vivino (${rated.length} rated)`)}
+          ${kpi(stats.archived_wines ?? 0, "Tasted / Archived")}
+        </div>
+
+        <div class="panel-card">
+          <h3>🍷 Drinking Window</h3>
+          ${this._renderBarList(
+            [
+              ["Ready to Drink", windowCounts.ready],
+              ["Drink Soon", windowCounts.drink_soon],
+              ["Hold / Aging", windowCounts.hold],
+              ["Past Peak", windowCounts.past_peak],
+              ["No Window Set", windowCounts.unknown],
+            ].filter((e) => e[1] > 0),
+            totalBottles,
+            "No bottles in stock yet."
+          )}
+        </div>
+
+        <div class="panel-card">
+          <h3>⭐ Highlights</h3>
+          <div class="highlight-label">Highest rated</div>
+          ${wineLink(topRated, topRated ? `★ ${Number(topRated.vivino_rating).toFixed(1)} on Vivino` : "")}
+          <div class="highlight-label">Drink first</div>
+          ${wineLink(drinkFirst, drinkFirst ? `Drink by ${drinkFirst.drink_until_year}` : "")}
+        </div>
+
+        <div class="panel-card">
+          <h3>📅 Vintages</h3>
+          <div class="kpi-grid kpi-grid-3">
+            ${kpi(oldest ?? "—", "Oldest")}
+            ${kpi(newest ?? "—", "Newest")}
+            ${kpi(avgAge !== null ? `${avgAge} y` : "—", "Avg. Age")}
           </div>
-          <div class="kpi-card">
-            <div class="kpi-value" style="color:var(--success);">${stats.ready_to_drink_bottles || 0}</div>
-            <div class="kpi-label">Ready to Drink</div>
+        </div>
+
+        <div class="panel-card">
+          <h3>🍾 Style Breakdown</h3>
+          ${this._renderBarList(
+            Object.entries(WINE_TYPES)
+              .map(([k, label]) => [label, stats.by_type?.[k] || 0])
+              .filter((e) => e[1] > 0),
+            stats.total_bottles || totalBottles,
+            "No bottles in stock yet."
+          )}
+        </div>
+
+        <div class="panel-card">
+          <h3>🌍 Top Countries</h3>
+          ${this._renderBarList(countryEntries, totalBottles, "No countries recorded yet.")}
+        </div>
+
+        <div class="panel-card">
+          <h3>🍇 Top Grapes</h3>
+          ${this._renderBarList(grapeEntries, totalBottles, "No grape varieties recorded yet.")}
+        </div>
+
+        <div class="panel-card">
+          <h3>🛒 Top Stores</h3>
+          ${this._renderBarList(storeEntries, totalBottles, "No purchase locations recorded yet.")}
+        </div>
+
+        <div class="panel-card">
+          <h3>🕒 Activity</h3>
+          <div class="kpi-grid">
+            ${kpi(addedLast30, "Bottles added (30 days)")}
+            ${kpi(windowCounts.past_peak, "Past peak", windowCounts.past_peak ? "var(--danger)" : "")}
           </div>
-          <div class="kpi-card">
-            <div class="kpi-value">${stats.unique_wines || 0}</div>
-            <div class="kpi-label">Unique Labels</div>
-          </div>
-          <div class="kpi-card">
-            <div class="kpi-value">${stats.estimated_cellar_value ? `${Math.round(stats.estimated_cellar_value)} ${esc(this.state.currency)}` : "—"}</div>
-            <div class="kpi-label">Estimated Cellar Value</div>
-          </div>
+          <div class="highlight-label" style="margin-top:12px;">Recently added</div>
+          ${
+            recentlyAdded.length
+              ? recentlyAdded
+                  .slice(0, 3)
+                  .map((w) => wineLink(w, fmtDate(w.latest_added_at || w.created_at)))
+                  .join("")
+              : `<div class="stat-empty">—</div>`
+          }
         </div>
 
         <div class="panel-card">
           <h3>
             <span>📍 Storage Areas</span>
-            <small style="font-size:11.5px; color:var(--text-muted); font-weight:500;">Tap area to view bottles</small>
+            <small class="panel-hint">Tap to view bottles</small>
           </h3>
           ${
             areaEntries.length === 0
-              ? `<div style="font-size:13px; color:var(--text-muted);">No bottles assigned to storage areas yet.</div>`
+              ? `<div class="stat-empty">No bottles assigned to storage areas yet.</div>`
               : `<div class="area-grid">
                   ${areaEntries
                     .map(
@@ -867,35 +1230,11 @@ class LekkersappieMobileApp {
                       <button class="area-tile" data-jump-area="${esc(loc === "Unassigned Area" ? "" : loc)}">
                         <strong>${esc(loc)}</strong>
                         <span>${count} ${count === 1 ? "bottle" : "bottles"} →</span>
-                      </button>
-                    `
+                      </button>`
                     )
                     .join("")}
                 </div>`
           }
-        </div>
-
-        <div class="panel-card">
-          <h3>🍷 Cellar Breakdown by Style</h3>
-          <div class="form-stack">
-            ${Object.entries(WINE_TYPES)
-              .map(([k, label]) => {
-                const count = stats.by_type?.[k] || 0;
-                const pct = stats.total_bottles ? Math.round((count / stats.total_bottles) * 100) : 0;
-                return `
-                  <div>
-                    <div style="display:flex; justify-content:space-between; font-size:13px; font-weight:600; margin-bottom:4px;">
-                      <span>${esc(label)}</span>
-                      <span>${count} (${pct}%)</span>
-                    </div>
-                    <div class="taste-bar">
-                      <div class="taste-bar-fill" style="width:${pct}%; background:var(--brand);"></div>
-                    </div>
-                  </div>
-                `;
-              })
-              .join("")}
-          </div>
         </div>
       </div>
     `;
@@ -921,7 +1260,7 @@ class LekkersappieMobileApp {
             <div class="form-row-2">
               <div class="field">
                 <label>Harvest Year / Vintage</label>
-                <input class="input" type="number" name="vintage" value="${esc(f.vintage)}" placeholder="e.g. 2019 (blank = NV)" />
+                <input class="input" type="number" inputmode="numeric" pattern="[0-9]*" name="vintage" value="${esc(f.vintage)}" placeholder="e.g. 2019 (blank = NV)" />
               </div>
               <div class="field">
                 <label>Wine Style</label>
@@ -956,8 +1295,8 @@ class LekkersappieMobileApp {
               <div class="field">
                 <label>Bottles Added &amp; Price (${esc(this.state.currency)})</label>
                 <div class="form-row-2">
-                  <input class="input" type="number" name="quantity" min="1" required value="${esc(f.quantity || 1)}" />
-                  <input class="input" type="number" step="0.01" name="purchase_price" value="${esc(f.purchase_price)}" placeholder="Price" />
+                  <input class="input" type="number" inputmode="numeric" pattern="[0-9]*" name="quantity" min="1" required value="${esc(f.quantity || 1)}" />
+                  <input class="input" type="number" inputmode="decimal" step="0.01" name="purchase_price" value="${esc(f.purchase_price)}" placeholder="Price" />
                 </div>
               </div>
             </div>
@@ -969,8 +1308,8 @@ class LekkersappieMobileApp {
               <div class="field">
                 <label>Drink Window (From – Until)</label>
                 <div class="form-row-2">
-                  <input class="input" type="number" name="drink_from_year" value="${esc(f.drink_from_year)}" placeholder="From" />
-                  <input class="input" type="number" name="drink_until_year" value="${esc(f.drink_until_year)}" placeholder="Until" />
+                  <input class="input" type="number" inputmode="numeric" pattern="[0-9]*" name="drink_from_year" value="${esc(f.drink_from_year)}" placeholder="From" />
+                  <input class="input" type="number" inputmode="numeric" pattern="[0-9]*" name="drink_until_year" value="${esc(f.drink_until_year)}" placeholder="Until" />
                 </div>
               </div>
             </div>
@@ -978,17 +1317,18 @@ class LekkersappieMobileApp {
               <label>Notes</label>
               <textarea class="textarea" name="general_notes" placeholder="Aromas, food pairing ideas, gift note…">${esc(f.general_notes)}</textarea>
             </div>
-            <button type="submit" class="btn btn-primary" style="width:100%; min-height:48px;">Save Wine to Cellar</button>
+            <button type="submit" class="btn btn-primary" style="width:100%;">Save Wine to Cellar</button>
           </form>
         </div>
       </div>
     `;
   }
 
-  _renderSettingsView() {
+  _renderConfigView() {
     const scaleLabel = this._fontScaleLabel();
     return `
       <div class="section-wrap">
+        <h2 class="view-title">⚙️ Config</h2>
         <div class="panel-card">
           <h3>📲 Install Lekkersappie App</h3>
           <p style="font-size:13px; color:var(--text-muted); margin:0 0 12px; line-height:1.45;">
@@ -1001,7 +1341,7 @@ class LekkersappieMobileApp {
           ${
             this.state.isInstalled
               ? `<div class="pill pill-area" style="display:inline-block; padding:6px 12px; font-size:12.5px;">✓ Installed Standalone Mode Active</div>`
-              : `<button class="btn btn-primary" id="btn-settings-install" style="width:100%; min-height:46px;">
+              : `<button class="btn btn-primary btn-lg" id="btn-settings-install" style="width:100%;">
                   📲 Install App to Home Screen
                 </button>`
           }
@@ -1030,7 +1370,7 @@ class LekkersappieMobileApp {
         </div>
 
         <div class="panel-card">
-          <h3>⚙️ Cellar Actions</h3>
+          <h3>🍷 Cellar Actions</h3>
           <div class="form-stack">
             <button class="btn" id="btn-settings-refresh-vivino" style="width:100%;">
               🔄 Refresh Verified Vivino Ratings
@@ -1111,7 +1451,7 @@ class LekkersappieMobileApp {
                     }
                     ${
                       w.vivino_url || w.vivino_rating
-                        ? `<button type="button" class="btn btn-danger" id="btn-mobile-unlink-vivino" style="min-height:32px; padding:4px 9px; font-size:11.5px;">
+                        ? `<button type="button" class="btn btn-danger" id="btn-mobile-unlink-vivino" style="min-height:44px; padding:6px 12px; font-size:13.5px;">
                             Remove Vivino Link
                           </button>`
                         : ""
@@ -1119,8 +1459,8 @@ class LekkersappieMobileApp {
                   </div>
 
                   <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-                    <input class="input" id="mobile-vivino-url-input" type="url" placeholder="Paste exact Vivino URL (…/w/1234)" style="flex:1; min-width:160px; min-height:36px; padding:5px 9px; font-size:13px;" />
-                    <button type="button" class="btn" id="btn-mobile-link-vivino" style="min-height:36px; padding:5px 10px; font-size:12px;">
+                    <input class="input" id="mobile-vivino-url-input" type="url" placeholder="Paste exact Vivino URL (…/w/1234)" style="flex:1; min-width:160px;" />
+                    <button type="button" class="btn" id="btn-mobile-link-vivino">
                       ${this.state.linkingVivinoId === w.id ? "Linking…" : "Link Vivino"}
                     </button>
                   </div>
@@ -1133,7 +1473,7 @@ class LekkersappieMobileApp {
                       <span class="step-qty" style="padding:0 10px;">${Number(w.quantity || 0)}</span>
                       <button type="button" class="step-btn" id="btn-detail-plus">+</button>
                     </div>
-                    <button type="button" class="btn btn-soft" id="btn-detail-research" style="margin-left:auto; min-height:40px;" ${this.state.researchingWineId === w.id ? "disabled" : ""}>
+                    <button type="button" class="btn btn-soft" id="btn-detail-research" style="margin-left:auto;" ${this.state.researchingWineId === w.id ? "disabled" : ""}>
                       ✨ ${this.state.researchingWineId === w.id ? "Researching…" : "Research Wine (AI)"}
                     </button>
                   </div>
@@ -1153,7 +1493,7 @@ class LekkersappieMobileApp {
                   ? `<div class="panel-card" style="margin-bottom:14px; background:var(--surface-alt);">
                       <h3>
                         <span>✨ Sommelier &amp; Producer AI Research</span>
-                        <button type="button" class="btn btn-icon" id="btn-detail-reresearch" style="min-height:32px; min-width:32px; padding:4px;" title="Refresh AI Research">🔄</button>
+                        <button type="button" class="btn btn-icon" id="btn-detail-reresearch" aria-label="Refresh AI research" title="Refresh AI Research">🔄</button>
                       </h3>
                       ${research.summary ? `<p style="font-size:13.5px; font-style:italic; margin:0 0 10px; line-height:1.45;">${esc(research.summary)}</p>` : ""}
                       ${
@@ -1226,7 +1566,7 @@ class LekkersappieMobileApp {
                   </div>
                   <div class="field">
                     <label>Harvest Year</label>
-                    <input class="input" type="number" name="vintage" value="${esc(df.vintage)}" />
+                    <input class="input" type="number" inputmode="numeric" pattern="[0-9]*" name="vintage" value="${esc(df.vintage)}" />
                   </div>
                 </div>
                 <div class="form-row-2">
@@ -1251,7 +1591,7 @@ class LekkersappieMobileApp {
                     <label>Bought At &amp; Price (${esc(this.state.currency)})</label>
                     <div class="form-row-2">
                       <input class="input" name="purchase_location" value="${esc(df.purchase_location)}" placeholder="Store" />
-                      <input class="input" type="number" step="0.01" name="purchase_price" value="${esc(df.purchase_price)}" placeholder="Price" />
+                      <input class="input" type="number" inputmode="decimal" step="0.01" name="purchase_price" value="${esc(df.purchase_price)}" placeholder="Price" />
                     </div>
                   </div>
                 </div>
@@ -1259,13 +1599,13 @@ class LekkersappieMobileApp {
                   <div class="field">
                     <label>Drink Window (From – Until)</label>
                     <div class="form-row-2">
-                      <input class="input" type="number" name="drink_from_year" value="${esc(df.drink_from_year)}" placeholder="From" />
-                      <input class="input" type="number" name="drink_until_year" value="${esc(df.drink_until_year)}" placeholder="Until" />
+                      <input class="input" type="number" inputmode="numeric" pattern="[0-9]*" name="drink_from_year" value="${esc(df.drink_from_year)}" placeholder="From" />
+                      <input class="input" type="number" inputmode="numeric" pattern="[0-9]*" name="drink_until_year" value="${esc(df.drink_until_year)}" placeholder="Until" />
                     </div>
                   </div>
                   <div class="field">
                     <label>My Personal Rating (1–5 ★)</label>
-                    <input class="input" type="number" step="0.5" min="1" max="5" name="personal_rating" value="${esc(df.personal_rating)}" />
+                    <input class="input" type="number" inputmode="decimal" step="0.5" min="1" max="5" name="personal_rating" value="${esc(df.personal_rating)}" />
                   </div>
                 </div>
                 <div class="field">
@@ -1402,7 +1742,7 @@ class LekkersappieMobileApp {
                 <div class="form-row-2">
                   <div class="field">
                     <label>Vintage Year</label>
-                    <input class="input" type="number" name="vintage" value="${esc(f.vintage)}" />
+                    <input class="input" type="number" inputmode="numeric" pattern="[0-9]*" name="vintage" value="${esc(f.vintage)}" />
                   </div>
                   <div class="field">
                     <label>Wine Style</label>
@@ -1437,8 +1777,8 @@ class LekkersappieMobileApp {
                   <div class="field">
                     <label>Quantity &amp; Price (${esc(this.state.currency)})</label>
                     <div class="form-row-2">
-                      <input class="input" type="number" name="quantity" min="1" required value="${esc(f.quantity || 1)}" />
-                      <input class="input" type="number" step="0.01" name="purchase_price" value="${esc(f.purchase_price)}" placeholder="Price" />
+                      <input class="input" type="number" inputmode="numeric" pattern="[0-9]*" name="quantity" min="1" required value="${esc(f.quantity || 1)}" />
+                      <input class="input" type="number" inputmode="decimal" step="0.01" name="purchase_price" value="${esc(f.purchase_price)}" placeholder="Price" />
                     </div>
                   </div>
                 </div>
@@ -1446,7 +1786,7 @@ class LekkersappieMobileApp {
                   <label>Bought At (Store / Winery)</label>
                   <input class="input" name="purchase_location" value="${esc(f.purchase_location)}" />
                 </div>
-                <button type="submit" class="btn btn-primary" style="width:100%; min-height:48px;" ${this.state.scanBusy ? "disabled" : ""}>
+                <button type="submit" class="btn btn-primary btn-lg" style="width:100%;" ${this.state.scanBusy ? "disabled" : ""}>
                   ✓ Save Scanned Wine to Cellar
                 </button>
               </form>
@@ -1458,25 +1798,34 @@ class LekkersappieMobileApp {
   }
 
   _renderCropSheet() {
+    const fine = Number(this.state.cropState?.fine || 0);
     return `
       <div class="sheet-backdrop" id="sheet-backdrop">
-        <div class="sheet-surface">
+        <div class="sheet-surface sheet-surface-tall">
           <div class="sheet-handle"></div>
           <div class="sheet-header">
-            <h2>✂️ Crop &amp; Rotate Bottle Label</h2>
-            <button class="btn btn-icon" id="btn-cancel-crop">✕</button>
+            <h2>✂️ Crop &amp; Rotate</h2>
+            <button class="btn btn-icon" id="btn-cancel-crop" aria-label="Cancel crop">✕</button>
           </div>
-          <div class="sheet-body">
+          <div class="sheet-body crop-body">
+            <p class="crop-hint">Drag the frame to move it. Drag a corner or edge to resize so it fits the label.</p>
             <div class="crop-stage">
-              <canvas id="mobile-crop-canvas"></canvas>
+              <canvas id="mobile-crop-canvas" aria-label="Crop area: drag to move, drag corners to resize"></canvas>
             </div>
-            <div style="display:flex; gap:8px; justify-content:center; margin-bottom:12px; flex-wrap:wrap;">
-              <button type="button" class="btn" id="btn-crop-left">↺ Rotate Left</button>
-              <button type="button" class="btn" id="btn-crop-right">↻ Rotate Right</button>
-              <button type="button" class="btn" id="btn-crop-reset">Reset Frame</button>
+            <div class="crop-fine">
+              <div class="crop-fine-head">
+                <span>Straighten</span>
+                <strong id="crop-fine-value">${fine > 0 ? "+" : ""}${fine.toFixed(1)}°</strong>
+              </div>
+              <input type="range" id="crop-fine-slider" min="-20" max="20" step="0.5" value="${fine}" aria-label="Straighten angle" />
             </div>
-            <button type="button" class="btn btn-primary" id="btn-crop-confirm" style="width:100%; min-height:48px;">
-              ✓ Confirm &amp; Scan Label
+            <div class="crop-tools">
+              <button type="button" class="btn btn-lg" id="btn-crop-left" aria-label="Rotate left 90 degrees">↺ 90°</button>
+              <button type="button" class="btn btn-lg" id="btn-crop-right" aria-label="Rotate right 90 degrees">↻ 90°</button>
+              <button type="button" class="btn btn-lg" id="btn-crop-reset">Reset</button>
+            </div>
+            <button type="button" class="btn btn-primary btn-lg btn-block" id="btn-crop-confirm">
+              ✓ Use Photo &amp; Scan Label
             </button>
           </div>
         </div>
@@ -1525,7 +1874,7 @@ class LekkersappieMobileApp {
               </div>
               ${
                 this.state.deferredPrompt
-                  ? `<button class="btn btn-primary" id="btn-guide-native-install" style="width:100%; min-height:48px; margin-bottom:14px;">
+                  ? `<button class="btn btn-primary" id="btn-guide-native-install" style="width:100%; min-height:54px; margin-bottom:14px;">
                       📲 Tap Here to Install App Now
                     </button>`
                   : ""
@@ -1556,14 +1905,21 @@ class LekkersappieMobileApp {
 
   render() {
     if (!this.root) return;
+    // Preserve scroll positions across full re-renders (touch users lose their
+    // place otherwise when tapping +/−, saving, or researching inside a sheet).
+    const prevSheet = this._lastRenderedSheet || null;
+    const prevNav = this._lastRenderedNav || null;
+    const prevSheetBody = this.root.querySelector(".sheet-body");
+    const sheetScroll = prevSheetBody ? prevSheetBody.scrollTop : 0;
+    const pageScroll = window.scrollY;
     document.body.style.overflow = this.state.activeSheet ? "hidden" : "";
     const stats = this.state.statistics || {};
     const scaleLabel = this._fontScaleLabel();
 
     let activeViewHtml = "";
-    if (this.state.activeNav === "areas") activeViewHtml = this._renderAreasAndStatsView();
+    if (this.state.activeNav === "stats") activeViewHtml = this._renderStatsView();
     else if (this.state.activeNav === "add") activeViewHtml = this._renderManualAddView();
-    else if (this.state.activeNav === "settings") activeViewHtml = this._renderSettingsView();
+    else if (this.state.activeNav === "config") activeViewHtml = this._renderConfigView();
     else activeViewHtml = this._renderCellarView();
 
     this.root.innerHTML = `
@@ -1572,6 +1928,7 @@ class LekkersappieMobileApp {
           ? `<div class="offline-banner">⚡ Offline Mode — Showing cached cellar inventory</div>`
           : ""
       }
+      <div id="ptr-indicator" class="ptr-indicator" aria-hidden="true">↻</div>
       <div class="app-shell">
         <header class="top-app-bar">
           <div class="brand-cluster">
@@ -1587,14 +1944,13 @@ class LekkersappieMobileApp {
           </div>
 
           <div class="top-actions">
+            <button class="btn btn-icon" id="btn-top-refresh" title="Refresh cellar" aria-label="Refresh cellar">↻</button>
             <button class="btn btn-icon font-pill-btn" id="btn-top-font-scale" title="Adjust text size (S / M / L / XL)" aria-label="Text size ${scaleLabel}">
               Aa <small>${scaleLabel}</small>
             </button>
             ${
               !this.state.isInstalled
-                ? `<button class="btn btn-soft" id="btn-top-install" title="Install as Mobile App">
-                    📲 <span>Install</span>
-                  </button>`
+                ? `<button class="btn btn-soft btn-icon" id="btn-top-install" title="Install as Mobile App" aria-label="Install as Mobile App">📲</button>`
                 : ""
             }
           </div>
@@ -1608,7 +1964,7 @@ class LekkersappieMobileApp {
                   <p style="font-size:13px; color:var(--text-muted); margin:0 0 12px; line-height:1.45;">
                     Lekkersappie inherits your Home Assistant session. Sign in once with your Home Assistant account to unlock your cellar.
                   </p>
-                  <button class="btn btn-primary" id="btn-ha-login" style="width:100%; min-height:46px;">
+                  <button class="btn btn-primary btn-lg" id="btn-ha-login" style="width:100%;">
                     🔐 Sign in with Home Assistant
                   </button>
                 </div>`
@@ -1624,25 +1980,25 @@ class LekkersappieMobileApp {
 
       <nav class="bottom-nav" aria-label="Mobile Navigation">
         <div class="bottom-nav-inner">
-          <button class="nav-tab ${this.state.activeNav === "cellar" ? "active" : ""}" data-nav="cellar">
-            <span>🍷</span>
+          <button class="nav-tab ${this.state.activeNav === "cellar" ? "active" : ""}" data-nav="cellar" aria-label="Cellar">
+            <span class="nav-ico">🍷</span>
             <span>Cellar</span>
           </button>
-          <button class="nav-tab ${this.state.activeNav === "areas" ? "active" : ""}" data-nav="areas">
-            <span>📍</span>
-            <span>Areas</span>
+          <button class="nav-tab ${this.state.activeNav === "stats" ? "active" : ""}" data-nav="stats" aria-label="Stats">
+            <span class="nav-ico">📊</span>
+            <span>Stats</span>
           </button>
           <button class="nav-fab-scan" id="btn-nav-scan" aria-label="Scan Bottle">
-            <span style="font-size:20px;">📷</span>
+            <span class="nav-ico">📷</span>
             <span>SCAN</span>
           </button>
-          <button class="nav-tab ${this.state.activeNav === "add" ? "active" : ""}" data-nav="add">
-            <span>➕</span>
+          <button class="nav-tab ${this.state.activeNav === "add" ? "active" : ""}" data-nav="add" aria-label="Add wine">
+            <span class="nav-ico">➕</span>
             <span>Add</span>
           </button>
-          <button class="nav-tab ${this.state.activeNav === "settings" ? "active" : ""}" data-nav="settings">
-            <span>Aa</span>
-            <span>App</span>
+          <button class="nav-tab ${this.state.activeNav === "config" ? "active" : ""}" data-nav="config" aria-label="Config">
+            <span class="nav-ico">⚙️</span>
+            <span>Config</span>
           </button>
         </div>
       </nav>
@@ -1652,10 +2008,22 @@ class LekkersappieMobileApp {
       ${this.state.activeSheet === "crop" ? this._renderCropSheet() : ""}
       ${this.state.activeSheet === "preview" ? this._renderPreviewSheet() : ""}
       ${this.state.activeSheet === "install_guide" ? this._renderInstallGuideSheet() : ""}
-      ${this.state.toastMessage ? `<div class="toast">${esc(this.state.toastMessage)}</div>` : ""}
     `;
 
     this._bindEvents();
+
+    // Restore scroll: same sheet keeps its position; same tab keeps page position.
+    const newSheetBody = this.root.querySelector(".sheet-body");
+    if (newSheetBody && prevSheet && prevSheet === this.state.activeSheet) {
+      newSheetBody.scrollTop = sheetScroll;
+    }
+    if (prevNav === this.state.activeNav && !this.state.activeSheet) {
+      window.scrollTo(0, pageScroll);
+    } else if (prevNav !== this.state.activeNav) {
+      window.scrollTo(0, 0);
+    }
+    this._lastRenderedSheet = this.state.activeSheet;
+    this._lastRenderedNav = this.state.activeNav;
   }
 
   _bindBottleCardEvents(scope) {
@@ -1702,6 +2070,16 @@ class LekkersappieMobileApp {
   _bindEvents() {
     const r = this.root;
     r.querySelector("#btn-ha-login")?.addEventListener("click", () => this.redirectToHomeAssistantLogin());
+    r.querySelector("#btn-top-refresh")?.addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      btn.classList.add("spinning");
+      await this.fetchState();
+      this.showToast("Cellar refreshed");
+    });
+    this._bindSheetSwipe();
+    this._bindFormState(r.querySelector("#mobile-detail-form"), this.state.detailForm);
+    this._bindFormState(r.querySelector("#mobile-scan-save-form"), this.state.scanForm);
+    this._bindFormState(r.querySelector("#mobile-manual-add-form"), this.state.scanForm);
     r.querySelector("#btn-top-font-scale")?.addEventListener("click", () => this.cycleFontScale());
     r.querySelector("#btn-sheet-font-scale")?.addEventListener("click", () => this.cycleFontScale());
     r.querySelector("#btn-top-install")?.addEventListener("click", () => this.handleInstallClick());
@@ -1788,7 +2166,7 @@ class LekkersappieMobileApp {
         await this.fetchState();
         this.showToast("Vivino ratings refreshed!");
       } catch (err) {
-        alert(`Vivino refresh failed: ${err?.message || err}`);
+        this.showError("Vivino refresh failed", err);
       }
     });
 
@@ -1815,26 +2193,19 @@ class LekkersappieMobileApp {
           await this.fetchState();
           this.showToast("Wine added to cellar!");
         } catch (err) {
-          alert(`Failed to add wine: ${err?.message || err}`);
+          this.showError("Failed to add wine", err);
         }
       });
     }
 
     // Sheet close handlers
-    r.querySelector("#btn-close-sheet")?.addEventListener("click", () => {
-      this.state.activeSheet = null;
-      this.render();
-    });
-    r.querySelector("#btn-close-preview")?.addEventListener("click", () => {
-      this.state.activeSheet = this.state.previousSheet || null;
-      this.state.previewWine = null;
-      this.render();
-    });
+    r.querySelector("#btn-close-sheet")?.addEventListener("click", () => this.closeSheet());
+    r.querySelector("#btn-close-preview")?.addEventListener("click", () => this.closeSheet());
     r.querySelector("#sheet-backdrop")?.addEventListener("click", (e) => {
-      if (e.target.id === "sheet-backdrop") {
-        this.state.activeSheet = null;
-        this.render();
-      }
+      // Only read-only sheets close on a stray backdrop tap; sheets with forms
+      // (detail, scan, crop) require ✕ or a swipe-down so edits are not lost.
+      if (e.target.id !== "sheet-backdrop") return;
+      if (["preview", "install_guide"].includes(this.state.activeSheet)) this.closeSheet();
     });
 
     // Detail sheet handlers
@@ -1855,14 +2226,20 @@ class LekkersappieMobileApp {
     r.querySelector("#btn-mobile-unlink-vivino")?.addEventListener("click", async () => {
       const w = this.state.detailWine;
       if (!w) return;
-      if (!window.confirm(`Remove Vivino link and rating from "${w.name}"?`)) return;
+      const okUnlink = await this.confirmAction({
+        title: "Remove Vivino link?",
+        message: `The Vivino link and rating will be removed from "${w.name}".`,
+        confirmLabel: "Remove link",
+        danger: true,
+      });
+      if (!okUnlink) return;
       try {
         const res = await this.apiPost("unlink_vivino", { wine_id: w.id });
         this.state.detailWine = res.wine;
         await this.fetchState();
         this.showToast("Vivino link removed");
       } catch (err) {
-        alert(`Failed to unlink Vivino: ${err?.message || err}`);
+        this.showError("Failed to unlink Vivino", err);
       }
     });
     r.querySelector("#btn-mobile-link-vivino")?.addEventListener("click", async () => {
@@ -1888,9 +2265,12 @@ class LekkersappieMobileApp {
     r.querySelector("#btn-mobile-delete-wine")?.addEventListener("click", async () => {
       const w = this.state.detailWine;
       if (!w) return;
-      const ok = window.confirm(
-        `⚠️ WARNING: Permanently delete "${w.winery} – ${w.name}" from your cellar database?\n\nThis action CANNOT be undone.`
-      );
+      const ok = await this.confirmAction({
+        title: "Delete wine permanently?",
+        message: `"${w.winery} – ${w.name}" and all its batches and history will be deleted from the database. This cannot be undone.`,
+        confirmLabel: "Delete permanently",
+        danger: true,
+      });
       if (!ok) return;
       try {
         await this.apiPost("delete", { wine_id: w.id });
@@ -1899,7 +2279,7 @@ class LekkersappieMobileApp {
         await this.fetchState();
         this.showToast("Wine deleted");
       } catch (err) {
-        alert(`Delete failed: ${err?.message || err}`);
+        this.showError("Delete failed", err);
       }
     });
 
@@ -1922,7 +2302,7 @@ class LekkersappieMobileApp {
           await this.fetchState();
           this.showToast("Wine details saved!");
         } catch (err) {
-          alert(`Save failed: ${err?.message || err}`);
+          this.showError("Save failed", err);
         }
       });
     }
@@ -1952,23 +2332,24 @@ class LekkersappieMobileApp {
           await this.fetchState();
           this.showToast("Scanned bottle saved!");
         } catch (err) {
-          alert(`Save failed: ${err?.message || err}`);
+          this.showError("Save failed", err);
         }
       });
     }
 
     if (this.state.activeSheet === "crop") {
       this._initCropCanvas();
-      r.querySelector("#btn-cancel-crop")?.addEventListener("click", () => {
-        this.state.activeSheet = "scan";
-        this.render();
-      });
+      r.querySelector("#btn-cancel-crop")?.addEventListener("click", () => this.closeSheet());
+      r.querySelector("#crop-fine-slider")?.addEventListener("input", (e) => this._setFineRotation(e.target.value));
       r.querySelector("#btn-crop-left")?.addEventListener("click", () => this._rotateCrop(-90));
       r.querySelector("#btn-crop-right")?.addEventListener("click", () => this._rotateCrop(90));
       r.querySelector("#btn-crop-reset")?.addEventListener("click", () => {
         if (this.state.cropState) {
           this.state.cropState.crop = { x: 0.08, y: 0.08, w: 0.84, h: 0.84 };
-          this._drawCropCanvas();
+          this.state.cropState.fine = 0;
+          const slider = this.root.querySelector("#crop-fine-slider");
+          if (slider) slider.value = "0";
+          this._setFineRotation(0);
         }
       });
       r.querySelector("#btn-crop-confirm")?.addEventListener("click", () => this._confirmCropAndRunScan());
@@ -1995,7 +2376,8 @@ class LekkersappieMobileApp {
   }
 
   _onScanFilePicked(e) {
-    const file = e.target.files?.[0];
+    const input = e.target;
+    const file = input.files?.[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
@@ -2003,94 +2385,269 @@ class LekkersappieMobileApp {
       img.onload = () => {
         this.state.cropState = {
           image: img,
-          rotation: 0,
+          rotation: 0, // quarter turns in degrees (0 / 90 / 180 / 270)
+          fine: 0, // straighten angle in degrees (−20 … +20)
           crop: { x: 0.08, y: 0.08, w: 0.84, h: 0.84 },
         };
         this.state.activeSheet = "crop";
         this.render();
       };
+      img.onerror = () => this.showToast("Could not read this photo. Try another image.", "error");
       img.src = String(reader.result);
     };
     reader.readAsDataURL(file);
+    // Allow picking the same photo again later.
+    input.value = "";
   }
 
   _rotateCrop(deg) {
-    if (!this.state.cropState) return;
-    this.state.cropState.rotation = (this.state.cropState.rotation + deg + 360) % 360;
+    const cs = this.state.cropState;
+    if (!cs) return;
+    cs.rotation = (cs.rotation + deg + 360) % 360;
+    cs.crop = { x: 0.08, y: 0.08, w: 0.84, h: 0.84 };
     this._drawCropCanvas();
   }
 
+  _setFineRotation(deg) {
+    const cs = this.state.cropState;
+    if (!cs) return;
+    cs.fine = Math.max(-20, Math.min(20, Number(deg) || 0));
+    const label = this.root.querySelector("#crop-fine-value");
+    if (label) label.textContent = `${cs.fine > 0 ? "+" : ""}${cs.fine.toFixed(1)}°`;
+    this._scheduleCropDraw();
+  }
+
+  /** Geometry of the rotated image's bounding box (shared by preview and output). */
+  _cropGeometry(cs) {
+    const theta = (((cs.rotation || 0) + (cs.fine || 0)) * Math.PI) / 180;
+    const w = cs.image.naturalWidth || cs.image.width;
+    const h = cs.image.naturalHeight || cs.image.height;
+    const cos = Math.abs(Math.cos(theta));
+    const sin = Math.abs(Math.sin(theta));
+    return { theta, w, h, bw: w * cos + h * sin, bh: w * sin + h * cos };
+  }
+
+  _drawRotatedImage(ctx, cs, geo, scale) {
+    ctx.save();
+    ctx.fillStyle = "#141012";
+    ctx.fillRect(0, 0, geo.bw * scale, geo.bh * scale);
+    ctx.translate((geo.bw * scale) / 2, (geo.bh * scale) / 2);
+    ctx.rotate(geo.theta);
+    ctx.drawImage(cs.image, (-geo.w * scale) / 2, (-geo.h * scale) / 2, geo.w * scale, geo.h * scale);
+    ctx.restore();
+  }
+
   _initCropCanvas() {
+    const canvas = this.root.querySelector("#mobile-crop-canvas");
+    if (!canvas) return;
     this._drawCropCanvas();
+
+    const HANDLE = 36; // finger-sized hit zone (CSS px) around corners/edges
+    const MIN = 0.12;
+
+    const pointFromEvent = (ev) => {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: (ev.clientX - rect.left) / rect.width,
+        y: (ev.clientY - rect.top) / rect.height,
+        hx: HANDLE / 2 / rect.width,
+        hy: HANDLE / 2 / rect.height,
+      };
+    };
+
+    const hitTest = (p, c) => {
+      const nearL = Math.abs(p.x - c.x) <= p.hx;
+      const nearR = Math.abs(p.x - (c.x + c.w)) <= p.hx;
+      const nearT = Math.abs(p.y - c.y) <= p.hy;
+      const nearB = Math.abs(p.y - (c.y + c.h)) <= p.hy;
+      const inX = p.x >= c.x - p.hx && p.x <= c.x + c.w + p.hx;
+      const inY = p.y >= c.y - p.hy && p.y <= c.y + c.h + p.hy;
+      if (nearT && nearL) return "nw";
+      if (nearT && nearR) return "ne";
+      if (nearB && nearL) return "sw";
+      if (nearB && nearR) return "se";
+      if (nearT && inX) return "n";
+      if (nearB && inX) return "s";
+      if (nearL && inY) return "w";
+      if (nearR && inY) return "e";
+      if (p.x > c.x && p.x < c.x + c.w && p.y > c.y && p.y < c.y + c.h) return "move";
+      return null;
+    };
+
+    canvas.addEventListener("pointerdown", (ev) => {
+      const cs = this.state.cropState;
+      if (!cs || this._cropDrag) return; // ignore a second finger
+      const p = pointFromEvent(ev);
+      const mode = hitTest(p, cs.crop);
+      if (!mode) return;
+      ev.preventDefault();
+      try {
+        canvas.setPointerCapture(ev.pointerId);
+      } catch (_) {
+        /* capture unsupported for this pointer; move events still reach the canvas */
+      }
+      this._cropDrag = { id: ev.pointerId, mode, start: p, orig: { ...cs.crop } };
+      canvas.classList.add("dragging");
+    });
+
+    canvas.addEventListener("pointermove", (ev) => {
+      const drag = this._cropDrag;
+      const cs = this.state.cropState;
+      if (!drag || !cs || ev.pointerId !== drag.id) return;
+      ev.preventDefault();
+      const p = pointFromEvent(ev);
+      const dx = p.x - drag.start.x;
+      const dy = p.y - drag.start.y;
+      const o = drag.orig;
+      let { x, y, w, h } = o;
+      const m = drag.mode;
+      if (m === "move") {
+        x = Math.min(Math.max(0, o.x + dx), 1 - o.w);
+        y = Math.min(Math.max(0, o.y + dy), 1 - o.h);
+      } else {
+        if (m.includes("w")) {
+          const nx = Math.min(Math.max(0, o.x + dx), o.x + o.w - MIN);
+          w = o.w + (o.x - nx);
+          x = nx;
+        }
+        if (m.includes("e")) w = Math.min(Math.max(MIN, o.w + dx), 1 - o.x);
+        if (m.includes("n")) {
+          const ny = Math.min(Math.max(0, o.y + dy), o.y + o.h - MIN);
+          h = o.h + (o.y - ny);
+          y = ny;
+        }
+        if (m.includes("s")) h = Math.min(Math.max(MIN, o.h + dy), 1 - o.y);
+      }
+      cs.crop = { x, y, w, h };
+      this._scheduleCropDraw();
+    });
+
+    const end = (ev) => {
+      if (!this._cropDrag || ev.pointerId !== this._cropDrag.id) return;
+      this._cropDrag = null;
+      canvas.classList.remove("dragging");
+      this._drawCropCanvas();
+    };
+    canvas.addEventListener("pointerup", end);
+    canvas.addEventListener("pointercancel", end);
+    canvas.addEventListener("lostpointercapture", end);
+  }
+
+  _scheduleCropDraw() {
+    if (this._cropRaf) return;
+    this._cropRaf = requestAnimationFrame(() => {
+      this._cropRaf = null;
+      this._drawCropCanvas();
+    });
   }
 
   _drawCropCanvas() {
     const canvas = this.root.querySelector("#mobile-crop-canvas");
     const cs = this.state.cropState;
     if (!canvas || !cs?.image) return;
-    const ctx = canvas.getContext("2d");
-    const rot = cs.rotation % 360;
-    const swapped = rot === 90 || rot === 270;
-    const srcW = swapped ? cs.image.height : cs.image.width;
-    const srcH = swapped ? cs.image.width : cs.image.height;
-    const maxDim = 320;
-    const scale = Math.min(maxDim / srcW, maxDim / srcH, 1);
-    canvas.width = Math.round(srcW * scale);
-    canvas.height = Math.round(srcH * scale);
+    const stage = canvas.parentElement;
+    const geo = this._cropGeometry(cs);
 
+    // Fit the full sheet width and up to ~58% of the viewport height.
+    const maxW = Math.max(200, (stage?.clientWidth || 320) - 16);
+    const maxH = Math.max(220, Math.round(window.innerHeight * 0.58));
+    const scale = Math.min(maxW / geo.bw, maxH / geo.bh);
+    const cssW = Math.round(geo.bw * scale);
+    const cssH = Math.round(geo.bh * scale);
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+
+    canvas.style.width = `${cssW}px`;
+    canvas.style.height = `${cssH}px`;
+    canvas.width = Math.round(cssW * dpr);
+    canvas.height = Math.round(cssH * dpr);
+
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this._drawRotatedImage(ctx, cs, geo, scale);
+
+    const cx = cs.crop.x * cssW;
+    const cy = cs.crop.y * cssH;
+    const cw = cs.crop.w * cssW;
+    const ch = cs.crop.h * cssH;
+
+    // Dim outside the crop frame.
     ctx.save();
-    ctx.translate(canvas.width / 2, canvas.height / 2);
-    ctx.rotate((rot * Math.PI) / 180);
-    const drawW = swapped ? canvas.height : canvas.width;
-    const drawH = swapped ? canvas.width : canvas.height;
-    ctx.drawImage(cs.image, -drawW / 2, -drawH / 2, drawW, drawH);
+    ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+    ctx.beginPath();
+    ctx.rect(0, 0, cssW, cssH);
+    ctx.rect(cx, cy, cw, ch);
+    ctx.fill("evenodd");
     ctx.restore();
 
-    const cx = cs.crop.x * canvas.width;
-    const cy = cs.crop.y * canvas.height;
-    const cw = cs.crop.w * canvas.width;
-    const ch = cs.crop.h * canvas.height;
+    // Rule-of-thirds grid (helps straighten labels with the fine slider).
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.45)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 1; i < 3; i++) {
+      ctx.moveTo(cx + (cw * i) / 3, cy);
+      ctx.lineTo(cx + (cw * i) / 3, cy + ch);
+      ctx.moveTo(cx, cy + (ch * i) / 3);
+      ctx.lineTo(cx + cw, cy + (ch * i) / 3);
+    }
+    ctx.stroke();
+
+    // Frame and thick L-shaped corner handles.
     ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 2.5;
+    ctx.lineWidth = 2;
     ctx.strokeRect(cx, cy, cw, ch);
+    const L = Math.min(24, cw / 3, ch / 3);
+    ctx.lineWidth = 5;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    [
+      [cx, cy, 1, 1],
+      [cx + cw, cy, -1, 1],
+      [cx, cy + ch, 1, -1],
+      [cx + cw, cy + ch, -1, -1],
+    ].forEach(([px, py, sx, sy]) => {
+      ctx.moveTo(px + sx * L, py);
+      ctx.lineTo(px, py);
+      ctx.lineTo(px, py + sy * L);
+    });
+    ctx.stroke();
+    // Mid-edge grips.
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    const g = Math.min(16, cw / 4, ch / 4);
+    ctx.moveTo(cx + cw / 2 - g, cy);
+    ctx.lineTo(cx + cw / 2 + g, cy);
+    ctx.moveTo(cx + cw / 2 - g, cy + ch);
+    ctx.lineTo(cx + cw / 2 + g, cy + ch);
+    ctx.moveTo(cx, cy + ch / 2 - g);
+    ctx.lineTo(cx, cy + ch / 2 + g);
+    ctx.moveTo(cx + cw, cy + ch / 2 - g);
+    ctx.lineTo(cx + cw, cy + ch / 2 + g);
+    ctx.stroke();
   }
 
   async _confirmCropAndRunScan() {
     const cs = this.state.cropState;
     if (!cs?.image) return;
-    const rot = cs.rotation % 360;
-    const swapped = rot === 90 || rot === 270;
-    const srcW = swapped ? cs.image.height : cs.image.width;
-    const srcH = swapped ? cs.image.width : cs.image.height;
+    const geo = this._cropGeometry(cs);
 
+    // Render the rotated image (same math as the preview), capped for memory on phones.
+    const MAX_WORK = 2600;
+    const workScale = Math.min(1, MAX_WORK / Math.max(geo.bw, geo.bh));
     const rotCanvas = document.createElement("canvas");
-    rotCanvas.width = srcW;
-    rotCanvas.height = srcH;
-    const rctx = rotCanvas.getContext("2d");
-    rctx.translate(srcW / 2, srcH / 2);
-    rctx.rotate((rot * Math.PI) / 180);
-    rctx.drawImage(cs.image, -cs.image.width / 2, -cs.image.height / 2);
+    rotCanvas.width = Math.max(1, Math.round(geo.bw * workScale));
+    rotCanvas.height = Math.max(1, Math.round(geo.bh * workScale));
+    this._drawRotatedImage(rotCanvas.getContext("2d"), cs, geo, workScale);
 
-    const outCanvas = document.createElement("canvas");
-    const cw = Math.max(1, Math.round(cs.crop.w * srcW));
-    const ch = Math.max(1, Math.round(cs.crop.h * srcH));
+    const sx = Math.round(cs.crop.x * rotCanvas.width);
+    const sy = Math.round(cs.crop.y * rotCanvas.height);
+    const sw = Math.max(1, Math.round(cs.crop.w * rotCanvas.width));
+    const sh = Math.max(1, Math.round(cs.crop.h * rotCanvas.height));
     const maxOut = 1280;
-    const scale = Math.min(maxOut / cw, maxOut / ch, 1);
-    outCanvas.width = Math.round(cw * scale);
-    outCanvas.height = Math.round(ch * scale);
-    outCanvas
-      .getContext("2d")
-      .drawImage(
-        rotCanvas,
-        Math.round(cs.crop.x * srcW),
-        Math.round(cs.crop.y * srcH),
-        cw,
-        ch,
-        0,
-        0,
-        outCanvas.width,
-        outCanvas.height
-      );
+    const outScale = Math.min(maxOut / sw, maxOut / sh, 1);
+    const outCanvas = document.createElement("canvas");
+    outCanvas.width = Math.max(1, Math.round(sw * outScale));
+    outCanvas.height = Math.max(1, Math.round(sh * outScale));
+    outCanvas.getContext("2d").drawImage(rotCanvas, sx, sy, sw, sh, 0, 0, outCanvas.width, outCanvas.height);
 
     const dataUrl = outCanvas.toDataURL("image/jpeg", 0.88);
     this.state.scanImageData = dataUrl;
