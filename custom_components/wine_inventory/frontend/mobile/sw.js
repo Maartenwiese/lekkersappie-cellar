@@ -1,9 +1,10 @@
 /**
  * Service Worker for Lekkersappie Standalone Mobile PWA (/lekkersappie/)
- * Enables app installation (beforeinstallprompt) and caches the application shell.
+ * Enables app installation (beforeinstallprompt) and caches only the static application shell.
+ * Authenticated API responses are never persisted to Cache Storage.
  */
 
-const CACHE_NAME = "lekkersappie-pwa-v0.3.5";
+const CACHE_NAME = "lekkersappie-pwa-v0.3.6";
 const APP_SHELL = [
   "/lekkersappie/index.html",
   "/lekkersappie/styles.css",
@@ -38,24 +39,29 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "CLEAR_AUTH_CACHE") {
+    event.waitUntil(
+      caches.open(CACHE_NAME).then((cache) =>
+        cache.keys().then((requests) =>
+          Promise.all(
+            requests
+              .filter((r) => new URL(r.url).pathname.startsWith("/api/"))
+              .map((r) => cache.delete(r))
+          )
+        )
+      )
+    );
+  }
+});
+
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
 
   const url = new URL(req.url);
-  // API calls: network first, fall back to cached GET state when offline
-  if (url.pathname.startsWith("/api/wine_inventory/pwa/")) {
-    event.respondWith(
-      fetch(req)
-        .then((res) => {
-          if (res.ok && url.pathname.endsWith("/state")) {
-            const clone = res.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(req, clone));
-          }
-          return res;
-        })
-        .catch(() => caches.match(req))
-    );
+  // Authenticated API calls always bypass Cache Storage for data security
+  if (url.pathname.startsWith("/api/")) {
     return;
   }
 

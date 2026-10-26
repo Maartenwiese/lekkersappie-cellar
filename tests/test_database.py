@@ -368,6 +368,44 @@ class TestWineDatabase(unittest.TestCase):
                 self.assertIsNone(raw_row["purchase_price"])
                 self.assertIsNone(raw_row["drink_from_year"])
 
+    def test_v036_url_scheme_sanitization(self) -> None:
+        """v0.3.6: Verify unsafe URI schemes (javascript:, data:text/html, non-vivino hosts) are stripped from vivino_url and image_url."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = WineDatabase(Path(tmpdir) / "wine_inventory.db")
+            db.initialize()
+
+            # 1. Attempting to add a wine with javascript: in vivino_url and image_url strips them to ''
+            bad = db.add_or_increment_wine(
+                winery="Evil Winery",
+                name="XSS Cuvee",
+                vivino_url="javascript:alert(document.cookie)",
+                image_url="javascript:alert(1)",
+            )
+            self.assertEqual(bad["vivino_url"], "")
+            self.assertEqual(bad["image_url"], "")
+
+            # 2. Attempting to update vivino_url to a non-vivino domain or non-https strips it to ''
+            updated_bad = db.update_wine(
+                bad["id"],
+                {
+                    "vivino_url": "https://evil.example.com/w/1234",
+                    "image_url": "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
+                },
+            )
+            self.assertEqual(updated_bad["vivino_url"], "")
+            self.assertEqual(updated_bad["image_url"], "")
+
+            # 3. Valid https://www.vivino.com/... and /local/wine_inventory/covers/... are preserved
+            updated_good = db.update_wine(
+                bad["id"],
+                {
+                    "vivino_url": "https://www.vivino.com/w/1652?year=2019",
+                    "image_url": "/local/wine_inventory/covers/cover_1.jpg",
+                },
+            )
+            self.assertEqual(updated_good["vivino_url"], "https://www.vivino.com/w/1652?year=2019")
+            self.assertEqual(updated_good["image_url"], "/local/wine_inventory/covers/cover_1.jpg")
+
 
 if __name__ == "__main__":
     unittest.main()

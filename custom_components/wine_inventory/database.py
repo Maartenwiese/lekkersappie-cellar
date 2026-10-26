@@ -6,8 +6,10 @@ from contextlib import closing
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 import sqlite3
 from typing import Any
+from urllib.parse import urlparse
 
 from .const import (
     DRINK_STATUS_DRINK_SOON,
@@ -49,6 +51,43 @@ def _opt_int(val: Any) -> int | None:
         return int(num)
     except (ValueError, TypeError):
         return None
+
+
+def _sanitize_vivino_url(url: Any) -> str:
+    """Allow only empty string or canonical HTTPS Vivino URLs (rejects javascript: and other origins)."""
+    raw = str(url or "").strip()
+    if not raw or any(ch in raw for ch in ("\r", "\n", "\x00", "<", ">", '"', "'")):
+        return ""
+    try:
+        parsed = urlparse(raw)
+    except ValueError:
+        return ""
+    if parsed.scheme.lower() != "https":
+        return ""
+    host = (parsed.hostname or "").lower()
+    if host == "vivino.com" or host.endswith(".vivino.com"):
+        return raw
+    return ""
+
+
+def _sanitize_image_url(url: Any) -> str:
+    """Allow only local /local/ or /api/ paths, HTTPS image URLs, or base64 image data URIs."""
+    raw = str(url or "").strip()
+    if not raw or any(ch in raw for ch in ("\r", "\n", "\x00", "<", ">", '"', "'")):
+        return ""
+    if raw.startswith(("/local/", "/api/")):
+        if ".." in raw or "//" in raw[1:]:
+            return ""
+        return raw
+    if re.match(r"^data:image/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=\s]+$", raw, re.IGNORECASE):
+        return raw
+    try:
+        parsed = urlparse(raw)
+    except ValueError:
+        return ""
+    if parsed.scheme.lower() == "https" and parsed.hostname:
+        return raw
+    return ""
 
 
 def compute_drink_status(
@@ -292,6 +331,8 @@ class WineDatabase:
             data.get("drink_from_year"),
             data.get("drink_until_year"),
         )
+        data["vivino_url"] = _sanitize_vivino_url(data.get("vivino_url"))
+        data["image_url"] = _sanitize_image_url(data.get("image_url"))
         data["storage_location"] = (data.get("storage_location") or "").strip()
         data["purchase_location"] = (
             data.get("purchase_location")
@@ -462,6 +503,8 @@ class WineDatabase:
         personal_rating = _opt_float(personal_rating)
         purchase_price = _opt_float(purchase_price)
         wine_id = _opt_int(wine_id)
+        vivino_url = _sanitize_vivino_url(vivino_url)
+        image_url = _sanitize_image_url(image_url)
 
         if isinstance(food_pairings, list):
             pairings_json = json.dumps([str(p).strip() for p in food_pairings if str(p).strip()])
@@ -853,6 +896,10 @@ class WineDatabase:
                     val = None
                 elif key == "bottle_size_ml" and val is None:
                     val = 750
+            elif key == "vivino_url":
+                val = _sanitize_vivino_url(val)
+            elif key == "image_url":
+                val = _sanitize_image_url(val)
             set_clauses.append(f"{key} = ?")
             values.append(val)
 

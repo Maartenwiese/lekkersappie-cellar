@@ -1,5 +1,5 @@
 /**
- * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.3.5)
+ * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.3.6)
  * Runs parallel to the native Home Assistant UI, inherits Home Assistant OAuth2
  * authentication, defaults to Large (L) text scale, and supports Home Screen installation.
  */
@@ -36,6 +36,35 @@ function esc(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+function safeExternalUrl(url) {
+  if (!url) return "";
+  const raw = String(url).trim();
+  try {
+    const parsed = new URL(raw, window.location.origin);
+    if (parsed.protocol === "https:") return esc(parsed.href);
+  } catch (_) {}
+  return "";
+}
+
+function safeImageUrl(url) {
+  if (!url) return "";
+  const raw = String(url).trim();
+  if (
+    (raw.startsWith("/local/") || raw.startsWith("/api/")) &&
+    !raw.includes("..")
+  ) {
+    return esc(raw);
+  }
+  if (/^data:image\/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=\s]+$/i.test(raw)) {
+    return esc(raw);
+  }
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol === "https:") return esc(parsed.href);
+  } catch (_) {}
+  return "";
 }
 
 function nowIsoMinutes() {
@@ -651,6 +680,29 @@ class LekkersappieMobileApp {
     this.showToast(`${prefix}: ${err?.message || err}`, "error");
   }
 
+  _clearAuthCache() {
+    try {
+      if ("serviceWorker" in navigator && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({ type: "CLEAR_AUTH_CACHE" });
+      }
+      if ("caches" in window) {
+        caches.keys().then((keys) => {
+          keys
+            .filter((k) => k.startsWith("lekkersappie-pwa-"))
+            .forEach((k) => {
+              caches.open(k).then((cache) =>
+                cache.keys().then((reqs) =>
+                  reqs
+                    .filter((r) => new URL(r.url).pathname.startsWith("/api/"))
+                    .forEach((r) => cache.delete(r))
+                )
+              );
+            });
+        });
+      }
+    } catch (_) {}
+  }
+
   async apiGet(action, params = {}) {
     const qs = new URLSearchParams(params).toString();
     const url = `/api/wine_inventory/pwa/${action}${qs ? `?${qs}` : ""}`;
@@ -668,6 +720,7 @@ class LekkersappieMobileApp {
     }
     if (res.status === 401) {
       this.state.authRequired = true;
+      this._clearAuthCache();
       throw new Error("Home Assistant authentication required. Tap Sign In below.");
     }
     this.state.authRequired = false;
@@ -701,6 +754,7 @@ class LekkersappieMobileApp {
     }
     if (res.status === 401) {
       this.state.authRequired = true;
+      this._clearAuthCache();
       this.render();
       throw new Error("Home Assistant authentication required.");
     }
@@ -945,8 +999,8 @@ class LekkersappieMobileApp {
           <div class="bottle-card" data-wine-id="${w.id}">
             <div class="bottle-thumb-wrap" data-preview-id="${w.id}" title="Tap to view label photo">
               ${
-                w.image_url
-                  ? `<img src="${esc(w.image_url)}" alt="${esc(w.name)}" />`
+                safeImageUrl(w.image_url)
+                  ? `<img src="${safeImageUrl(w.image_url)}" alt="${esc(w.name)}" />`
                   : `<span style="font-size:24px;">🍷</span>`
               }
             </div>
@@ -969,8 +1023,8 @@ class LekkersappieMobileApp {
               <div class="bottle-subline">
                 ${
                   rating
-                    ? w.vivino_url
-                      ? `<a class="vivino-tag" href="${esc(w.vivino_url)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation();">★ ${esc(rating)} ↗</a>`
+                    ? safeExternalUrl(w.vivino_url)
+                      ? `<a class="vivino-tag" href="${safeExternalUrl(w.vivino_url)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation();">★ ${esc(rating)} ↗</a>`
                       : `<span class="vivino-tag">★ ${esc(rating)}</span>`
                     : ""
                 }
@@ -1481,8 +1535,8 @@ class LekkersappieMobileApp {
             <div class="scaled-zone">
               <div class="detail-hero">
                 ${
-                  w.image_url
-                    ? `<img class="detail-hero-img" src="${esc(w.image_url)}" alt="${esc(w.name)}" id="btn-detail-zoom-img" title="Tap to enlarge photo" />`
+                  safeImageUrl(w.image_url)
+                    ? `<img class="detail-hero-img" src="${safeImageUrl(w.image_url)}" alt="${esc(w.name)}" id="btn-detail-zoom-img" title="Tap to enlarge photo" />`
                     : `<div class="detail-hero-img" style="background:var(--brand-soft); display:flex; align-items:center; justify-content:center; font-size:30px;">🍷</div>`
                 }
                 <div class="detail-hero-info">
@@ -1504,8 +1558,8 @@ class LekkersappieMobileApp {
 
                   <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px;">
                     ${
-                      w.vivino_url
-                        ? `<a class="vivino-tag" href="${esc(w.vivino_url)}" target="_blank" rel="noopener noreferrer" style="padding:4px 10px; font-size:12.5px;">
+                      safeExternalUrl(w.vivino_url)
+                        ? `<a class="vivino-tag" href="${safeExternalUrl(w.vivino_url)}" target="_blank" rel="noopener noreferrer" style="padding:4px 10px; font-size:12.5px;">
                             ★ ${esc(w.vivino_rating ? Number(w.vivino_rating).toFixed(1) : "Vivino")} ↗
                           </a>`
                         : `<span class="pill pill-vintage">No Vivino link</span>`
@@ -1902,7 +1956,8 @@ class LekkersappieMobileApp {
 
   _renderPreviewSheet() {
     const w = this.state.previewWine;
-    if (!w || !w.image_url) return "";
+    const imgUrl = safeImageUrl(w && w.image_url);
+    if (!w || !imgUrl) return "";
     return `
       <div class="sheet-backdrop" id="sheet-backdrop">
         <div class="sheet-surface">
@@ -1911,7 +1966,7 @@ class LekkersappieMobileApp {
             <h2>${esc(w.winery)} – ${esc(w.name)} (${esc(w.vintage || "NV")})</h2>
           </div>
           <div class="sheet-body" style="display:flex; align-items:center; justify-content:center; background:#111;">
-            <img src="${esc(w.image_url)}" alt="${esc(w.name)}" style="max-height:82dvh; max-width:100%; object-fit:contain; border-radius:8px;" />
+            <img src="${imgUrl}" alt="${esc(w.name)}" style="max-height:82dvh; max-width:100%; object-fit:contain; border-radius:8px;" />
           </div>
         </div>
       </div>

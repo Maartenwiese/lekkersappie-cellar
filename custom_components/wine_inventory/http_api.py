@@ -36,7 +36,14 @@ except ImportError:  # pragma: no cover - allows standalone unit test imports
                 content_type="application/json",
             )
 
-from .const import DOMAIN, MOBILE_APP_URL_BASE, VERSION
+from .backup import resolve_safe_storage_path
+from .const import (
+    BACKUPS_SUBDIR,
+    DOMAIN,
+    EXPORTS_SUBDIR,
+    MOBILE_APP_URL_BASE,
+    VERSION,
+)
 from .coordinator import WineInventoryCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -287,9 +294,24 @@ class WineInventoryMobileAssetView(HomeAssistantView):
         else:
             body = file_path.read_bytes()
 
-        headers: dict[str, str] = {"Cache-Control": "no-cache"}
+        headers: dict[str, str] = {
+            "Cache-Control": "no-cache",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "same-origin",
+            "X-Frame-Options": "SAMEORIGIN",
+        }
+        if file_path.suffix.lower() == ".html":
+            headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "img-src 'self' data: blob: https://*.vivino.com https://images.vivino.com; "
+                "style-src 'self' 'unsafe-inline'; "
+                "script-src 'self' 'unsafe-inline'; "
+                "connect-src 'self'; "
+                "frame-ancestors 'self'; "
+                "base-uri 'self'"
+            )
         if clean_name == "sw.js":
-            headers["Service-Worker-Allowed"] = "/"
+            headers["Service-Worker-Allowed"] = "/lekkersappie/"
         return web.Response(
             body=body,
             headers=headers,
@@ -355,9 +377,90 @@ class WineInventoryPwaApiView(HomeAssistantView):
             return self.json({"error": str(err)}, status_code=500)
 
 
+class WineInventoryDownloadView(HomeAssistantView):
+    """Authenticated endpoint for downloading private cellar backups and CSV/JSON exports."""
+
+    url = "/api/wine_inventory/download/{category}/{filename}"
+    name = "api:wine_inventory:download"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant | None = None) -> None:
+        """Keep a direct hass reference."""
+        self.hass = hass
+
+    def _get_hass(self, request: web.Request) -> HomeAssistant:
+        if self.hass is not None:
+            return self.hass
+        try:
+            from homeassistant.helpers.http import KEY_HASS  # noqa: PLC0415
+
+            return request.app[KEY_HASS]
+        except (ImportError, KeyError):
+            return request.app["hass"]
+
+    async def get(
+        self, request: web.Request, category: str, filename: str
+    ) -> web.StreamResponse:
+        """Serve a validated backup .zip (admin required) or inventory export (authenticated user)."""
+        hass = self._get_hass(request)
+        hass_user = request.get("hass_user")
+        clean_name = Path(filename).name
+        if clean_name != filename or ".." in filename or not clean_name:
+            return self.json({"error": "Forbidden"}, status_code=403)
+
+        if category == "backup":
+            if hass_user is None or not getattr(hass_user, "is_admin", False):
+                return self.json(
+                    {"error": "Administrator privileges are required to download backups."},
+                    status_code=403,
+                )
+            allowed = (BACKUPS_SUBDIR,)
+        elif category == "export":
+            allowed = (EXPORTS_SUBDIR,)
+        else:
+            return self.json({"error": "Not Found"}, status_code=404)
+
+        config_dir = Path(getattr(hass.config, "config_dir", "."))
+        try:
+            safe_file = resolve_safe_storage_path(
+                config_dir, clean_name, allowed_subdirs=allowed
+            )
+        except ValueError:
+            return self.json({"error": "Forbidden"}, status_code=403)
+
+        if not safe_file.exists() or not safe_file.is_file():
+            return self.json({"error": "Not Found"}, status_code=404)
+
+        if hasattr(hass, "async_add_executor_job"):
+            body = await hass.async_add_executor_job(safe_file.read_bytes)
+        else:
+            body = safe_file.read_bytes()
+
+        suffix = safe_file.suffix.lower()
+        content_type = (
+            "application/zip"
+            if suffix == ".zip"
+            else "text/csv"
+            if suffix == ".csv"
+            else "application/json"
+            if suffix == ".json"
+            else "application/octet-stream"
+        )
+        return web.Response(
+            body=body,
+            headers={
+                "Content-Disposition": f'attachment; filename="{clean_name}"',
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+            content_type=content_type,
+        )
+
+
 def async_register_http_views(hass: HomeAssistant) -> None:
-    """Register HTTP views for the standalone mobile PWA."""
+    """Register HTTP views for the standalone mobile PWA and authenticated downloads."""
     if not hasattr(hass, "http") or hass.http is None:
         return
     hass.http.register_view(WineInventoryMobileAssetView(hass))
     hass.http.register_view(WineInventoryPwaApiView(hass))
+    hass.http.register_view(WineInventoryDownloadView(hass))

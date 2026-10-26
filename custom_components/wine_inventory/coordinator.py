@@ -7,6 +7,7 @@ import csv
 import json
 import logging
 from pathlib import Path
+import time
 from typing import Any
 
 from .const import (
@@ -31,10 +32,13 @@ from .const import (
     EVENT_STOCK_LOW,
     EVENT_WINE_UPDATED,
     EXPORTS_SUBDIR,
+    GEMINI_RATE_WINDOW_SECONDS,
+    MAX_GEMINI_CALLS_PER_MINUTE,
     STORAGE_DIR_NAME,
 )
 from .database import WineDatabase, utc_now_iso
 from .scanner import (
+    GeminiScannerError,
     async_judge_vivino_candidates,
     async_research_wine_with_gemini,
     grounded_search_fields,
@@ -71,6 +75,20 @@ class WineInventoryCoordinator:
         self.wines: list[dict[str, Any]] = []
         self._listeners: list[Callable[[], None]] = []
         self._event_callbacks: list[Callable[[str, dict[str, Any]], None]] = []
+        self._gemini_call_timestamps: list[float] = []
+
+    def _check_gemini_rate_limit(self) -> None:
+        """Enforce a per-coordinator sliding-window rate limit on paid Gemini API calls."""
+        now = time.monotonic()
+        cutoff = now - GEMINI_RATE_WINDOW_SECONDS
+        self._gemini_call_timestamps = [
+            ts for ts in self._gemini_call_timestamps if ts > cutoff
+        ]
+        if len(self._gemini_call_timestamps) >= MAX_GEMINI_CALLS_PER_MINUTE:
+            raise GeminiScannerError(
+                f"Rate limit exceeded: maximum {MAX_GEMINI_CALLS_PER_MINUTE} Gemini AI requests per minute. Please wait a moment and try again."
+            )
+        self._gemini_call_timestamps.append(now)
 
     @property
     def cellar_name(self) -> str:
@@ -198,6 +216,7 @@ class WineInventoryCoordinator:
         camera_entity_id: str | None = None,
     ) -> dict[str, Any]:
         """Scan a bottle image with Gemini Flash-Lite, enrich via Vivino, and check duplicates."""
+        self._check_gemini_rate_limit()
         if image_data:
             mime_type, raw_bytes = parse_image_data_uri(image_data)
         elif camera_entity_id:
@@ -532,6 +551,7 @@ class WineInventoryCoordinator:
 
     async def async_research_wine(self, wine_id: int) -> dict[str, Any]:
         """Perform deep Gemini AI research on producer history and wine details."""
+        self._check_gemini_rate_limit()
         wine = await self.hass.async_add_executor_job(
             self.db.get_wine_detail, int(wine_id)
         )
@@ -660,7 +680,7 @@ class WineInventoryCoordinator:
                     writer.writeheader()
                     for w in wines:
                         writer.writerow(w)
-            return str(target), f"/local/wine_inventory/exports/{filename}"
+            return str(target), f"/api/wine_inventory/download/export/{filename}"
 
         file_path, download_url = await self.hass.async_add_executor_job(_write_export)
         return {

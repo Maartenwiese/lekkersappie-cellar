@@ -220,6 +220,41 @@ class TestBackupRestoreAndViews(unittest.TestCase):
             self.assertEqual(stats["total_bottles"], 0)
             self.assertEqual(stats["unique_wines"], 0)
 
+    def test_v036_backup_security_sandboxing_zipslip_and_sqlite_header(self) -> None:
+        """v0.3.6: Verify private storage migration, path traversal sandboxing, Zip-Slip rejection, and SQLite header checks."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_dir = Path(tmpdir)
+            db_file = config_dir / "wine_inventory.db"
+            db = WineDatabase(db_file)
+            db.initialize()
+
+            # 1. Backup created in private wine_inventory/backups, not www/
+            meta = create_backup_archive(config_dir, db)
+            self.assertTrue(meta["download_url"].startswith("/api/wine_inventory/download/backup/"))
+            self.assertNotIn("/local/", meta["download_url"])
+
+            # 2. Path traversal outside wine_inventory/backups is blocked
+            with self.assertRaises(ValueError):
+                restore_backup_archive(config_dir, db, "../../etc/passwd")
+            with self.assertRaises(ValueError):
+                import_wines_archive(config_dir, db, "../../etc/passwd", format_type="json")
+
+            # 3. ZIP containing a fake/non-SQLite wine_inventory.db is rejected
+            bad_db_buf = io.BytesIO()
+            with zipfile.ZipFile(bad_db_buf, "w") as zf:
+                zf.writestr("wine_inventory.db", b"NOT_A_SQLITE_FILE_HEADER_AT_ALL")
+            with self.assertRaises(ValueError) as ctx_bad_db:
+                restore_backup_archive(config_dir, db, bad_db_buf.getvalue())
+            self.assertIn("SQLite", str(ctx_bad_db.exception))
+
+            # 4. ZIP containing Zip-Slip traversal entry (../evil.sh) is rejected
+            zip_slip_buf = io.BytesIO()
+            with zipfile.ZipFile(zip_slip_buf, "w") as zf:
+                zf.writestr("../evil.sh", b"#!/bin/sh\necho pwned\n")
+            with self.assertRaises(ValueError) as ctx_slip:
+                restore_backup_archive(config_dir, db, zip_slip_buf.getvalue())
+            self.assertIn("unsafe member path", str(ctx_slip.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

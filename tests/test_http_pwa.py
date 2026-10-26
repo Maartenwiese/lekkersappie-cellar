@@ -464,6 +464,96 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
         self.assertIn("_autoResizeTextareas", app_js)
         self.assertIn("_sanitizeWinePayload", app_js)
 
+    async def test_v036_security_headers_sw_scope_admin_rbac_and_download_view(self) -> None:
+        """v0.3.6: Verify CSP/security headers, narrowed SW scope, private download endpoint RBAC, and WS admin guards."""
+        from aiohttp.test_utils import make_mocked_request
+        from custom_components.wine_inventory.http_api import WineInventoryDownloadView
+        from custom_components.wine_inventory.websocket_api import (
+            ws_create_backup,
+            ws_import_wines,
+            ws_list_backups,
+            ws_restore_backup,
+        )
+
+        # 1. Asset view sets CSP, X-Content-Type-Options, Referrer-Policy, X-Frame-Options, and narrowed SW scope
+        asset_view = WineInventoryMobileAssetView(self.hass)
+        idx_resp = await asset_view.get(make_mocked_request("GET", "/lekkersappie/index.html"), "index.html")
+        self.assertEqual(idx_resp.headers.get("X-Content-Type-Options"), "nosniff")
+        self.assertEqual(idx_resp.headers.get("Referrer-Policy"), "same-origin")
+        self.assertEqual(idx_resp.headers.get("X-Frame-Options"), "SAMEORIGIN")
+        self.assertIn("default-src 'self'", idx_resp.headers.get("Content-Security-Policy", ""))
+
+        sw_resp = await asset_view.get(make_mocked_request("GET", "/lekkersappie/sw.js"), "sw.js")
+        self.assertEqual(sw_resp.headers.get("Service-Worker-Allowed"), "/lekkersappie/")
+
+        # 2. Create backup and verify download view enforces admin for backups and blocks traversal
+        backup_meta = await self.coordinator.async_create_backup()
+        dl_view = WineInventoryDownloadView(self.hass)
+        self.assertTrue(dl_view.requires_auth)
+
+        class _StubUser:
+            def __init__(self, is_admin: bool) -> None:
+                self.is_admin = is_admin
+                self.id = "u1"
+                self.name = "Tester"
+
+        # Non-admin denied backup download (HTTP 403)
+        req_non_admin = make_mocked_request("GET", backup_meta["download_url"])
+        req_non_admin["hass_user"] = _StubUser(is_admin=False)
+        resp_forbidden = await dl_view.get(req_non_admin, "backup", backup_meta["filename"])
+        self.assertEqual(resp_forbidden.status, 403)
+
+        # Admin allowed backup download (HTTP 200 with Content-Disposition attachment)
+        req_admin = make_mocked_request("GET", backup_meta["download_url"])
+        req_admin["hass_user"] = _StubUser(is_admin=True)
+        resp_ok = await dl_view.get(req_admin, "backup", backup_meta["filename"])
+        self.assertEqual(resp_ok.status, 200)
+        self.assertIn("attachment", resp_ok.headers.get("Content-Disposition", ""))
+
+        # Path traversal attempt rejected (HTTP 403)
+        resp_traversal = await dl_view.get(req_admin, "backup", "../wine_inventory.db")
+        self.assertEqual(resp_traversal.status, 403)
+
+        # 3. WebSocket backup/restore/import commands reject non-admin users
+        class _StubWSConn:
+            def __init__(self, is_admin: bool) -> None:
+                self.user = _StubUser(is_admin=is_admin)
+                self.errors: list[tuple[int, str, str]] = []
+                self.results: list[tuple[int, dict]] = []
+
+            def send_error(self, msg_id: int, code: str, message: str) -> None:
+                self.errors.append((msg_id, code, message))
+
+            def send_result(self, msg_id: int, payload: dict) -> None:
+                self.results.append((msg_id, payload))
+
+        non_admin_conn = _StubWSConn(is_admin=False)
+        await ws_create_backup(self.hass, non_admin_conn, {"id": 1, "type": "wine_inventory/create_backup"})
+        await ws_restore_backup(
+            self.hass,
+            non_admin_conn,
+            {"id": 2, "type": "wine_inventory/restore_backup", "backup_filename": backup_meta["filename"]},
+        )
+        await ws_import_wines(
+            self.hass,
+            non_admin_conn,
+            {"id": 3, "type": "wine_inventory/import_wines", "payload": [], "format_type": "json"},
+        )
+        await ws_list_backups(self.hass, non_admin_conn, {"id": 4, "type": "wine_inventory/list_backups"})
+        self.assertEqual(len(non_admin_conn.errors), 4)
+        for _, err_code, _ in non_admin_conn.errors:
+            self.assertEqual(err_code, "unauthorized")
+
+        # 4. Frontend SW and URL sanitizers
+        sw_js = (MOBILE_DIR / "sw.js").read_text(encoding="utf-8")
+        app_js = (MOBILE_DIR / "app.js").read_text(encoding="utf-8")
+        card_js = (INTEGRATION_DIR / "frontend" / "wine-inventory-card.js").read_text(encoding="utf-8")
+        self.assertNotIn("cache.put(event.request, clone)", sw_js.split('url.pathname.startsWith("/api/")')[1].split("if (")[0])
+        self.assertIn("safeExternalUrl", app_js)
+        self.assertIn("safeImageUrl", app_js)
+        self.assertIn("safeExternalUrl", card_js)
+        self.assertIn("safeImageUrl", card_js)
+
 
 if __name__ == "__main__":
     unittest.main()

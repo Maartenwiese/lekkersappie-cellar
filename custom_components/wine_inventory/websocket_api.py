@@ -4,13 +4,76 @@ from __future__ import annotations
 
 from typing import Any
 
-import voluptuous as vol
+try:
+    import voluptuous as vol
+    from homeassistant.components import websocket_api
+    from homeassistant.core import HomeAssistant
+except ImportError:  # pragma: no cover - allows standalone unit test imports
+    try:
+        import voluptuous as vol  # type: ignore[no-redef]
+    except ImportError:
+        class _StubVol:
+            @staticmethod
+            def Required(key: Any, **kwargs: Any) -> Any:
+                return key
 
-from homeassistant.components import websocket_api
-from homeassistant.core import HomeAssistant
+            @staticmethod
+            def Optional(key: Any, **kwargs: Any) -> Any:
+                return key
+
+            @staticmethod
+            def In(values: Any) -> Any:
+                return values
+
+            @staticmethod
+            def Any(*args: Any) -> Any:
+                return args
+
+            @staticmethod
+            def Coerce(typ: Any) -> Any:
+                return typ
+
+        vol = _StubVol()  # type: ignore[assignment]
+    HomeAssistant = Any  # type: ignore[assignment,misc]
+
+    class _StubWebsocketApi:
+        ActiveConnection = Any
+
+        @staticmethod
+        def websocket_command(schema: Any):
+            def _decorator(func: Any) -> Any:
+                return func
+            return _decorator
+
+        @staticmethod
+        def async_response(func: Any) -> Any:
+            return func
+
+        @staticmethod
+        def require_admin(func: Any) -> Any:
+            return func
+
+        @staticmethod
+        def async_register_command(hass: Any, handler: Any) -> None:
+            pass
+
+    websocket_api = _StubWebsocketApi()  # type: ignore[assignment]
 
 from .const import DOMAIN
 from .coordinator import WineInventoryCoordinator
+
+
+def _require_admin_user(connection: Any, msg: dict[str, Any]) -> bool:
+    """Verify the active WebSocket connection belongs to a Home Assistant administrator."""
+    user = getattr(connection, "user", None)
+    if user is None or not getattr(user, "is_admin", False):
+        connection.send_error(
+            msg["id"],
+            "unauthorized",
+            "Administrator privileges are required for backup, restore, and bulk import operations.",
+        )
+        return False
+    return True
 
 
 def _get_coordinator(
@@ -379,6 +442,7 @@ async def ws_refresh_vivino(
         vol.Optional("entry_id"): str,
     }
 )
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_create_backup(
     hass: HomeAssistant,
@@ -386,6 +450,8 @@ async def ws_create_backup(
     msg: dict[str, Any],
 ) -> None:
     """Create a complete .zip backup containing database, metadata, and images."""
+    if not _require_admin_user(connection, msg):
+        return
     try:
         coordinator = _get_coordinator(hass, msg.get("entry_id"))
         res = await coordinator.async_create_backup()
@@ -402,6 +468,7 @@ async def ws_create_backup(
         vol.Optional("entry_id"): str,
     }
 )
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_restore_backup(
     hass: HomeAssistant,
@@ -409,6 +476,8 @@ async def ws_restore_backup(
     msg: dict[str, Any],
 ) -> None:
     """Restore database and images from a backup .zip file path or base64 data."""
+    if not _require_admin_user(connection, msg):
+        return
     try:
         coordinator = _get_coordinator(hass, msg.get("entry_id"))
         zip_data = msg.get("zip_data")
@@ -439,6 +508,7 @@ async def ws_restore_backup(
         vol.Optional("entry_id"): str,
     }
 )
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_import_wines(
     hass: HomeAssistant,
@@ -446,6 +516,8 @@ async def ws_import_wines(
     msg: dict[str, Any],
 ) -> None:
     """Import wines from file path, base64 archive, or JSON list."""
+    if not _require_admin_user(connection, msg):
+        return
     try:
         coordinator = _get_coordinator(hass, msg.get("entry_id"))
         file_data = msg.get("file_data")
@@ -477,6 +549,7 @@ async def ws_import_wines(
         vol.Optional("entry_id"): str,
     }
 )
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_list_backups(
     hass: HomeAssistant,
@@ -484,6 +557,8 @@ async def ws_list_backups(
     msg: dict[str, Any],
 ) -> None:
     """List available backups on disk."""
+    if not _require_admin_user(connection, msg):
+        return
     try:
         coordinator = _get_coordinator(hass, msg.get("entry_id"))
         res = await coordinator.async_list_backups()

@@ -6,8 +6,23 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant import config_entries
-from homeassistant.core import callback
+try:
+    from homeassistant import config_entries
+    from homeassistant.core import callback
+    from homeassistant.helpers.selector import (
+        TextSelector,
+        TextSelectorConfig,
+        TextSelectorType,
+    )
+except ImportError:  # pragma: no cover - fallback for standalone unit tests
+    config_entries = Any  # type: ignore[assignment]
+
+    def callback(func: Any) -> Any:  # type: ignore[no-redef]
+        return func
+
+    TextSelector = None  # type: ignore[assignment,misc]
+    TextSelectorConfig = None  # type: ignore[assignment,misc]
+    TextSelectorType = None  # type: ignore[assignment,misc]
 
 from .const import (
     CONF_CELLAR_NAME,
@@ -38,12 +53,18 @@ def _build_schema(defaults: dict[str, Any], include_cellar_name: bool = True) ->
             )
         ] = str
 
+    api_key_validator: Any = (
+        TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
+        if TextSelector is not None and TextSelectorConfig is not None and TextSelectorType is not None
+        else str
+    )
+
     fields.update(
         {
             vol.Optional(
                 CONF_GEMINI_API_KEY,
                 default=defaults.get(CONF_GEMINI_API_KEY, ""),
-            ): str,
+            ): api_key_validator,
             vol.Required(
                 CONF_GEMINI_MODEL,
                 default=defaults.get(CONF_GEMINI_MODEL, DEFAULT_GEMINI_MODEL),

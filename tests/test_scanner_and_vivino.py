@@ -83,8 +83,12 @@ class _StubHttpSession:
         self.judge_payload = judge_payload
         self.get_urls: list[str] = []
         self.judge_prompts: list[str] = []
+        self.post_headers: list[dict[str, Any]] = []
+        self.post_params: list[dict[str, Any]] = []
 
     def post(self, url: str, **kwargs: Any) -> _StubHttpResponse:
+        self.post_headers.append(dict(kwargs.get("headers") or {}))
+        self.post_params.append(dict(kwargs.get("params") or {}))
         body = kwargs.get("json") or {}
         text = "".join(
             str(p.get("text") or "")
@@ -267,7 +271,9 @@ class TestScannerVivinoAndCoordinator(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmpdir:
                 coord = self._make_coordinator(Path(tmpdir), session)
                 await coord.async_initialize()
-                img = "data:image/jpeg;base64," + base64.b64encode(b"jpg").decode("ascii")
+                img = "data:image/jpeg;base64," + base64.b64encode(
+                    b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01"
+                ).decode("ascii")
                 result["scan"] = await coord.async_scan_bottle(image_data=img)
                 if result["scan"]["vivino_confidence"] == "high":
                     saved = await coord.async_add_wine({**result["scan"]["extracted"], "quantity": 2})
@@ -469,8 +475,41 @@ class TestScannerVivinoAndCoordinator(unittest.TestCase):
             self.assertEqual(res["taste_profile"]["light_vs_bold"], 78)
             self.assertEqual(res["taste_profile"]["dry_vs_sweet"], 8)
             self.assertEqual(res["taste_profile"]["soft_vs_acidic_label"], "Crisp & Lively")
+            self.assertEqual(session.post_headers[-1].get("x-goog-api-key"), "test-api-key")
+            self.assertNotIn("key", session.post_params[-1])
 
         asyncio.run(_run())
+
+    def test_v036_security_gemini_header_image_magic_and_rate_limit(self) -> None:
+        """v0.3.6: Gemini API key passed via x-goog-api-key header, image magic bytes verified, and 10/min rate limit enforced."""
+        from custom_components.wine_inventory.scanner import GeminiScannerError
+
+        # 1. Non-image bytes (e.g. HTML/JS disguised as base64) rejected by parse_image_data_uri
+        bad_payload = "data:image/jpeg;base64," + base64.b64encode(b"<script>alert(1)</script>").decode("ascii")
+        with self.assertRaises(GeminiScannerError) as bad_ctx:
+            parse_image_data_uri(bad_payload)
+        self.assertIn("JPEG, PNG, or WebP", str(bad_ctx.exception))
+
+        # 2. Valid JPEG magic bytes accepted and mime normalized
+        valid_jpeg = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01TEST"
+        valid_uri = "data:image/png;base64," + base64.b64encode(valid_jpeg).decode("ascii")
+        detected_mime, decoded_bytes = parse_image_data_uri(valid_uri)
+        self.assertEqual(decoded_bytes, valid_jpeg)
+        self.assertEqual(detected_mime, "image/jpeg")
+
+        # 3. Coordinator rate limit blocks the 11th Gemini call within 60 seconds
+        async def _run_rate_limit() -> None:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                session = _StubHttpSession(_gemini(TIGNANELLO_LABEL), vivino_status=404)
+                coord = self._make_coordinator(Path(tmpdir), session)
+                await coord.async_initialize()
+                for _ in range(10):
+                    coord._check_gemini_rate_limit()
+                with self.assertRaises(GeminiScannerError) as rl_ctx:
+                    coord._check_gemini_rate_limit()
+                self.assertIn("rate limit", str(rl_ctx.exception).lower())
+
+        asyncio.run(_run_rate_limit())
 
 
 if __name__ == "__main__":

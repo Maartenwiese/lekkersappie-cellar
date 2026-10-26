@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 import csv
 from datetime import datetime, timezone
 import io
 import json
 import logging
 from pathlib import Path
+import shutil
+import sqlite3
+import tempfile
 from typing import TYPE_CHECKING, Any
 import zipfile
 
@@ -16,6 +20,11 @@ from .const import (
     COVERS_SUBDIR,
     DB_FILENAME,
     DOMAIN,
+    EXPORTS_SUBDIR,
+    LEGACY_BACKUPS_SUBDIR,
+    LEGACY_EXPORTS_SUBDIR,
+    MAX_BACKUP_ARCHIVE_BYTES,
+    MAX_IMAGE_UPLOAD_BYTES,
     STORAGE_DIR_NAME,
     VERSION,
 )
@@ -26,22 +35,132 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+SQLITE_MAGIC_HEADER = b"SQLite format 3\x00"
+ALLOWED_COVER_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+
+
+def is_valid_image_bytes(data: bytes) -> bool:
+    """Return True if raw bytes begin with a recognized JPEG, PNG, or WebP magic signature."""
+    if not data or len(data) < 12 or len(data) > MAX_IMAGE_UPLOAD_BYTES:
+        return False
+    if data.startswith(b"\xff\xd8\xff"):
+        return True
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return True
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return True
+    return False
+
+
+def _validate_sqlite_bytes(db_bytes: bytes, work_dir: Path) -> None:
+    """Verify that db_bytes is a valid, uncorrupted SQLite 3 database before overwriting."""
+    if not db_bytes or len(db_bytes) < 100 or not db_bytes.startswith(SQLITE_MAGIC_HEADER):
+        raise ValueError(
+            "Security error: backup database file does not have a valid SQLite 3 header."
+        )
+    if len(db_bytes) > MAX_BACKUP_ARCHIVE_BYTES:
+        raise ValueError(
+            "Security error: backup database exceeds maximum allowed size (50 MB)."
+        )
+    work_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=work_dir, suffix=".sqlite_verify", delete=True) as tmp:
+        tmp.write(db_bytes)
+        tmp.flush()
+        with closing(sqlite3.connect(tmp.name)) as conn:
+            verdict = conn.execute("PRAGMA quick_check;").fetchone()
+            if not verdict or str(verdict[0]).lower() != "ok":
+                raise ValueError(
+                    "Security error: SQLite database failed integrity check."
+                )
+
+
+def _migrate_legacy_public_files(config_dir: Path) -> None:
+    """Move any legacy backups/exports out of <config>/www/ into private storage."""
+    migrations = (
+        (config_dir / LEGACY_BACKUPS_SUBDIR, config_dir / BACKUPS_SUBDIR, ("*.zip",)),
+        (
+            config_dir / LEGACY_EXPORTS_SUBDIR,
+            config_dir / EXPORTS_SUBDIR,
+            ("*.csv", "*.json"),
+        ),
+    )
+    for legacy_dir, private_dir, patterns in migrations:
+        if not legacy_dir.exists() or not legacy_dir.is_dir():
+            continue
+        for pat in patterns:
+            for item in legacy_dir.glob(pat):
+                if not item.is_file() or item.is_symlink():
+                    continue
+                private_dir.mkdir(parents=True, exist_ok=True)
+                dest = private_dir / item.name
+                try:
+                    if not dest.exists():
+                        shutil.move(str(item), str(dest))
+                    else:
+                        item.unlink()
+                except OSError as err:
+                    _LOGGER.debug("Could not migrate legacy file %s: %s", item, err)
+
+
+def resolve_safe_storage_path(
+    config_dir: Path,
+    user_path: str | Path,
+    *,
+    allowed_subdirs: tuple[str, ...] = (BACKUPS_SUBDIR, EXPORTS_SUBDIR, STORAGE_DIR_NAME),
+) -> Path:
+    """Resolve a user-supplied filename or path strictly within private wine_inventory dirs."""
+    raw = str(user_path or "").strip()
+    if not raw or "\x00" in raw:
+        raise ValueError("Invalid or empty file path.")
+
+    candidate_input = Path(raw)
+    if ".." in candidate_input.parts:
+        raise ValueError(
+            "Security error: path traversal ('..') is not allowed."
+        )
+
+    allowed_roots = [(config_dir / sub).resolve() for sub in allowed_subdirs]
+
+    # Bare filename (e.g. "lekkersappie_backup_20261026_120000.zip")
+    if candidate_input.name == raw:
+        for root in allowed_roots:
+            cand = root / raw
+            if cand.exists() and cand.is_file() and not cand.is_symlink():
+                resolved = cand.resolve()
+                if any(resolved.is_relative_to(r) for r in allowed_roots):
+                    return resolved
+        # Return path inside primary allowed root so caller can report file-not-found or check exists()
+        return allowed_roots[0] / raw
+
+    # Explicit relative or absolute path: must resolve inside one of allowed_roots
+    if not candidate_input.is_absolute():
+        candidate_input = config_dir / candidate_input
+    if candidate_input.is_symlink():
+        raise ValueError("Security error: symbolic links are not allowed.")
+    resolved = candidate_input.resolve()
+    if not any(resolved.is_relative_to(r) for r in allowed_roots):
+        raise ValueError(
+            "Security error: path is outside the allowed wine_inventory storage directory."
+        )
+    return resolved
+
 
 def list_available_backups(config_dir: Path) -> list[dict[str, Any]]:
-    """List available .zip backup archives in <config>/www/wine_inventory/backups/."""
+    """List available .zip backup archives in <config>/wine_inventory/backups/."""
+    _migrate_legacy_public_files(config_dir)
     backups_dir = config_dir / BACKUPS_SUBDIR
     if not backups_dir.exists():
         return []
 
     backups = []
     for f in backups_dir.glob("*.zip"):
-        if f.is_file():
+        if f.is_file() and not f.is_symlink():
             stat = f.stat()
             backups.append(
                 {
                     "filename": f.name,
                     "file_path": str(f),
-                    "download_url": f"/local/wine_inventory/backups/{f.name}",
+                    "download_url": f"/api/wine_inventory/download/backup/{f.name}",
                     "size_bytes": stat.st_size,
                     "size_kb": round(stat.st_size / 1024, 1),
                     "created_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
@@ -53,6 +172,7 @@ def list_available_backups(config_dir: Path) -> list[dict[str, Any]]:
 
 def create_backup_archive(config_dir: Path, db: WineDatabase) -> dict[str, Any]:
     """Create a complete .zip backup containing SQLite db, metadata.json, and cover images."""
+    _migrate_legacy_public_files(config_dir)
     db.checkpoint_wal()
     timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     filename = f"lekkersappie_backup_{timestamp_str}.zip"
@@ -105,7 +225,7 @@ def create_backup_archive(config_dir: Path, db: WineDatabase) -> dict[str, Any]:
     return {
         "file_path": str(target_zip),
         "filename": filename,
-        "download_url": f"/local/wine_inventory/backups/{filename}",
+        "download_url": f"/api/wine_inventory/download/backup/{filename}",
         "size_bytes": target_zip.stat().st_size,
         "size_kb": round(target_zip.stat().st_size / 1024, 1),
         "wines_count": len(full_wines),
@@ -119,7 +239,8 @@ def restore_backup_archive(
     db: WineDatabase,
     zip_source: Path | bytes | str,
 ) -> dict[str, Any]:
-    """Restore SQLite database and cover images from a .zip backup archive."""
+    """Restore SQLite database and cover images from a validated .zip backup archive."""
+    _migrate_legacy_public_files(config_dir)
     db_dir = config_dir / STORAGE_DIR_NAME
     db_dir.mkdir(parents=True, exist_ok=True)
     target_db_path = getattr(db, "db_path", None) or (db_dir / DB_FILENAME)
@@ -129,24 +250,67 @@ def restore_backup_archive(
     alt_covers_dir.mkdir(parents=True, exist_ok=True)
 
     if isinstance(zip_source, bytes):
+        if len(zip_source) > MAX_BACKUP_ARCHIVE_BYTES:
+            raise ValueError(
+                "Security error: backup archive exceeds maximum allowed size (50 MB)."
+            )
         zip_obj = zipfile.ZipFile(io.BytesIO(zip_source))
     else:
-        zip_obj = zipfile.ZipFile(Path(zip_source))
+        safe_path = resolve_safe_storage_path(config_dir, zip_source)
+        if not safe_path.exists() or not safe_path.is_file():
+            raise FileNotFoundError(f"Backup archive not found: {safe_path.name}")
+        if safe_path.stat().st_size > MAX_BACKUP_ARCHIVE_BYTES:
+            raise ValueError(
+                "Security error: backup archive exceeds maximum allowed size (50 MB)."
+            )
+        zip_obj = zipfile.ZipFile(safe_path)
 
     restored_db = False
     restored_images = 0
     wines_count = 0
 
     with zip_obj:
+        # Zip-Slip and Zip-Bomb pre-flight inspection
+        total_uncompressed = 0
+        for info in zip_obj.infolist():
+            member_path = Path(info.filename)
+            if (
+                ".." in member_path.parts
+                or info.filename.startswith("/")
+                or info.filename.startswith("\\")
+            ):
+                raise ValueError(
+                    f"Security error: unsafe member path in ZIP archive: {info.filename}"
+                )
+            if info.file_size < 0 or info.file_size > MAX_BACKUP_ARCHIVE_BYTES:
+                raise ValueError(
+                    "Security error: archive member exceeds maximum allowed uncompressed size."
+                )
+            total_uncompressed += info.file_size
+            if total_uncompressed > MAX_BACKUP_ARCHIVE_BYTES:
+                raise ValueError(
+                    "Security error: total uncompressed archive size exceeds 50 MB limit."
+                )
+
         namelist = zip_obj.namelist()
 
-        # Restore cover image files
+        # Restore cover image files (validated by extension and image magic header)
         for name in namelist:
             if name.startswith("covers/") and len(name) > len("covers/") and not name.endswith("/"):
+                clean_img_name = Path(name).name
+                ext = Path(clean_img_name).suffix.lower()
+                if clean_img_name != name[len("covers/"):] or ext not in ALLOWED_COVER_EXTENSIONS:
+                    raise ValueError(
+                        f"Security error: disallowed cover image filename in archive: {name}"
+                    )
                 data = zip_obj.read(name)
-                dest = covers_dir / Path(name).name
+                if not is_valid_image_bytes(data):
+                    raise ValueError(
+                        f"Security error: cover file '{clean_img_name}' failed image magic header verification."
+                    )
+                dest = covers_dir / clean_img_name
                 dest.write_bytes(data)
-                alt_dest = alt_covers_dir / Path(name).name
+                alt_dest = alt_covers_dir / clean_img_name
                 alt_dest.write_bytes(data)
                 restored_images += 1
 
@@ -158,6 +322,9 @@ def restore_backup_archive(
                 break
 
         if db_arcname:
+            db_bytes = zip_obj.read(db_arcname)
+            _validate_sqlite_bytes(db_bytes, db_dir)
+
             # Delete stale -wal and -shm files if present
             wal_file = target_db_path.with_name(f"{DB_FILENAME}-wal")
             shm_file = target_db_path.with_name(f"{DB_FILENAME}-shm")
@@ -166,7 +333,7 @@ def restore_backup_archive(
             if shm_file.exists():
                 shm_file.unlink()
 
-            target_db_path.write_bytes(zip_obj.read(db_arcname))
+            target_db_path.write_bytes(db_bytes)
             db.initialize()
             restored_db = True
             wines_count = len(db.list_wines(include_out_of_stock=True))
@@ -291,19 +458,27 @@ def import_wines_archive(
         return restore_backup_archive(config_dir, db, payload)
 
     if isinstance(payload, str) and (
-        payload.endswith(".zip") or payload.endswith(".json") or payload.endswith(".csv")
+        payload.endswith(".zip")
+        or payload.endswith(".json")
+        or payload.endswith(".csv")
+        or ("\n" not in payload.strip() and not payload.strip().startswith(("[", "{")))
     ):
-        path = Path(payload)
-        if path.exists():
-            if path.suffix.lower() == ".zip":
-                return restore_backup_archive(config_dir, db, path)
-            if path.suffix.lower() == ".json":
-                data = json.loads(path.read_text(encoding="utf-8"))
-                return import_wines_archive(config_dir, db, data, "json")
-            if path.suffix.lower() == ".csv":
-                text = path.read_text(encoding="utf-8")
-                count = _import_wines_from_csv(db, text)
-                return {"success": True, "imported_wines": count}
+        safe_path = resolve_safe_storage_path(config_dir, payload)
+        if not safe_path.exists() or not safe_path.is_file():
+            raise FileNotFoundError(f"Import file not found: {safe_path.name}")
+        if safe_path.stat().st_size > MAX_BACKUP_ARCHIVE_BYTES:
+            raise ValueError(
+                "Security error: import file exceeds maximum allowed size (50 MB)."
+            )
+        if safe_path.suffix.lower() == ".zip":
+            return restore_backup_archive(config_dir, db, safe_path)
+        if safe_path.suffix.lower() == ".json":
+            data = json.loads(safe_path.read_text(encoding="utf-8"))
+            return import_wines_archive(config_dir, db, data, "json")
+        if safe_path.suffix.lower() == ".csv":
+            text = safe_path.read_text(encoding="utf-8")
+            count = _import_wines_from_csv(db, text)
+            return {"success": True, "imported_wines": count}
 
     if isinstance(payload, dict):
         wines_list = payload.get("wines") or [payload]

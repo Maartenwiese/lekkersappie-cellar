@@ -6,7 +6,7 @@ from typing import Final
 
 DOMAIN: Final = "wine_inventory"
 NAME: Final = "Lekkersappie"
-VERSION: Final = "0.3.5"
+VERSION: Final = "0.3.6"
 
 # Config & Options keys
 CONF_CELLAR_NAME: Final = "cellar_name"
@@ -29,12 +29,20 @@ DEFAULT_LOW_STOCK_THRESHOLD: Final = 2
 STORAGE_DIR_NAME: Final = "wine_inventory"
 DB_FILENAME: Final = "wine_inventory.db"
 COVERS_SUBDIR: Final = "www/wine_inventory/covers"
-EXPORTS_SUBDIR: Final = "www/wine_inventory/exports"
-BACKUPS_SUBDIR: Final = "www/wine_inventory/backups"
+EXPORTS_SUBDIR: Final = "wine_inventory/exports"
+BACKUPS_SUBDIR: Final = "wine_inventory/backups"
+LEGACY_EXPORTS_SUBDIR: Final = "www/wine_inventory/exports"
+LEGACY_BACKUPS_SUBDIR: Final = "www/wine_inventory/backups"
 FRONTEND_URL_BASE: Final = "/wine_inventory"
 MOBILE_APP_URL_BASE: Final = "/lekkersappie"
 CARD_JS_FILENAME: Final = "wine-inventory-card.js"
 CARD_RESOURCE_URL: Final = f"{FRONTEND_URL_BASE}/{CARD_JS_FILENAME}?v={VERSION}"
+
+# Security & Rate Limits
+MAX_BACKUP_ARCHIVE_BYTES: Final = 50 * 1024 * 1024  # 50 MB max ZIP backup/import size
+MAX_IMAGE_UPLOAD_BYTES: Final = 10 * 1024 * 1024  # 10 MB max bottle label image size
+MAX_GEMINI_CALLS_PER_MINUTE: Final = 10
+GEMINI_RATE_WINDOW_SECONDS: Final = 60.0
 
 # Wine types
 WINE_TYPE_RED: Final = "red"
