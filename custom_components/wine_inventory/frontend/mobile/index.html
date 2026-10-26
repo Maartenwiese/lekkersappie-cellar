@@ -14,10 +14,50 @@
   <link rel="apple-touch-icon" href="/lekkersappie/apple-touch-icon.png" />
   <link rel="icon" type="image/svg+xml" href="/lekkersappie/icon.svg" />
   <link rel="icon" type="image/png" sizes="192x192" href="/lekkersappie/icon-192.png" />
-  <link rel="stylesheet" href="/lekkersappie/styles.css?v=0.3.3" />
+  <style>
+    /* Startup splash: inlined so it paints before any other CSS/JS loads. */
+    #ls-splash {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      background: #ffffff;
+      transition: opacity 0.35s ease;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    #ls-splash.hide { opacity: 0; pointer-events: none; }
+    #ls-splash img { width: 132px; height: 132px; animation: ls-pop 0.6s cubic-bezier(0.2, 0.8, 0.2, 1); }
+    #ls-splash .ls-splash-name { font-size: 26px; font-weight: 800; color: #a61a2e; letter-spacing: -0.3px; text-align: center; }
+    #ls-splash .ls-splash-sub { font-size: 15px; color: #6c5e63; margin-top: -10px; }
+    @keyframes ls-pop { from { transform: scale(0.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  </style>
+  <link rel="stylesheet" href="/lekkersappie/styles.css?v=0.3.4" />
 </head>
 <body>
+  <div id="ls-splash" role="img" aria-label="Lekkersappie Wine Cellar">
+    <img src="/lekkersappie/icon-512.png" alt="" />
+    <div class="ls-splash-name">Lekkersappie</div>
+    <div class="ls-splash-sub">Wine Cellar</div>
+  </div>
+  <script>
+    // Show the splash for 2 seconds on the first launch of each session only.
+    (function () {
+      var splash = document.getElementById("ls-splash");
+      var seen = false;
+      try { seen = sessionStorage.getItem("lekkersappie_splash_shown") === "1"; } catch (e) {}
+      if (seen) { splash.remove(); return; }
+      try { sessionStorage.setItem("lekkersappie_splash_shown", "1"); } catch (e) {}
+      setTimeout(function () {
+        splash.classList.add("hide");
+        setTimeout(function () { splash.remove(); }, 400);
+      }, 2000);
+    })();
+  </script>
   <div id="lekkersappie-mobile-root"></div>
-  <script src="/lekkersappie/app.js?v=0.3.3"></script>
+  <script src="/lekkersappie/app.js?v=0.3.4"></script>
 </body>
 </html>

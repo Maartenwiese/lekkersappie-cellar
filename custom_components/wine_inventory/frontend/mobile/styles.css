@@ -76,6 +76,7 @@ html, body {
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
+  padding-top: env(safe-area-inset-top, 0px);
   padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px));
 }
 
@@ -1242,4 +1243,58 @@ html, body {
 @keyframes slideUp {
   from { transform: translateY(40px); opacity: 0.7; }
   to { transform: translateY(0); opacity: 1; }
+}
+
+
+/* ===== v0.3.4: header-less layout, back buttons, scan notes ===== */
+.status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 14px 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.sheet-header {
+  justify-content: flex-start;
+}
+
+.sheet-header h2 {
+  flex: 1;
+  min-width: 0;
+}
+
+.btn-back {
+  flex-shrink: 0;
+  border: none;
+  background: var(--surface-alt);
+  font-size: 30px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 0 0 4px;
+}
+
+.scan-note {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(46, 125, 50, 0.12);
+  color: var(--success);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.scan-note-error {
+  background: rgba(198, 40, 40, 0.12);
+  color: var(--danger);
+  font-weight: 500;
+}
+
+.scan-note-info {
+  background: rgba(2, 119, 189, 0.12);
+  color: var(--info);
+  font-weight: 500;
 }

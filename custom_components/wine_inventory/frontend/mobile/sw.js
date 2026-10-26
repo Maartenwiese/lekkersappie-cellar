@@ -3,7 +3,7 @@
  * Enables app installation (beforeinstallprompt) and caches the application shell.
  */
 
-const CACHE_NAME = "lekkersappie-pwa-v0.3.3";
+const CACHE_NAME = "lekkersappie-pwa-v0.3.4";
 const APP_SHELL = [
   "/lekkersappie/index.html",
   "/lekkersappie/styles.css",

@@ -133,7 +133,7 @@ Lekkersappie serves a parallel, mobile-first web app designed for one-handed pho
 2. Tap **📲 Install** in the top bar (or the install banner):
    - **Android (Chrome / Edge)**: Prompts the native **Install app** dialog and adds **Lekkersappie** to your app drawer.
    - **iPhone / iPad (Safari)**: Tap Safari’s **Share** button → **Add to Home Screen** to launch Lekkersappie full-screen (`standalone`) with its own white wine-glass app icon.
-3. Adjust text size (`S` / `M` / `L` / `XL`) at any time using the **`Aa`** button in the top bar, in the **Wine Details** header, or in the **⚙️ Config** tab.
+3. Adjust text size (`S` / `M` / `L` / `XL`) and appearance in the **⚙️ Config** tab. The app opens with a short Lekkersappie splash screen (once per session), uses a full-height layout without a header, and every sheet has a **‹ Back** button. The phone's back button or back gesture also returns to the previous page.
 
 ---
 

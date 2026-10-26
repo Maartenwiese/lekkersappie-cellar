@@ -1,5 +1,5 @@
 /**
- * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.3.3)
+ * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.3.4)
  * Runs parallel to the native Home Assistant UI, inherits Home Assistant OAuth2
  * authentication, defaults to Large (L) text scale, and supports Home Screen installation.
  */
@@ -222,6 +222,8 @@ class LekkersappieMobileApp {
       { passive: true }
     );
 
+    window.addEventListener("popstate", () => this._onPopState());
+
     // Redraw the crop canvas after orientation / viewport changes.
     window.addEventListener("resize", () => {
       if (this.state.activeSheet === "crop") this._drawCropCanvas();
@@ -256,7 +258,7 @@ class LekkersappieMobileApp {
           surface.style.transition = "transform 0.18s ease";
           if (dy > 110) {
             surface.style.transform = "translateY(100%)";
-            setTimeout(() => this.closeSheet(), 160);
+            setTimeout(() => this.goBack(), 160);
           } else {
             surface.style.transform = "";
           }
@@ -266,6 +268,61 @@ class LekkersappieMobileApp {
         grip.addEventListener("pointercancel", up);
       });
     });
+  }
+
+  /**
+   * Back navigation: the on-screen ‹ Back button, swipe-down, and the phone's
+   * hardware back button / back gesture all go to the previous page.
+   * Open sheets are mirrored as browser history entries (this._sheetStack).
+   */
+  goBack() {
+    const stack = this._sheetStack || [];
+    if (stack.length && stack[stack.length - 1] === this.state.activeSheet) {
+      history.back(); // popstate handler performs the navigation
+      return;
+    }
+    this.closeSheet();
+  }
+
+  _onPopState() {
+    if (this._ignorePops > 0) {
+      this._ignorePops -= 1;
+      return;
+    }
+    const stack = this._sheetStack || [];
+    if (!stack.length) {
+      if (this.state.activeSheet) this.closeSheet();
+      return;
+    }
+    stack.pop();
+    const prev = stack.length ? stack[stack.length - 1] : null;
+    if (this.state.activeSheet === "preview") this.state.previewWine = null;
+    this._navigatingBack = true;
+    this.state.activeSheet = prev;
+    this.render();
+    this._navigatingBack = false;
+  }
+
+  /** Keep browser history in sync with the open sheet after every render. */
+  _syncSheetHistory() {
+    if (this._navigatingBack) return;
+    const stack = this._sheetStack || (this._sheetStack = []);
+    const cur = this.state.activeSheet;
+    const top = stack.length ? stack[stack.length - 1] : null;
+    if (cur === top) return;
+    const idx = cur ? stack.lastIndexOf(cur) : -1;
+    if (!cur || idx >= 0) {
+      // Closed programmatically (e.g. after saving) or returned to an earlier sheet.
+      const steps = stack.length - (idx + 1);
+      if (steps > 0) {
+        this._ignorePops = (this._ignorePops || 0) + 1;
+        stack.length = idx + 1;
+        history.go(-steps);
+      }
+      return;
+    }
+    stack.push(cur);
+    history.pushState({ lsSheet: cur, depth: stack.length }, "");
   }
 
   closeSheet() {
@@ -1407,13 +1464,8 @@ class LekkersappieMobileApp {
         <div class="sheet-surface">
           <div class="sheet-handle"></div>
           <div class="sheet-header">
+            <button class="btn btn-icon btn-back" id="btn-close-sheet" aria-label="Back"><span aria-hidden="true">‹</span></button>
             <h2>${esc(w.winery)} – ${esc(w.name)} (${esc(w.vintage || "NV")})</h2>
-            <div style="display:flex; gap:6px; align-items:center;">
-              <button class="btn btn-icon font-pill-btn" id="btn-sheet-font-scale" title="Adjust text size">
-                Aa <small>${this._fontScaleLabel()}</small>
-              </button>
-              <button class="btn btn-icon" id="btn-close-sheet" aria-label="Close">✕</button>
-            </div>
           </div>
 
           <div class="sheet-body" id="detail-sheet-body">
@@ -1659,13 +1711,8 @@ class LekkersappieMobileApp {
         <div class="sheet-surface">
           <div class="sheet-handle"></div>
           <div class="sheet-header">
-            <h2>📷 Scan Wine Label with Gemini AI</h2>
-            <div style="display:flex; gap:6px; align-items:center;">
-              <button class="btn btn-icon font-pill-btn" id="btn-sheet-font-scale">
-                Aa <small>${this._fontScaleLabel()}</small>
-              </button>
-              <button class="btn btn-icon" id="btn-close-sheet">✕</button>
-            </div>
+            <button class="btn btn-icon btn-back" id="btn-close-sheet" aria-label="Back"><span aria-hidden="true">‹</span></button>
+            <h2>📷 Scan Wine Label</h2>
           </div>
           <div class="sheet-body" id="scan-sheet-body">
             <div class="scaled-zone">
@@ -1688,14 +1735,27 @@ class LekkersappieMobileApp {
                 ${
                   this.state.scanBusy
                     ? `<div style="margin-top:10px; font-size:13px; font-weight:600; color:var(--brand);">
-                        ⏳ Analyzing bottle label with Gemini Flash-Lite &amp; verifying Vivino…
+                        ⏳ Reading the label with Gemini and checking Vivino… (this can take ~10 s)
                       </div>`
                     : ""
                 }
                 ${
                   this.state.scanError
-                    ? `<div style="margin-top:10px; padding:10px; border-radius:10px; background:rgba(198,40,40,0.1); color:var(--danger); font-size:12.5px;">
-                        <strong>Scan Error:</strong> ${esc(this.state.scanError)}
+                    ? `<div class="scan-note scan-note-error">
+                        <strong>Scan failed:</strong> ${esc(this.state.scanError)}
+                      </div>`
+                    : ""
+                }
+                ${
+                  !this.state.scanBusy && !this.state.scanError && this.state.scanResultNote
+                    ? `<div class="scan-note">${esc(this.state.scanResultNote)}</div>`
+                    : ""
+                }
+                ${
+                  !this.state.scanBusy && this.state.existingWine
+                    ? `<div class="scan-note scan-note-info">
+                        Already in your cellar: <strong>${esc(this.state.existingWine.winery || "")} – ${esc(this.state.existingWine.name || "")}</strong>.
+                        Saving adds a new batch to this wine.
                       </div>`
                     : ""
                 }
@@ -1804,8 +1864,8 @@ class LekkersappieMobileApp {
         <div class="sheet-surface sheet-surface-tall">
           <div class="sheet-handle"></div>
           <div class="sheet-header">
+            <button class="btn btn-icon btn-back" id="btn-cancel-crop" aria-label="Back"><span aria-hidden="true">‹</span></button>
             <h2>✂️ Crop &amp; Rotate</h2>
-            <button class="btn btn-icon" id="btn-cancel-crop" aria-label="Cancel crop">✕</button>
           </div>
           <div class="sheet-body crop-body">
             <p class="crop-hint">Drag the frame to move it. Drag a corner or edge to resize so it fits the label.</p>
@@ -1844,7 +1904,7 @@ class LekkersappieMobileApp {
               <strong style="font-size:15px;">${esc(w.name)}</strong>
               <div style="font-size:12px; color:var(--text-muted);">${esc(w.winery)} (${esc(w.vintage || "NV")})</div>
             </div>
-            <button class="btn btn-icon" id="btn-close-preview">✕</button>
+            <button class="btn btn-icon btn-back" id="btn-close-preview" aria-label="Back"><span aria-hidden="true">‹</span></button>
           </div>
           <div style="display:flex; justify-content:center; background:#111; border-radius:12px; padding:8px;">
             <img src="${esc(w.image_url)}" alt="${esc(w.name)}" style="max-height:70dvh; max-width:100%; object-fit:contain; border-radius:8px;" />
@@ -1860,8 +1920,8 @@ class LekkersappieMobileApp {
         <div class="sheet-surface">
           <div class="sheet-handle"></div>
           <div class="sheet-header">
+            <button class="btn btn-icon btn-back" id="btn-close-sheet" aria-label="Back"><span aria-hidden="true">‹</span></button>
             <h2>📲 Install Lekkersappie as an App</h2>
-            <button class="btn btn-icon" id="btn-close-sheet">✕</button>
           </div>
           <div class="sheet-body">
             <div class="scaled-zone">
@@ -1930,33 +1990,13 @@ class LekkersappieMobileApp {
       }
       <div id="ptr-indicator" class="ptr-indicator" aria-hidden="true">↻</div>
       <div class="app-shell">
-        <header class="top-app-bar">
-          <div class="brand-cluster">
-            <img src="/lekkersappie/icon-192.png" alt="Lekkersappie" class="brand-icon" />
-            <div class="brand-titles">
-              <h1>${esc(this.state.cellarName)}</h1>
-              <div class="brand-sub">
-                <span><strong>${stats.total_bottles || 0}</strong> bottles (${stats.unique_wines || 0} wines)</span>
-                ${this.state.tempDisplay ? `<span class="climate-chip">🌡️ ${esc(this.state.tempDisplay)}</span>` : ""}
-                ${this.state.humidityDisplay ? `<span class="climate-chip">💧 ${esc(this.state.humidityDisplay)}</span>` : ""}
-              </div>
-            </div>
-          </div>
-
-          <div class="top-actions">
-            <button class="btn btn-icon" id="btn-top-refresh" title="Refresh cellar" aria-label="Refresh cellar">↻</button>
-            <button class="btn btn-icon font-pill-btn" id="btn-top-font-scale" title="Adjust text size (S / M / L / XL)" aria-label="Text size ${scaleLabel}">
-              Aa <small>${scaleLabel}</small>
-            </button>
-            ${
-              !this.state.isInstalled
-                ? `<button class="btn btn-soft btn-icon" id="btn-top-install" title="Install as Mobile App" aria-label="Install as Mobile App">📲</button>`
-                : ""
-            }
-          </div>
-        </header>
 
         <main class="scaled-zone">
+          <div class="status-strip" aria-label="Cellar summary">
+            <span><strong>${stats.total_bottles || 0}</strong> bottles · ${stats.unique_wines || 0} wines</span>
+            ${this.state.tempDisplay ? `<span class="climate-chip">🌡️ ${esc(this.state.tempDisplay)}</span>` : ""}
+            ${this.state.humidityDisplay ? `<span class="climate-chip">💧 ${esc(this.state.humidityDisplay)}</span>` : ""}
+          </div>
           ${
             this.state.authRequired
               ? `<div class="panel-card" style="margin:12px; border:1px solid var(--brand); background:var(--surface);">
@@ -2024,6 +2064,7 @@ class LekkersappieMobileApp {
     }
     this._lastRenderedSheet = this.state.activeSheet;
     this._lastRenderedNav = this.state.activeNav;
+    this._syncSheetHistory();
   }
 
   _bindBottleCardEvents(scope) {
@@ -2081,7 +2122,6 @@ class LekkersappieMobileApp {
     this._bindFormState(r.querySelector("#mobile-scan-save-form"), this.state.scanForm);
     this._bindFormState(r.querySelector("#mobile-manual-add-form"), this.state.scanForm);
     r.querySelector("#btn-top-font-scale")?.addEventListener("click", () => this.cycleFontScale());
-    r.querySelector("#btn-sheet-font-scale")?.addEventListener("click", () => this.cycleFontScale());
     r.querySelector("#btn-top-install")?.addEventListener("click", () => this.handleInstallClick());
     r.querySelector("#btn-banner-install")?.addEventListener("click", () => this.handleInstallClick());
     r.querySelector("#btn-settings-install")?.addEventListener("click", () => this.handleInstallClick());
@@ -2101,6 +2141,10 @@ class LekkersappieMobileApp {
     r.querySelector("#btn-nav-scan")?.addEventListener("click", () => {
       this.state.scanForm = this._emptyForm();
       this.state.scanError = "";
+      this.state.scanResultNote = "";
+      this.state.existingWine = null;
+      this.state.scanCandidates = [];
+      this.state.selectedCandidateIdx = -1;
       this.state.activeSheet = "scan";
       this.render();
     });
@@ -2199,13 +2243,13 @@ class LekkersappieMobileApp {
     }
 
     // Sheet close handlers
-    r.querySelector("#btn-close-sheet")?.addEventListener("click", () => this.closeSheet());
-    r.querySelector("#btn-close-preview")?.addEventListener("click", () => this.closeSheet());
+    r.querySelector("#btn-close-sheet")?.addEventListener("click", () => this.goBack());
+    r.querySelector("#btn-close-preview")?.addEventListener("click", () => this.goBack());
     r.querySelector("#sheet-backdrop")?.addEventListener("click", (e) => {
       // Only read-only sheets close on a stray backdrop tap; sheets with forms
       // (detail, scan, crop) require ✕ or a swipe-down so edits are not lost.
       if (e.target.id !== "sheet-backdrop") return;
-      if (["preview", "install_guide"].includes(this.state.activeSheet)) this.closeSheet();
+      if (["preview", "install_guide"].includes(this.state.activeSheet)) this.goBack();
     });
 
     // Detail sheet handlers
@@ -2339,7 +2383,7 @@ class LekkersappieMobileApp {
 
     if (this.state.activeSheet === "crop") {
       this._initCropCanvas();
-      r.querySelector("#btn-cancel-crop")?.addEventListener("click", () => this.closeSheet());
+      r.querySelector("#btn-cancel-crop")?.addEventListener("click", () => this.goBack());
       r.querySelector("#crop-fine-slider")?.addEventListener("input", (e) => this._setFineRotation(e.target.value));
       r.querySelector("#btn-crop-left")?.addEventListener("click", () => this._rotateCrop(-90));
       r.querySelector("#btn-crop-right")?.addEventListener("click", () => this._rotateCrop(90));
@@ -2654,41 +2698,70 @@ class LekkersappieMobileApp {
     this.state.activeSheet = "scan";
     this.state.scanBusy = true;
     this.state.scanError = "";
+    this.state.scanResultNote = "";
+    this.state.existingWine = null;
     this.render();
 
     try {
       const res = await this.apiPost("scan", { image_data: dataUrl });
-      const rec = res.recognized || {};
-      this.state.scanCandidates = res.vivino_candidates || [];
-      this.state.scanConfidence = res.vivino_match_confidence || "none";
-      this.state.scanSuggestedIndex = res.vivino_suggested_index ?? -1;
-      this.state.selectedCandidateIdx = this.state.scanConfidence === "high" ? 0 : -1;
-      this.state.scanForm = {
-        ...this._emptyForm(),
-        winery: rec.winery || "",
-        name: rec.name || "",
-        vintage: rec.vintage ?? "",
-        wine_type: rec.wine_type || "red",
-        varietal: rec.varietal || "",
-        region: rec.region || "",
-        country: rec.country || "",
-        vivino_rating: rec.vivino_rating ?? "",
-        vivino_ratings_count: rec.vivino_ratings_count ?? null,
-        vivino_url: rec.vivino_url || "",
-        vivino_wine_id: rec.vivino_wine_id ?? null,
-        vivino_match_confidence: rec.vivino_match_confidence || "",
-        drink_from_year: rec.drink_from_year ?? "",
-        drink_until_year: rec.drink_until_year ?? "",
-        drink_window_note: rec.drink_window_note || "",
-        general_notes: rec.general_notes || "",
-        image_url: rec.image_url || "",
-      };
+      this._applyScanResult(res);
     } catch (err) {
       this.state.scanError = err?.message || "Bottle recognition failed.";
     } finally {
       this.state.scanBusy = false;
       this.render();
     }
+  }
+
+  /**
+   * Map the server's scan response (coordinator.async_scan_bottle) into the scan form.
+   * Response keys: extracted, vivino_confidence, vivino_selected_index,
+   * vivino_candidates, vivino_judge_reason, existing_wine.
+   */
+  _applyScanResult(res) {
+    const ext = res?.extracted || {};
+    const confidence = res?.vivino_confidence || "none";
+    const selected =
+      res?.vivino_selected_index === null || res?.vivino_selected_index === undefined
+        ? -1
+        : Number(res.vivino_selected_index);
+    this.state.scanCandidates = res?.vivino_candidates || [];
+    this.state.scanConfidence = confidence;
+    this.state.scanSuggestedIndex = selected;
+    this.state.scanJudgeReason = res?.vivino_judge_reason || "";
+    this.state.existingWine = res?.existing_wine || null;
+    // Only a verified (high) match is pre-selected; otherwise "Do not link" stays selected.
+    this.state.selectedCandidateIdx = confidence === "high" && selected >= 0 ? selected : -1;
+    const keepHigh = confidence === "high" && selected >= 0;
+    this.state.scanForm = {
+      ...this._emptyForm(),
+      storage_location: this.state.scanForm?.storage_location || "",
+      purchase_location: this.state.scanForm?.purchase_location || "",
+      purchase_price: this.state.scanForm?.purchase_price || "",
+      quantity: this.state.scanForm?.quantity || 1,
+      winery: ext.winery || "",
+      name: ext.name || "",
+      vintage: ext.vintage ?? "",
+      wine_type: ext.wine_type || "red",
+      varietal: ext.varietal || "",
+      region: ext.region || "",
+      country: ext.country || "",
+      vivino_rating: keepHigh ? ext.vivino_rating ?? "" : "",
+      vivino_ratings_count: keepHigh ? ext.vivino_ratings_count ?? null : null,
+      vivino_url: keepHigh ? ext.vivino_url || "" : "",
+      vivino_wine_id: keepHigh ? ext.vivino_wine_id ?? null : null,
+      vivino_price_estimate: keepHigh ? ext.vivino_price_estimate ?? "" : "",
+      vivino_match_confidence: keepHigh ? "high" : "",
+      rating_source: keepHigh ? ext.rating_source || "vivino" : "",
+      drink_from_year: ext.drink_from_year ?? "",
+      drink_until_year: ext.drink_until_year ?? "",
+      drink_window_note: ext.drink_window_note || "",
+      general_notes: ext.general_notes || "",
+      image_url: ext.image_url || "",
+    };
+    this.state.scanResultNote = ext.winery || ext.name
+      ? `✓ Label read by Gemini (${ext.model_used || "model"})`
+      : "Gemini could not read a producer or wine name. Fill in the fields manually.";
   }
 
   _selectScanCandidate(idx) {

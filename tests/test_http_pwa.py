@@ -354,5 +354,42 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
         self.assertIn("calc(16px / var(--ls-app-scale", css)
 
 
+    def test_v034_scan_contract_header_splash_and_back(self) -> None:
+        """Mobile scan mapping uses the real coordinator response keys; header removed; splash; back nav."""
+        import re
+
+        app_js = (MOBILE_DIR / "app.js").read_text(encoding="utf-8")
+        html = (MOBILE_DIR / "index.html").read_text(encoding="utf-8")
+        coord = (INTEGRATION_DIR / "coordinator.py").read_text(encoding="utf-8")
+
+        # Contract: every key the mobile app reads from the scan response must be
+        # returned by coordinator.async_scan_bottle (regression: it read `recognized`).
+        scan_fn = coord.split("async def async_scan_bottle")[1].split("async def ")[0]
+        returned = set(re.findall(r'"([a-z_]+)":', scan_fn))
+        mapper = app_js.split("_applyScanResult(res) {")[1].split("_selectScanCandidate(idx) {")[0]
+        read_keys = set(re.findall(r"res\?\.([a-z_]+)", mapper))
+        self.assertTrue(read_keys, "scan mapper reads no keys")
+        self.assertTrue(read_keys.issubset(returned), read_keys - returned)
+        self.assertIn("extracted", read_keys)
+        self.assertNotIn("res.recognized", app_js)
+        self.assertIn("this._applyScanResult(res)", app_js)
+
+        # Header removed; Aa removed from sheets; back buttons instead of ✕
+        self.assertNotIn('class="top-app-bar"', app_js)
+        self.assertNotIn("btn-sheet-font-scale", app_js)
+        self.assertNotIn("btn-top-font-scale\" title", app_js)
+        self.assertIn("btn-back", app_js)
+        self.assertNotRegex(app_js, r'id="btn-close-sheet"[^>]*>✕')
+        self.assertIn('addEventListener("popstate"', app_js)
+        self.assertIn("history.pushState", app_js)
+
+        # Splash: static, 2 seconds, once per session
+        self.assertIn('id="ls-splash"', html)
+        self.assertIn("Lekkersappie", html)
+        self.assertIn("Wine Cellar", html)
+        self.assertIn("2000", html)
+        self.assertIn("sessionStorage", html)
+
+
 if __name__ == "__main__":
     unittest.main()
