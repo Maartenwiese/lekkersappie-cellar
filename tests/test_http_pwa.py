@@ -249,6 +249,34 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
         self.assertIn("overflow-y: auto;", styles_css)
         self.assertIn("touch-action: pan-y;", styles_css)
 
+        # 4b. Real asset view serves every mobile file (regression: HTTP 500 when
+        # charset was passed inside content_type to aiohttp web.Response).
+        from aiohttp import web as aio_web
+        from aiohttp.test_utils import make_mocked_request
+
+        asset_view = WineInventoryMobileAssetView(self.hass)
+        for fname, mime in (
+            ("index.html", "text/html"),
+            ("app.js", "application/javascript"),
+            ("styles.css", "text/css"),
+            ("sw.js", "application/javascript"),
+            ("manifest.webmanifest", "application/manifest+json"),
+            ("icon-192.png", "image/png"),
+        ):
+            req = make_mocked_request("GET", f"/lekkersappie/{fname}")
+            resp = await asset_view.get(req, fname)
+            self.assertEqual(resp.status, 200, fname)
+            self.assertEqual(resp.content_type, mime, fname)
+        with self.assertRaises(aio_web.HTTPFound):
+            await asset_view.get(make_mocked_request("GET", "/lekkersappie"), None)
+
+        # PWA API view resolves hass from the view instance (no request.app["hass"]).
+        api_view = WineInventoryPwaApiView(self.hass)
+        api_resp = await api_view.get(
+            make_mocked_request("GET", "/api/wine_inventory/pwa/state"), "state"
+        )
+        self.assertEqual(api_resp.status, 200)
+
         # 5. Photo library selection alongside camera capture
         self.assertIn('id="mobile-scan-file"', app_js)
         self.assertIn('id="mobile-scan-library"', app_js)

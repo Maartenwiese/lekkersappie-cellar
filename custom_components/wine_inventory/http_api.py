@@ -43,14 +43,16 @@ _LOGGER = logging.getLogger(__name__)
 
 MOBILE_FRONTEND_DIR = Path(__file__).parent / "frontend" / "mobile"
 
-CONTENT_TYPES: dict[str, str] = {
-    ".html": "text/html; charset=utf-8",
-    ".js": "application/javascript; charset=utf-8",
-    ".css": "text/css; charset=utf-8",
-    ".webmanifest": "application/manifest+json; charset=utf-8",
-    ".json": "application/json; charset=utf-8",
-    ".svg": "image/svg+xml",
-    ".png": "image/png",
+# (mime type, charset). aiohttp rejects "charset=" inside content_type, so the
+# charset must be passed separately to web.Response.
+CONTENT_TYPES: dict[str, tuple[str, str | None]] = {
+    ".html": ("text/html", "utf-8"),
+    ".js": ("application/javascript", "utf-8"),
+    ".css": ("text/css", "utf-8"),
+    ".webmanifest": ("application/manifest+json", "utf-8"),
+    ".json": ("application/json", "utf-8"),
+    ".svg": ("image/svg+xml", None),
+    ".png": ("image/png", None),
 }
 
 DEFAULT_STORAGE_AREAS = [
@@ -251,6 +253,10 @@ class WineInventoryMobileAssetView(HomeAssistantView):
     name = "api:wine_inventory:mobile_assets"
     requires_auth = False
 
+    def __init__(self, hass: HomeAssistant | None = None) -> None:
+        """Keep a direct hass reference (request.app["hass"] is not reliable)."""
+        self.hass = hass
+
     async def get(
         self, request: web.Request, filename: str | None = None
     ) -> web.StreamResponse:
@@ -272,10 +278,10 @@ class WineInventoryMobileAssetView(HomeAssistantView):
         if not file_path.is_file():
             return web.Response(status=404, text="Not Found")
 
-        content_type = CONTENT_TYPES.get(
-            file_path.suffix.lower(), "application/octet-stream"
+        content_type, charset = CONTENT_TYPES.get(
+            file_path.suffix.lower(), ("application/octet-stream", None)
         )
-        hass: HomeAssistant | None = request.app.get("hass")
+        hass = self.hass
         if hass is not None and hasattr(hass, "async_add_executor_job"):
             body = await hass.async_add_executor_job(file_path.read_bytes)
         else:
@@ -284,7 +290,12 @@ class WineInventoryMobileAssetView(HomeAssistantView):
         headers: dict[str, str] = {"Cache-Control": "no-cache"}
         if clean_name == "sw.js":
             headers["Service-Worker-Allowed"] = "/"
-        return web.Response(body=body, headers=headers, content_type=content_type)
+        return web.Response(
+            body=body,
+            headers=headers,
+            content_type=content_type,
+            charset=charset,
+        )
 
 
 # Keep alias for backwards compatibility in imports
@@ -298,12 +309,27 @@ class WineInventoryPwaApiView(HomeAssistantView):
     name = "api:wine_inventory:pwa_api"
     requires_auth = True
 
+    def __init__(self, hass: HomeAssistant | None = None) -> None:
+        """Keep a direct hass reference (request.app["hass"] is not reliable)."""
+        self.hass = hass
+
+    def _get_hass(self, request: web.Request) -> HomeAssistant:
+        """Return hass from the view, falling back to the aiohttp app."""
+        if self.hass is not None:
+            return self.hass
+        try:
+            from homeassistant.helpers.http import KEY_HASS  # noqa: PLC0415
+
+            return request.app[KEY_HASS]
+        except (ImportError, KeyError):
+            return request.app["hass"]
+
     async def get(self, request: web.Request, action: str) -> web.Response:
         """Handle authenticated GET requests from the mobile PWA."""
-        hass: HomeAssistant = request.app["hass"]
-        hass_user = request.get("hass_user")
-        user_name = getattr(hass_user, "name", None) if hass_user else None
         try:
+            hass = self._get_hass(request)
+            hass_user = request.get("hass_user")
+            user_name = getattr(hass_user, "name", None) if hass_user else None
             status, data = await async_handle_pwa_get(
                 hass,
                 action,
@@ -317,8 +343,8 @@ class WineInventoryPwaApiView(HomeAssistantView):
 
     async def post(self, request: web.Request, action: str) -> web.Response:
         """Handle authenticated POST requests from the mobile PWA."""
-        hass: HomeAssistant = request.app["hass"]
         try:
+            hass = self._get_hass(request)
             payload = await request.json() if request.can_read_body else {}
             status, data = await async_handle_pwa_post(
                 hass, action, dict(payload or {})
@@ -333,5 +359,5 @@ def async_register_http_views(hass: HomeAssistant) -> None:
     """Register HTTP views for the standalone mobile PWA."""
     if not hasattr(hass, "http") or hass.http is None:
         return
-    hass.http.register_view(WineInventoryMobileAssetView())
-    hass.http.register_view(WineInventoryPwaApiView())
+    hass.http.register_view(WineInventoryMobileAssetView(hass))
+    hass.http.register_view(WineInventoryPwaApiView(hass))
