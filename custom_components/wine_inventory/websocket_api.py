@@ -235,6 +235,7 @@ async def ws_scan_bottle(
         vol.Optional("purchase_price"): vol.Any(float, int, None),
         vol.Optional("storage_location", default=""): str,
         vol.Optional("batch_notes", default=""): str,
+        vol.Optional("as_tasted", default=False): bool,
         vol.Optional("entry_id"): str,
     }
 )

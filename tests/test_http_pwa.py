@@ -451,7 +451,7 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
         self.assertIn("border-radius: 0;", css)
 
         # 4. Main Cellar list removed +/- stepper buttons, while Details still has +/- buttons
-        bottle_list_fn = app_js.split("_renderBottleListItems(wines) {")[1].split("_renderCellarView() {")[0]
+        bottle_list_fn = app_js.split("_renderBottleListItems(wines")[1].split("_renderCellarView() {")[0]
         self.assertNotIn("data-step-minus", bottle_list_fn)
         self.assertNotIn("data-step-plus", bottle_list_fn)
         self.assertIn("pill-qty", bottle_list_fn)
@@ -553,6 +553,48 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
         self.assertIn("safeImageUrl", app_js)
         self.assertIn("safeExternalUrl", card_js)
         self.assertIn("safeImageUrl", card_js)
+
+    async def test_v038_mobile_and_ha_tasted_section_and_scan_to_tasted(self) -> None:
+        """v0.3.8: Verify Mobile App Tasted nav & theme, Scan-to-Tasted API & toggle, and HA Card Tasted view."""
+        # 1. Scan / add a wine directly to Tasted via Mobile PWA API (as_tasted=True)
+        status, res = await async_handle_pwa_post(
+            self.hass,
+            "add",
+            {
+                "winery": "Château Palmer",
+                "name": "Alter Ego de Palmer",
+                "vintage": 2019,
+                "wine_type": "red",
+                "varietal": "Merlot, Cabernet Sauvignon",
+                "as_tasted": True,
+                "personal_rating": 4.5,
+                "batch_notes": "Tasted at wine bar",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(res["wine"]["quantity"], 0)
+        self.assertTrue(res["wine"]["is_tasted"])
+        self.assertEqual(res["wine"]["tasted_count"], 1)
+        self.assertGreaterEqual(res["statistics"]["tasted_wines"], 1)
+
+        # 2. Verify Mobile App replaces Add icon with Tasted icon, applies .tasted-page-theme, and has Scan destination toggle
+        app_js = (MOBILE_DIR / "app.js").read_text(encoding="utf-8")
+        css = (MOBILE_DIR / "styles.css").read_text(encoding="utf-8")
+        card_js = (INTEGRATION_DIR / "frontend" / "wine-inventory-card.js").read_text(encoding="utf-8")
+
+        self.assertIn('data-nav="tasted"', app_js)
+        self.assertNotIn('data-nav="add"', app_js)
+        self.assertIn("_renderTastedView()", app_js)
+        self.assertIn("tasted-page-theme", app_js)
+        self.assertIn(".tasted-page-theme", css)
+        self.assertIn('data-scan-dest="tasted"', app_js)
+        self.assertIn('data-scan-dest="cellar"', app_js)
+
+        # 3. Verify Home Assistant Card has Tasted tab, _isWineTasted, and Scan destination toggle
+        self.assertIn('id: "tasted"', card_js)
+        self.assertIn("_isWineTasted(", card_js)
+        self.assertIn('data-ha-scan-dest="tasted"', card_js)
+        self.assertIn("tasted-card-theme", card_js)
 
 
 if __name__ == "__main__":

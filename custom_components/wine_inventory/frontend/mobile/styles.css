@@ -1298,3 +1298,122 @@ html, body {
   color: var(--info);
   font-weight: 500;
 }
+
+/* ===== v0.3.8: Tasted Page Theme, Tasted Banner & Scan Destination Toggle ===== */
+body.tasted-page-theme,
+.tasted-page-theme {
+  --brand: #7a2858;
+  --brand-dark: #58183d;
+  --brand-soft: rgba(122, 40, 88, 0.13);
+  --bg: #f5eff6;
+  --surface: #fffcfe;
+  --surface-alt: #ede3ef;
+  --border: #dfd0e3;
+}
+
+[data-theme="dark"] body.tasted-page-theme,
+[data-theme="dark"] .tasted-page-theme {
+  --brand: #d870ad;
+  --brand-dark: #8e3467;
+  --brand-soft: rgba(216, 112, 173, 0.18);
+  --bg: #140f17;
+  --surface: #201724;
+  --surface-alt: #2b1f31;
+  --border: #3d2c45;
+}
+
+.tasted-view-banner {
+  margin: 10px 12px 2px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(122, 40, 88, 0.16), rgba(180, 110, 45, 0.08));
+  border: 1px solid rgba(122, 40, 88, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tasted-banner-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tasted-banner-main strong {
+  font-size: 14.5px;
+  color: var(--brand);
+}
+
+.tasted-banner-main span {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.pill-tasted {
+  background: rgba(122, 40, 88, 0.16);
+  color: #7a2858;
+  text-transform: none;
+  font-weight: 800;
+}
+
+[data-theme="dark"] .pill-tasted {
+  background: rgba(216, 112, 173, 0.22);
+  color: #f09fd0;
+}
+
+.bottle-card-tasted {
+  border-left: 4px solid var(--brand);
+}
+
+.scan-dest-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 5px;
+  border-radius: 14px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+
+.scan-dest-btn {
+  min-height: 56px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  cursor: pointer;
+  text-align: center;
+  font-family: inherit;
+}
+
+.scan-dest-title {
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.scan-dest-btn small {
+  font-size: 11px;
+  opacity: 0.85;
+  font-weight: 500;
+}
+
+.scan-dest-btn.active {
+  background: var(--brand);
+  color: #ffffff;
+  box-shadow: var(--shadow-sm);
+}
+
+.scan-dest-btn.active.tasted-active {
+  background: #7a2858;
+  color: #ffffff;
+}
+

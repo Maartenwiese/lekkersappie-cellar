@@ -186,10 +186,10 @@ views:
               columns: full
               rows: auto
 
-  - title: Tasting Archive
+  - title: Tasted
     path: tasting-archive
     type: sections
-    icon: mdi:book-open-page-variant
+    icon: mdi:glass-flute
     max_columns: 2
     badges:
       - type: entity
@@ -202,7 +202,7 @@ views:
         column_span: 1
         cards:
           - type: heading
-            heading: Cellar Tasting & Notes
+            heading: Tasted & Consumed Wines
             heading_style: title
             icon: mdi:notebook-check-outline
           - type: tile
@@ -222,21 +222,22 @@ views:
               columns: 12
               rows: 1
           - type: markdown
-            title: Tasting Guide
+            title: Tasted Guide
             content: >
-              Log personal tasting ratings and notes directly on any wine card or line item.
-              Click **Details & Batches** on any wine to view its historical timeline of additions and opened bottles.
+              Wines scanned directly to **Tasted** and wines where 1 or more bottles have been consumed from your cellar appear here.
+              Click **Details & Batches** on any wine to view its tasting history, personal rating, and cellar notes.
 
       - type: grid
         column_span: 1
         cards:
           - type: heading
-            heading: Wine Line Items & Reviews
+            heading: Tasted Wine Log & Reviews
             heading_style: subtitle
             icon: mdi:star-box-multiple-outline
           - type: custom:wine-inventory-card
-            title: Lekkersappie Tasted Archive
+            title: Lekkersappie Tasted
             default_view: list
+            default_tab: tasted
             grid_options:
               columns: full
               rows: auto

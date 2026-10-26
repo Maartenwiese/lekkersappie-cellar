@@ -143,6 +143,8 @@ class WineInventoryCard extends HTMLElement {
       general_notes: "",
       batch_notes: "",
       quantity: 1,
+      as_tasted: false,
+      personal_rating: "",
       added_at: nowLocalIsoMinutes(),
       purchase_location: "",
       purchase_price: "",
@@ -269,7 +271,7 @@ class WineInventoryCard extends HTMLElement {
       this._viewMode = this._config.default_view === "grid" ? "grid" : "list";
     }
     if (this._config.default_tab && !this._userSelectedTab) {
-      this._filterTab = this._config.default_tab;
+      this._filterTab = this._config.default_tab === "archived" ? "tasted" : this._config.default_tab;
     }
     this._render();
   }
@@ -343,12 +345,22 @@ class WineInventoryCard extends HTMLElement {
     }
   }
 
+  _isWineTasted(w) {
+    if (!w) return false;
+    if (w.is_tasted) return true;
+    if (Number(w.tasted_count || 0) > 0 || Number(w.tasted_bottles || 0) > 0) return true;
+    if (Number(w.quantity || 0) === 0) return true;
+    return (w.timeline || []).some(
+      (h) => h && (h.event_type === "consumed" || h.event_type === "tasted" || Number(h.delta || 0) < 0)
+    );
+  }
+
   _getFilteredAndSortedWines() {
     const q = (this._searchQuery || "").trim().toLowerCase();
     let list = this._wines.filter((w) => {
       const qty = Number(w.quantity || 0);
-      if (this._filterTab === "archived") {
-        if (qty !== 0) return false;
+      if (this._filterTab === "tasted" || this._filterTab === "archived") {
+        if (!this._isWineTasted(w)) return false;
       } else {
         if (qty <= 0) return false;
         if (this._filterTab === "ready" && w.drink_status !== "ready" && w.drink_status !== "drink_soon") {
@@ -411,6 +423,10 @@ class WineInventoryCard extends HTMLElement {
 
   _openScanModal(manualOnly = false) {
     this._activeModal = "scan";
+    const defaultToTasted = this._filterTab === "tasted" || this._filterTab === "archived";
+    const form = this._emptyForm();
+    form.as_tasted = defaultToTasted;
+    form.quantity = defaultToTasted ? 0 : 1;
     this._scanState = {
       busy: false,
       error: "",
@@ -419,7 +435,7 @@ class WineInventoryCard extends HTMLElement {
       vivinoCandidates: [],
       vivinoStatus: "",
       existingWine: null,
-      form: this._emptyForm(),
+      form,
     };
     this._render();
   }
@@ -864,7 +880,9 @@ class WineInventoryCard extends HTMLElement {
         general_notes: existing?.general_notes || ext.general_notes || "",
         batch_notes: "",
         image_url: ext.image_url || "",
-        quantity: 1,
+        as_tasted: Boolean(this._scanState.form?.as_tasted),
+        personal_rating: this._scanState.form?.personal_rating || existing?.personal_rating || "",
+        quantity: this._scanState.form?.as_tasted ? 0 : 1,
         added_at: nowLocalIsoMinutes(),
         purchase_location: existing?.last_purchase_location || "",
         purchase_price: existing?.last_purchase_price ?? "",
@@ -951,13 +969,18 @@ class WineInventoryCard extends HTMLElement {
         food_pairings: f.food_pairings,
         general_notes: f.general_notes,
         image_url: f.image_url || "",
-        quantity: Math.max(1, toIntOrNull(f.quantity) || 1),
+        as_tasted: Boolean(f.as_tasted),
+        personal_rating: toFloatOrNull(f.personal_rating),
+        quantity: f.as_tasted ? 0 : Math.max(1, toIntOrNull(f.quantity) || 1),
         added_at: f.added_at ? new Date(f.added_at).toISOString() : null,
         purchase_location: f.purchase_location,
         purchase_price: toFloatOrNull(f.purchase_price),
-        storage_location: f.storage_location,
+        storage_location: f.as_tasted ? "" : f.storage_location,
         batch_notes: f.batch_notes,
       });
+      if (f.as_tasted) {
+        this._filterTab = "tasted";
+      }
       this._closeModal();
       await this._fetchInventory();
     } catch (err) {
@@ -1170,6 +1193,11 @@ class WineInventoryCard extends HTMLElement {
               <span class="drink-pill" style="border-color:${statusMeta.color}; color:${statusMeta.color};">
                 ${escapeHtml(statusMeta.label)} (${escapeHtml(drinkYears)})
               </span>
+              ${
+                this._isWineTasted(wine)
+                  ? `<span class="tasted-badge">🥂 Tasted${Number(wine.tasted_count || 0) > 1 ? ` ${Number(wine.tasted_count)}×` : ""}</span>`
+                  : ""
+              }
             </div>
             <div class="wine-winery">${escapeHtml(wine.winery)}</div>
             <div class="wine-title">${escapeHtml(wine.name)}</div>
@@ -1289,7 +1317,7 @@ class WineInventoryCard extends HTMLElement {
                     <td>
                       <div class="wine-list-title-wrap wine-title-clickable" data-action="detail" data-id="${wine.id}" title="Click to view wine details" style="cursor: pointer;">
                         <strong title="${escapeHtml(wine.name)}" style="cursor: pointer; color: var(--primary-color, #a61a2e);">${escapeHtml(wine.name)}</strong>
-                        <span style="font-weight: 500;">${escapeHtml(wine.winery)}</span>
+                        <span style="font-weight: 500;">${escapeHtml(wine.winery)}${this._isWineTasted(wine) ? ` • <span class="tasted-badge">🥂 Tasted</span>` : ""}</span>
                         <span>${escapeHtml(subMeta)}</span>
                       </div>
                     </td>
@@ -1858,6 +1886,22 @@ class WineInventoryCard extends HTMLElement {
                 : ""
             }
 
+            <div class="ha-scan-dest-toggle" role="group" aria-label="Save destination">
+              <button type="button" class="ha-scan-dest-btn ${!f.as_tasted ? "active" : ""}" data-ha-scan-dest="cellar">
+                🍷 Add to Cellar
+              </button>
+              <button type="button" class="ha-scan-dest-btn ${f.as_tasted ? "active tasted" : ""}" data-ha-scan-dest="tasted">
+                🥂 Add to Tasted
+              </button>
+            </div>
+            <div style="font-size: 12px; color: var(--secondary-text-color); margin-bottom: 12px;">
+              ${
+                f.as_tasted
+                  ? "Logs this bottle directly to your <strong>Tasted</strong> collection without adding bottles to cellar stock."
+                  : "Adds bottle(s) to your active wine cellar inventory."
+              }
+            </div>
+
             <form id="scan-add-form" class="form-grid">
               <div class="form-field">
                 <label>Winery / Producer *</label>
@@ -1902,33 +1946,47 @@ class WineInventoryCard extends HTMLElement {
                 <input class="ha-input" name="vivino_url" value="${escapeHtml(f.vivino_url)}" placeholder="https://www.vivino.com/..." />
               </div>
 
-              <div class="section-divider full-width">Addition Metadata, Drinking Window &amp; Notes</div>
+              <div class="section-divider full-width">${f.as_tasted ? "Tasting Metadata, Rating &amp; Notes" : "Addition Metadata, Drinking Window &amp; Notes"}</div>
 
+              ${
+                f.as_tasted
+                  ? `<div class="form-field">
+                      <label>My Personal Rating (1.0–5.0)</label>
+                      <input class="ha-input" type="number" step="0.1" min="1" max="5" name="personal_rating" value="${escapeHtml(f.personal_rating)}" placeholder="e.g. 4.4" />
+                    </div>`
+                  : `<div class="form-field">
+                      <label>Quantity Added *</label>
+                      <input class="ha-input" type="number" name="quantity" min="1" max="120" required value="${escapeHtml(f.quantity)}" />
+                    </div>`
+              }
               <div class="form-field">
-                <label>Quantity Added *</label>
-                <input class="ha-input" type="number" name="quantity" min="1" max="120" required value="${escapeHtml(f.quantity)}" />
-              </div>
-              <div class="form-field">
-                <label>Date / Time Added *</label>
+                <label>${f.as_tasted ? "Date / Time Tasted *" : "Date / Time Added *"}</label>
                 <input class="ha-input" type="datetime-local" name="added_at" required value="${escapeHtml(f.added_at)}" />
               </div>
               <div class="form-field">
-                <label>Where Was It Bought?</label>
-                <input class="ha-input" name="purchase_location" list="known-stores-list" value="${escapeHtml(f.purchase_location)}" placeholder="Store, winery, website, or gift" />
+                <label>${f.as_tasted ? "Where Was It Tasted / Bought?" : "Where Was It Bought?"}</label>
+                <input class="ha-input" name="purchase_location" list="known-stores-list" value="${escapeHtml(f.purchase_location)}" placeholder="Store, winery, restaurant, or gift" />
                 <datalist id="known-stores-list">
                   ${knownStores.map((st) => `<option value="${escapeHtml(st)}"></option>`).join("")}
                 </datalist>
               </div>
-              <div class="form-field">
-                <label>Purchase Price (${escapeHtml(this._currency)}) &amp; Storage Slot</label>
-                <div class="split-2">
-                  <input class="ha-input" type="number" step="0.01" name="purchase_price" value="${escapeHtml(f.purchase_price)}" placeholder="Price" />
-                  <input class="ha-input" name="storage_location" list="known-locations-list" value="${escapeHtml(f.storage_location)}" placeholder="Fridge / Rack / Row" />
-                </div>
-                <datalist id="known-locations-list">
-                  ${knownLocations.map((loc) => `<option value="${escapeHtml(loc)}"></option>`).join("")}
-                </datalist>
-              </div>
+              ${
+                f.as_tasted
+                  ? `<div class="form-field">
+                      <label>Price Paid (${escapeHtml(this._currency)})</label>
+                      <input class="ha-input" type="number" step="0.01" name="purchase_price" value="${escapeHtml(f.purchase_price)}" placeholder="Price" />
+                    </div>`
+                  : `<div class="form-field">
+                      <label>Purchase Price (${escapeHtml(this._currency)}) &amp; Storage Slot</label>
+                      <div class="split-2">
+                        <input class="ha-input" type="number" step="0.01" name="purchase_price" value="${escapeHtml(f.purchase_price)}" placeholder="Price" />
+                        <input class="ha-input" name="storage_location" list="known-locations-list" value="${escapeHtml(f.storage_location)}" placeholder="Fridge / Rack / Row" />
+                      </div>
+                      <datalist id="known-locations-list">
+                        ${knownLocations.map((loc) => `<option value="${escapeHtml(loc)}"></option>`).join("")}
+                      </datalist>
+                    </div>`
+              }
 
               <div class="form-field">
                 <label>When to Drink (From Year – Until Year)</label>
@@ -1947,15 +2005,15 @@ class WineInventoryCard extends HTMLElement {
                 <textarea class="ha-textarea" name="general_notes" rows="2" placeholder="Overall wine summary, aromas, pairings, or cellar notes...">${escapeHtml(f.general_notes)}</textarea>
               </div>
               <div class="form-field full-width">
-                <label>Batch / Addition Note (Specific to this bottle purchase)</label>
-                <textarea class="ha-textarea" name="batch_notes" rows="2" placeholder="Optional note for this specific purchase batch...">${escapeHtml(f.batch_notes)}</textarea>
+                <label>${f.as_tasted ? "Tasting Impressions &amp; Occasion Notes" : "Batch / Addition Note (Specific to this bottle purchase)"}</label>
+                <textarea class="ha-textarea" name="batch_notes" rows="2" placeholder="${f.as_tasted ? "How did it taste? Who did you share it with?" : "Optional note for this specific purchase batch..."}">${escapeHtml(f.batch_notes)}</textarea>
               </div>
 
               <div class="modal-actions full-width">
                 <button type="button" class="ha-btn secondary-btn" id="cancel-modal-btn">Cancel</button>
                 <button type="submit" class="ha-btn primary-btn" ${s.busy ? "disabled" : ""}>
                   <ha-icon icon="mdi:check"></ha-icon>
-                  <span>${s.existingWine ? "Add Bottle Batch (+)" : "Save Wine to Cellar"}</span>
+                  <span>${f.as_tasted ? "🥂 Save Wine to Tasted" : s.existingWine ? "Add Bottle Batch (+)" : "Save Wine to Cellar"}</span>
                 </button>
               </div>
             </form>
@@ -2782,6 +2840,16 @@ class WineInventoryCard extends HTMLElement {
       this._setupCropCanvas();
     }
 
+    root.querySelectorAll("[data-ha-scan-dest]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const dest = btn.dataset.haScanDest;
+        if (!this._scanState?.form) return;
+        this._scanState.form.as_tasted = dest === "tasted";
+        this._scanState.form.quantity = dest === "tasted" ? 0 : Math.max(1, Number(this._scanState.form.quantity) || 1);
+        this._render();
+      });
+    });
+
     const scanForm = root.querySelector("#scan-add-form");
     if (scanForm) {
       scanForm.querySelectorAll("input, select, textarea").forEach((inp) => {
@@ -2836,6 +2904,12 @@ class WineInventoryCard extends HTMLElement {
     const stats = this._statistics || {};
     const wines = this._getFilteredAndSortedWines();
 
+    const isTastedTab = this._filterTab === "tasted" || this._filterTab === "archived";
+    const tastedCount =
+      stats.tasted_wines !== undefined && stats.tasted_wines !== null
+        ? stats.tasted_wines
+        : this._wines.filter((w) => this._isWineTasted(w)).length;
+
     const tabs = [
       { id: "all", label: `In Stock (${stats.total_bottles || 0})` },
       { id: "ready", label: `Ready to Drink (${stats.ready_to_drink_bottles || 0})` },
@@ -2844,7 +2918,7 @@ class WineInventoryCard extends HTMLElement {
       { id: "white", label: `White (${stats.by_type?.white || 0})` },
       { id: "rose", label: `Rosé (${stats.by_type?.rose || 0})` },
       { id: "sparkling", label: `Sparkling (${stats.by_type?.sparkling || 0})` },
-      { id: "archived", label: `Tasted Archive (${stats.archived_wines || 0})` },
+      { id: "tasted", label: `🥂 Tasted (${tastedCount})` },
     ];
 
     this.shadowRoot.innerHTML = `
@@ -2859,6 +2933,58 @@ class WineInventoryCard extends HTMLElement {
           padding: 20px;
           border-radius: var(--ha-card-border-radius, 12px);
           background: var(--ha-card-background, var(--card-background-color, #fff));
+          transition: background 0.2s ease, border-color 0.2s ease;
+        }
+        ha-card.tasted-card-theme {
+          background: linear-gradient(180deg, rgba(107, 45, 92, 0.08) 0%, var(--ha-card-background, var(--card-background-color, #fff)) 260px);
+          border: 1px solid rgba(107, 45, 92, 0.28);
+          --primary-color: #6b2d5c;
+        }
+        .tasted-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 3px;
+          padding: 2px 8px;
+          border-radius: 999px;
+          font-size: 11px;
+          font-weight: 700;
+          background: rgba(107, 45, 92, 0.14);
+          color: #6b2d5c;
+          border: 1px solid rgba(107, 45, 92, 0.3);
+        }
+        .ha-scan-dest-toggle {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 8px;
+          padding: 5px;
+          background: var(--secondary-background-color, rgba(127, 127, 127, 0.1));
+          border: 1px solid var(--divider-color, #e0e0e0);
+          border-radius: 10px;
+          margin-bottom: 6px;
+        }
+        .ha-scan-dest-btn {
+          min-height: 42px;
+          border-radius: 8px;
+          border: 1px solid transparent;
+          background: transparent;
+          color: var(--secondary-text-color);
+          font-size: 13.5px;
+          font-weight: 700;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 6px;
+        }
+        .ha-scan-dest-btn.active {
+          background: #a61a2e;
+          color: #fff;
+          box-shadow: 0 2px 6px rgba(166, 26, 46, 0.28);
+        }
+        .ha-scan-dest-btn.active.tasted {
+          background: #6b2d5c;
+          color: #fff;
+          box-shadow: 0 2px 6px rgba(107, 45, 92, 0.3);
         }
         .header-bar {
           display: flex;
@@ -4055,7 +4181,7 @@ class WineInventoryCard extends HTMLElement {
         }
       </style>
 
-      <ha-card style="--ls-scale: ${this._effectiveFontScale()};">
+      <ha-card class="${isTastedTab ? "tasted-card-theme" : ""}" style="--ls-scale: ${this._effectiveFontScale()};">
        <div class="ls-root">
        <div class="ls-cq">
         <div class="header-bar">
@@ -4147,7 +4273,7 @@ class WineInventoryCard extends HTMLElement {
           ${tabs
             .map(
               (t) => `
-              <button class="filter-chip ${this._filterTab === t.id ? "active" : ""}" data-tab="${t.id}">
+              <button class="filter-chip ${(this._filterTab === t.id || (t.id === "tasted" && this._filterTab === "archived")) ? "active" : ""}" data-tab="${t.id}">
                 ${escapeHtml(t.label)}
               </button>
             `
@@ -4307,7 +4433,7 @@ class WineInventoryCardEditor extends HTMLElement {
             <option value="white" ${c.default_tab === "white" ? "selected" : ""}>White Wines</option>
             <option value="rose" ${c.default_tab === "rose" ? "selected" : ""}>Rosé Wines</option>
             <option value="sparkling" ${c.default_tab === "sparkling" ? "selected" : ""}>Sparkling Wines</option>
-            <option value="archived" ${c.default_tab === "archived" ? "selected" : ""}>Tasted Archive (0 Stock)</option>
+            <option value="tasted" ${c.default_tab === "tasted" || c.default_tab === "archived" ? "selected" : ""}>🥂 Tasted (Drank / Consumed &amp; Scanned to Tasted)</option>
           </select>
         </div>
         <div class="editor-row">

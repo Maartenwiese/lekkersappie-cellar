@@ -378,6 +378,28 @@ class WineDatabase:
         )
         if timeline is not None:
             data["timeline"] = timeline
+            consumed_events = [
+                h
+                for h in timeline
+                if h.get("event_type") in ("consumed", "tasted")
+                or (_opt_int(h.get("delta")) or 0) < 0
+            ]
+            qty_now = _opt_int(data.get("quantity")) or 0
+            is_tasted = bool(consumed_events) or qty_now == 0
+            tasted_bottles = sum(
+                max(1, abs(_opt_int(h.get("delta")) or 1))
+                for h in consumed_events
+            )
+            if is_tasted and tasted_bottles == 0:
+                tasted_bottles = 1
+            data["is_tasted"] = is_tasted
+            data["tasted_count"] = len(consumed_events) or (1 if is_tasted else 0)
+            data["tasted_bottles"] = tasted_bottles
+            data["last_tasted_at"] = (
+                consumed_events[0]["timestamp"]
+                if consumed_events
+                else (data.get("updated_at") if is_tasted else None)
+            )
         return data
 
     def find_matching_wine(
@@ -481,9 +503,13 @@ class WineDatabase:
         storage_location: str = "",
         batch_notes: str = "",
         wine_id: int | None = None,
+        as_tasted: bool = False,
     ) -> dict[str, Any]:
-        """Add a new wine or add a purchase batch to an existing wine."""
-        qty = max(1, _opt_int(quantity) or 1)
+        """Add a new wine, add a purchase batch, or log a wine directly as Tasted (0 cellar stock added)."""
+        raw_qty = _opt_int(quantity)
+        is_tasted_entry = bool(as_tasted) or (raw_qty is not None and raw_qty == 0)
+        qty = max(1, raw_qty if raw_qty and raw_qty > 0 else 1)
+        cellar_qty_delta = 0 if is_tasted_entry else qty
         timestamp = (added_at or "").strip() or utc_now_iso()
         normalized_type = (
             wine_type.lower().strip()
@@ -575,7 +601,7 @@ class WineDatabase:
                         general_notes.strip(),
                         personal_rating,
                         image_url.strip(),
-                        qty,
+                        cellar_qty_delta,
                         storage_location.strip(),
                         purchase_location.strip(),
                         purchase_price,
@@ -587,7 +613,7 @@ class WineDatabase:
                 target_wine_id = int(cursor.lastrowid)
             else:
                 target_wine_id = int(existing_row["id"])
-                new_qty = int(existing_row["quantity"]) + qty
+                new_qty = int(existing_row["quantity"]) + cellar_qty_delta
                 updated_general_notes = (
                     general_notes.strip()
                     if general_notes.strip()
@@ -646,46 +672,66 @@ class WineDatabase:
                     ),
                 )
 
-            batch_cursor = conn.execute(
-                """
-                INSERT INTO inventory_additions (
-                    wine_id, quantity_added, quantity_remaining, added_at,
-                    purchase_location, purchase_price, storage_location,
-                    drink_window_note, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    target_wine_id,
-                    qty,
-                    qty,
-                    timestamp,
-                    purchase_location.strip(),
-                    purchase_price,
-                    storage_location.strip(),
-                    drink_window_note.strip(),
-                    batch_notes.strip(),
-                ),
-            )
-            batch_id = int(batch_cursor.lastrowid)
+            if is_tasted_entry:
+                tasting_note_text = batch_notes.strip() or general_notes.strip()
+                conn.execute(
+                    """
+                    INSERT INTO consumption_history (
+                        wine_id, batch_id, event_type, delta, timestamp,
+                        purchase_location, storage_location, tasting_notes, personal_rating
+                    ) VALUES (?, NULL, 'tasted', ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        target_wine_id,
+                        -qty,
+                        timestamp,
+                        purchase_location.strip(),
+                        storage_location.strip(),
+                        tasting_note_text,
+                        personal_rating,
+                    ),
+                )
+            else:
+                batch_cursor = conn.execute(
+                    """
+                    INSERT INTO inventory_additions (
+                        wine_id, quantity_added, quantity_remaining, added_at,
+                        purchase_location, purchase_price, storage_location,
+                        drink_window_note, notes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        target_wine_id,
+                        qty,
+                        qty,
+                        timestamp,
+                        purchase_location.strip(),
+                        purchase_price,
+                        storage_location.strip(),
+                        drink_window_note.strip(),
+                        batch_notes.strip(),
+                    ),
+                )
+                batch_id = int(batch_cursor.lastrowid)
 
-            conn.execute(
-                """
-                INSERT INTO consumption_history (
-                    wine_id, batch_id, event_type, delta, timestamp,
-                    purchase_location, storage_location, tasting_notes, personal_rating
-                ) VALUES (?, ?, 'added', ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    target_wine_id,
-                    batch_id,
-                    qty,
-                    timestamp,
-                    purchase_location.strip(),
-                    storage_location.strip(),
-                    batch_notes.strip(),
-                    personal_rating,
-                ),
-            )
+                conn.execute(
+                    """
+                    INSERT INTO consumption_history (
+                        wine_id, batch_id, event_type, delta, timestamp,
+                        purchase_location, storage_location, tasting_notes, personal_rating
+                    ) VALUES (?, ?, 'added', ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        target_wine_id,
+                        batch_id,
+                        qty,
+                        timestamp,
+                        purchase_location.strip(),
+                        storage_location.strip(),
+                        batch_notes.strip(),
+                        personal_rating,
+                    ),
+                )
 
             detail = self._get_wine_detail_with_conn(conn, target_wine_id)
             assert detail is not None
@@ -1078,6 +1124,8 @@ class WineDatabase:
         wines = self.list_wines(include_out_of_stock=True)
         in_stock = [w for w in wines if int(w["quantity"]) > 0]
         archived = [w for w in wines if int(w["quantity"]) == 0]
+        tasted = [w for w in wines if w.get("is_tasted")]
+        tasted_bottles = sum(int(w.get("tasted_bottles") or 0) for w in tasted)
 
         total_bottles = sum(int(w["quantity"]) for w in in_stock)
         unique_wines_in_stock = len(in_stock)
@@ -1136,6 +1184,8 @@ class WineDatabase:
             "total_bottles": total_bottles,
             "unique_wines": unique_wines_in_stock,
             "archived_wines": len(archived),
+            "tasted_wines": len(tasted),
+            "tasted_bottles": tasted_bottles,
             "ready_to_drink_bottles": ready_to_drink_bottles,
             "drink_soon_bottles": drink_soon_bottles,
             "hold_bottles": hold_bottles,

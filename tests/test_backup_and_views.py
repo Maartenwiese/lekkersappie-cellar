@@ -189,6 +189,17 @@ class TestBackupRestoreAndViews(unittest.TestCase):
         )
         self.assertEqual(card.get("default_view"), "list")
 
+        # Verify Tasted view is titled 'Tasted' and configures default_tab: tasted
+        tasted_view = next(v for v in views if v.get("path") == "tasting-archive")
+        self.assertEqual(tasted_view.get("title"), "Tasted")
+        tasted_card = next(
+            c
+            for sec in tasted_view.get("sections", [])
+            for c in sec.get("cards", [])
+            if c.get("type") == "custom:wine-inventory-card"
+        )
+        self.assertEqual(tasted_card.get("default_tab"), "tasted")
+
     def test_database_delete_wine_permanently(self) -> None:
         """Verify full permanent deletion of wine, batches, and timeline from SQLite database."""
         with tempfile.TemporaryDirectory() as tmpdir:

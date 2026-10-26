@@ -1,5 +1,5 @@
 /**
- * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.3.7)
+ * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.3.8)
  * Runs parallel to the native Home Assistant UI, inherits Home Assistant OAuth2
  * authentication, defaults to Large (L) text scale, and supports Home Screen installation.
  */
@@ -97,12 +97,20 @@ class LekkersappieMobileApp {
       authenticatedUser: null,
       isOnline: navigator.onLine,
 
-      // Navigation: "cellar" | "stats" | "add" | "config"
+      // Navigation: "cellar" | "stats" | "tasted" | "config"
       activeNav: "cellar",
       filterTab: "all",
       areaFilter: "",
       searchQuery: "",
       sortBy: "recent",
+
+      // Tasted page filter/search/sort state
+      tastedFilterTab: "all",
+      tastedSearchQuery: "",
+      tastedSortBy: "recent_tasted",
+
+      // Scan destination: "cellar" | "tasted"
+      scanDestination: "cellar",
 
       // Display preferences
       fontScale: this._loadFontScale(),
@@ -228,7 +236,14 @@ class LekkersappieMobileApp {
     });
     if ("quantity" in out) {
       const q = Number(out.quantity);
-      out.quantity = Number.isFinite(q) && q >= 1 ? Math.round(q) : 1;
+      if (out.as_tasted) {
+        out.quantity = 0;
+      } else {
+        out.quantity = Number.isFinite(q) && q >= 1 ? Math.round(q) : 1;
+      }
+    }
+    if ("as_tasted" in out) {
+      out.as_tasted = Boolean(out.as_tasted);
     }
     return out;
   }
@@ -253,10 +268,14 @@ class LekkersappieMobileApp {
     let startY = null;
     let pulling = false;
     const indicator = () => document.getElementById("ptr-indicator");
-    window.addEventListener(
+      window.addEventListener(
       "touchstart",
       (e) => {
-        if (this.state.activeSheet || this.state.activeNav !== "cellar" || window.scrollY > 0) {
+        if (
+          this.state.activeSheet ||
+          (this.state.activeNav !== "cellar" && this.state.activeNav !== "tasted") ||
+          window.scrollY > 0
+        ) {
           startY = null;
           return;
         }
@@ -547,6 +566,7 @@ class LekkersappieMobileApp {
       drink_window_note: "",
       general_notes: "",
       batch_notes: "",
+      personal_rating: "",
       quantity: 1,
       added_at: nowIsoMinutes(),
       purchase_location: "",
@@ -785,14 +805,27 @@ class LekkersappieMobileApp {
     }
   }
 
+  _isWineTasted(w) {
+    if (!w) return false;
+    if (Boolean(w.is_tasted)) return true;
+    if (Number(w.tasted_count || 0) > 0 || Number(w.tasted_bottles || 0) > 0) return true;
+    if (Number(w.quantity || 0) === 0) return true;
+    if (Array.isArray(w.timeline)) {
+      return w.timeline.some(
+        (h) => h && (h.event_type === "consumed" || h.event_type === "tasted" || Number(h.delta || 0) < 0)
+      );
+    }
+    return false;
+  }
+
   getFilteredWines() {
     const q = (this.state.searchQuery || "").trim().toLowerCase();
     const areaFilter = (this.state.areaFilter || "").trim().toLowerCase();
 
     const filtered = this.state.wines.filter((w) => {
       const qty = Number(w.quantity || 0);
-      if (this.state.filterTab === "archived") {
-        if (qty !== 0) return false;
+      if (this.state.filterTab === "archived" || this.state.filterTab === "tasted") {
+        if (!this._isWineTasted(w)) return false;
       } else {
         if (qty <= 0) return false;
         if (
@@ -861,6 +894,60 @@ class LekkersappieMobileApp {
     return filtered;
   }
 
+  getFilteredTastedWines() {
+    const q = (this.state.tastedSearchQuery || "").trim().toLowerCase();
+    const tab = this.state.tastedFilterTab || "all";
+
+    const filtered = this.state.wines.filter((w) => {
+      if (!this._isWineTasted(w)) return false;
+      const qty = Number(w.quantity || 0);
+      if (tab === "in_cellar" && qty <= 0) return false;
+      if (tab === "out_of_stock" && qty > 0) return false;
+      if (["red", "white", "rose", "sparkling"].includes(tab) && w.wine_type !== tab) {
+        return false;
+      }
+
+      if (!q) return true;
+      const hay = [
+        w.winery,
+        w.name,
+        w.vintage,
+        w.varietal,
+        w.region,
+        w.country,
+        w.general_notes,
+        w.last_purchase_location,
+        w.last_storage_location,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(q);
+    });
+
+    filtered.sort((a, b) => {
+      if (this.state.tastedSortBy === "rating") {
+        return Number(b.vivino_rating || 0) - Number(a.vivino_rating || 0);
+      }
+      if (this.state.tastedSortBy === "personal_rating") {
+        return Number(b.personal_rating || 0) - Number(a.personal_rating || 0);
+      }
+      if (this.state.tastedSortBy === "vintage") {
+        return Number(a.vintage || 9999) - Number(b.vintage || 9999);
+      }
+      if (this.state.tastedSortBy === "tasted_count") {
+        const aCnt = Number(a.tasted_bottles || a.tasted_count || 1);
+        const bCnt = Number(b.tasted_bottles || b.tasted_count || 1);
+        return bCnt - aCnt;
+      }
+      const aDate = String(a.last_tasted_at || a.updated_at || "");
+      const bDate = String(b.last_tasted_at || b.updated_at || "");
+      return bDate.localeCompare(aDate);
+    });
+
+    return filtered;
+  }
+
   async openDetail(wineId) {
     const summaryWine = this.state.wines.find((w) => Number(w.id) === Number(wineId));
     if (!summaryWine) return;
@@ -908,7 +995,7 @@ class LekkersappieMobileApp {
     if (delta < 0 && cur === 1) {
       const ok = await this.confirmAction({
         title: "Last bottle",
-        message: `Reducing to 0 marks "${wine.winery ? wine.winery + " – " : ""}${wine.name}" as consumed. It moves to the Archive and can be restocked later.`,
+        message: `Reducing to 0 marks "${wine.winery ? wine.winery + " – " : ""}${wine.name}" as finished. It stays in your Tasted section and can be restocked anytime.`,
         confirmLabel: "Yes, set to 0",
         danger: true,
       });
@@ -920,7 +1007,7 @@ class LekkersappieMobileApp {
         this.state.detailWine = res.wine;
       }
       await this.fetchState();
-      this.showToast(delta > 0 ? "Added +1 bottle" : "Opened 1 bottle (-1)");
+      this.showToast(delta > 0 ? "Added +1 bottle" : "Opened 1 bottle (-1) • Added to Tasted");
     } catch (err) {
       this.showError("Failed to update stock", err);
     }
@@ -954,21 +1041,43 @@ class LekkersappieMobileApp {
     if (clearBtn) clearBtn.style.visibility = this.state.searchQuery ? "visible" : "hidden";
   }
 
+  refreshTastedBottleListOnly() {
+    const listContainer = this.root.querySelector("#mobile-tasted-bottle-list");
+    if (!listContainer) {
+      this.render();
+      return;
+    }
+    listContainer.innerHTML = this._renderBottleListItems(this.getFilteredTastedWines(), { tastedMode: true });
+    this._bindBottleCardEvents(listContainer);
+    const clearBtn = this.root.querySelector("#btn-mobile-clear-tasted-search");
+    if (clearBtn) clearBtn.style.visibility = this.state.tastedSearchQuery ? "visible" : "hidden";
+  }
+
   /* ================= Render Views ================= */
 
-  _renderBottleListItems(wines) {
+  _renderBottleListItems(wines, options = {}) {
+    const tastedMode = Boolean(options.tastedMode);
     if (this.state.loading && wines.length === 0) {
-      return `<div class="panel-card" style="text-align:center; padding:28px;">Loading your wine cellar…</div>`;
+      return `<div class="panel-card" style="text-align:center; padding:28px;">Loading your ${tastedMode ? "tasted wines" : "wine cellar"}…</div>`;
     }
     if (wines.length === 0) {
+      const activeQuery = tastedMode ? this.state.tastedSearchQuery : this.state.searchQuery;
       return `
         <div class="panel-card" style="text-align:center; padding:28px 16px;">
-          <div style="font-size:32px; margin-bottom:6px;">🍷</div>
-          <strong>No matching bottles found</strong>
+          <div style="font-size:32px; margin-bottom:6px;">${tastedMode ? "🥂" : "🍷"}</div>
+          <strong>${tastedMode ? "No tasted wines yet" : "No matching bottles found"}</strong>
           <p style="font-size:13px; color:var(--text-muted); margin:6px 0 14px;">
-            ${this.state.searchQuery ? `Nothing matched “${esc(this.state.searchQuery)}”.` : "Tap Scan in the bottom bar to snap a wine label."}
+            ${
+              activeQuery
+                ? `Nothing matched “${esc(activeQuery)}”.`
+                : tastedMode
+                  ? "Scan a wine you drank (without adding to cellar stock) or open a bottle from your cellar."
+                  : "Tap Scan in the bottom bar to snap a wine label."
+            }
           </p>
-          <button class="btn btn-primary" data-open-scan="1">📷 Scan Bottle Label</button>
+          <button class="btn btn-primary" data-open-scan="${tastedMode ? "tasted" : "1"}">
+            📷 ${tastedMode ? "Scan Wine to Tasted" : "Scan Bottle Label"}
+          </button>
         </div>
       `;
     }
@@ -982,6 +1091,10 @@ class LekkersappieMobileApp {
         const rating = w.vivino_rating ? Number(w.vivino_rating).toFixed(1) : null;
         const boughtDateRaw = w.latest_added_at || w.created_at || "";
         const boughtDateLabel = boughtDateRaw ? fmtDate(boughtDateRaw) : "";
+        const tastedDateRaw = w.last_tasted_at || w.updated_at || boughtDateRaw;
+        const tastedDateLabel = tastedDateRaw ? fmtDate(tastedDateRaw) : "";
+        const tastedQty = Math.max(1, Number(w.tasted_bottles || w.tasted_count || 1));
+        const inCellarQty = Number(w.quantity || 0);
         const store = w.purchase_location || w.last_purchase_location || "";
         const price =
           w.purchase_price !== null && w.purchase_price !== undefined && w.purchase_price !== ""
@@ -996,27 +1109,47 @@ class LekkersappieMobileApp {
             : "";
 
         return `
-          <div class="bottle-card" data-wine-id="${w.id}">
+          <div class="bottle-card ${tastedMode ? "bottle-card-tasted" : ""}" data-wine-id="${w.id}">
             <div class="bottle-thumb-wrap" data-preview-id="${w.id}" title="Tap to view label photo">
               ${
                 safeImageUrl(w.image_url)
                   ? `<img src="${safeImageUrl(w.image_url)}" alt="${esc(w.name)}" />`
-                  : `<span style="font-size:24px;">🍷</span>`
+                  : `<span style="font-size:24px;">${tastedMode ? "🥂" : "🍷"}</span>`
               }
             </div>
             <div class="bottle-card-main" data-detail-id="${w.id}">
               <div class="bottle-meta-top">
-                <span class="pill pill-qty" title="Bottles in cellar">${Number(w.quantity || 0)}×</span>
+                ${
+                  tastedMode
+                    ? `<span class="pill pill-tasted" title="Times tasted / consumed">🥂 Tasted ${tastedQty}×</span>
+                       ${
+                         inCellarQty > 0
+                           ? `<span class="pill pill-qty" title="Bottles still in cellar">In Cellar: ${inCellarQty}×</span>`
+                           : `<span class="pill pill-vintage" title="Not currently in cellar">0 in Cellar</span>`
+                       }`
+                    : `<span class="pill pill-qty" title="Bottles in cellar">${inCellarQty}×</span>
+                       ${
+                         this._isWineTasted(w)
+                           ? `<span class="pill pill-tasted" title="Previously tasted">🥂 Tasted</span>`
+                           : ""
+                       }`
+                }
                 <span class="pill pill-${esc(w.wine_type)}">${esc(typeLabel)}</span>
                 <span class="pill pill-vintage">📅 ${esc(w.vintage || "NV")}</span>
-                ${area ? `<span class="pill pill-area">📍 ${esc(area)}</span>` : ""}
+                ${area && (!tastedMode || inCellarQty > 0) ? `<span class="pill pill-area">📍 ${esc(area)}</span>` : ""}
                 ${originText ? `<span class="pill pill-vintage sub-origin">🌍 ${esc(originText)}</span>` : ""}
               </div>
               <div class="bottle-winery">${esc(w.winery)}</div>
               <div class="bottle-name">${esc(w.name)}</div>
               <div class="bottle-detail-chips">
                 ${w.varietal ? `<span class="meta-chip" title="Grape Variety">🍇 ${esc(w.varietal)}</span>` : ""}
-                ${boughtDateLabel ? `<span class="meta-chip" title="Bought / Added Date">🗓️ ${esc(boughtDateLabel)}</span>` : ""}
+                ${
+                  tastedMode && tastedDateLabel
+                    ? `<span class="meta-chip" title="Last Tasted Date">🥂 ${esc(tastedDateLabel)}</span>`
+                    : boughtDateLabel
+                      ? `<span class="meta-chip" title="Bought / Added Date">🗓️ ${esc(boughtDateLabel)}</span>`
+                      : ""
+                }
                 ${store ? `<span class="meta-chip" title="Bought At">🛒 ${esc(store)}</span>` : ""}
                 ${price !== null ? `<span class="meta-chip" title="Purchase Price">💰 ${esc(price)} ${esc(this.state.currency)}</span>` : ""}
               </div>
@@ -1041,6 +1174,8 @@ class LekkersappieMobileApp {
   _renderCellarView() {
     const stats = this.state.statistics || {};
     const wines = this.getFilteredWines();
+    const tastedTotal =
+      stats.tasted_wines ?? this.state.wines.filter((w) => this._isWineTasted(w)).length;
     const tabs = [
       { id: "all", label: `In Stock (${stats.total_bottles || 0})` },
       { id: "ready", label: `Ready (${stats.ready_to_drink_bottles || 0})` },
@@ -1049,7 +1184,7 @@ class LekkersappieMobileApp {
       { id: "white", label: `White (${stats.by_type?.white || 0})` },
       { id: "rose", label: `Rosé (${stats.by_type?.rose || 0})` },
       { id: "sparkling", label: `Sparkling (${stats.by_type?.sparkling || 0})` },
-      { id: "archived", label: `Archive (${stats.archived_wines || 0})` },
+      { id: "tasted", label: `Tasted (${tastedTotal})` },
     ];
 
     return `
@@ -1125,7 +1260,94 @@ class LekkersappieMobileApp {
       </div>
 
       <div id="mobile-bottle-list" class="bottle-list">
-        ${this._renderBottleListItems(wines)}
+        ${this._renderBottleListItems(wines, { tastedMode: this.state.filterTab === "tasted" || this.state.filterTab === "archived" })}
+      </div>
+    `;
+  }
+
+  _renderTastedView() {
+    const allTasted = this.state.wines.filter((w) => this._isWineTasted(w));
+    const wines = this.getFilteredTastedWines();
+    const tastedByType = { red: 0, white: 0, rose: 0, sparkling: 0 };
+    let alsoInCellar = 0;
+    let notInCellar = 0;
+    allTasted.forEach((w) => {
+      const t = w.wine_type || "red";
+      if (tastedByType[t] !== undefined) tastedByType[t] += 1;
+      if (Number(w.quantity || 0) > 0) alsoInCellar += 1;
+      else notInCellar += 1;
+    });
+
+    const tabs = [
+      { id: "all", label: `All Tasted (${allTasted.length})` },
+      { id: "out_of_stock", label: `Not in Cellar (${notInCellar})` },
+      { id: "in_cellar", label: `Also in Cellar (${alsoInCellar})` },
+      { id: "red", label: `Red (${tastedByType.red})` },
+      { id: "white", label: `White (${tastedByType.white})` },
+      { id: "rose", label: `Rosé (${tastedByType.rose})` },
+      { id: "sparkling", label: `Sparkling (${tastedByType.sparkling})` },
+    ];
+
+    return `
+      <div class="tasted-view-banner">
+        <div class="tasted-banner-main">
+          <strong>🥂 Tasted &amp; Consumed Wines</strong>
+          <span>Wines you scanned as Tasted or drank from your cellar (${allTasted.length} total)</span>
+        </div>
+        <button type="button" class="btn btn-primary" data-open-scan="tasted" style="padding:8px 14px; min-height:42px; font-size:13.5px;">
+          📷 Scan Tasted
+        </button>
+      </div>
+
+      <div class="search-filter-dock">
+        <div class="search-row">
+          <div class="search-box">
+            <span class="search-box-icon">🔍</span>
+            <input
+              id="mobile-tasted-search-input"
+              class="search-input"
+              type="text"
+              inputmode="search"
+              enterkeyhint="search"
+              autocomplete="off"
+              autocorrect="off"
+              autocapitalize="off"
+              spellcheck="false"
+              placeholder="Search tasted wines, grape, region…"
+              value="${esc(this.state.tastedSearchQuery)}"
+            />
+            <button
+              type="button"
+              id="btn-mobile-clear-tasted-search"
+              class="search-clear-btn"
+              style="visibility: ${this.state.tastedSearchQuery ? "visible" : "hidden"};"
+              aria-label="Clear search"
+            >✕</button>
+          </div>
+          <select id="mobile-tasted-sort-select" class="sort-select" aria-label="Sort tasted wines">
+            <option value="recent_tasted" ${this.state.tastedSortBy === "recent_tasted" ? "selected" : ""}>Recent</option>
+            <option value="rating" ${this.state.tastedSortBy === "rating" ? "selected" : ""}>★ Vivino</option>
+            <option value="personal_rating" ${this.state.tastedSortBy === "personal_rating" ? "selected" : ""}>★ My Rating</option>
+            <option value="vintage" ${this.state.tastedSortBy === "vintage" ? "selected" : ""}>Vintage</option>
+            <option value="tasted_count" ${this.state.tastedSortBy === "tasted_count" ? "selected" : ""}>Times Tasted</option>
+          </select>
+        </div>
+
+        <div class="filter-pills-scroll">
+          ${tabs
+            .map(
+              (t) => `
+              <button class="filter-pill ${this.state.tastedFilterTab === t.id ? "active" : ""}" data-tasted-tab="${t.id}">
+                ${esc(t.label)}
+              </button>
+            `
+            )
+            .join("")}
+        </div>
+      </div>
+
+      <div id="mobile-tasted-bottle-list" class="bottle-list">
+        ${this._renderBottleListItems(wines, { tastedMode: true })}
       </div>
     `;
   }
@@ -1258,7 +1480,7 @@ class LekkersappieMobileApp {
           ${kpi(value ? `${Math.round(value)} ${cur}` : "—", "Estimated Value")}
           ${kpi(avgPrice !== null ? `${avgPrice.toFixed(2)} ${cur}` : "—", "Avg. Price / Bottle")}
           ${kpi(avgRating !== null ? `★ ${avgRating.toFixed(2)}` : "—", `Avg. Vivino (${rated.length} rated)`)}
-          ${kpi(stats.archived_wines ?? 0, "Tasted / Archived")}
+          ${kpi(stats.tasted_wines ?? stats.archived_wines ?? 0, "Tasted Wines")}
         </div>
 
         <div class="panel-card">
@@ -1769,15 +1991,27 @@ class LekkersappieMobileApp {
 
   _renderScanSheet() {
     const f = this.state.scanForm;
+    const isTastedDest = this.state.scanDestination === "tasted";
     return `
-      <div class="sheet-backdrop" id="sheet-backdrop">
+      <div class="sheet-backdrop ${isTastedDest ? "tasted-page-theme" : ""}" id="sheet-backdrop">
         <div class="sheet-surface">
           <div class="sheet-header">
             <button class="btn btn-icon btn-back" id="btn-close-sheet" aria-label="Back"><span aria-hidden="true">‹</span></button>
-            <h2>📷 Scan Wine Label</h2>
+            <h2>📷 ${isTastedDest ? "Scan Wine to Tasted" : "Scan Wine Label"}</h2>
           </div>
           <div class="sheet-body" id="scan-sheet-body">
             <div class="scaled-zone">
+              <div class="scan-dest-toggle" role="radiogroup" aria-label="Save destination">
+                <button type="button" class="scan-dest-btn ${!isTastedDest ? "active" : ""}" data-scan-dest="cellar">
+                  <span class="scan-dest-title">🍷 Add to Cellar</span>
+                  <small>Add bottles to your cellar stock</small>
+                </button>
+                <button type="button" class="scan-dest-btn ${isTastedDest ? "active tasted-active" : ""}" data-scan-dest="tasted">
+                  <span class="scan-dest-title">🥂 Add to Tasted</span>
+                  <small>Drank before · 0 added to cellar</small>
+                </button>
+              </div>
+
               <div style="padding:14px; border-radius:14px; background:var(--surface-alt); border:1px solid var(--border); margin-bottom:14px;">
                 <div style="display:flex; gap:8px; flex-wrap:wrap;">
                   <label class="btn btn-primary" style="flex:1; min-width:140px; cursor:pointer;">
@@ -1816,8 +2050,8 @@ class LekkersappieMobileApp {
                 ${
                   !this.state.scanBusy && this.state.existingWine
                     ? `<div class="scan-note scan-note-info">
-                        Already in your cellar: <strong>${esc(this.state.existingWine.winery || "")} – ${esc(this.state.existingWine.name || "")}</strong>.
-                        Saving adds a new batch to this wine.
+                        Already in your records: <strong>${esc(this.state.existingWine.winery || "")} – ${esc(this.state.existingWine.name || "")}</strong>.
+                        ${isTastedDest ? "Saving records a new tasting without changing cellar stock." : "Saving adds a new batch to this wine."}
                       </div>`
                     : ""
                 }
@@ -1888,28 +2122,48 @@ class LekkersappieMobileApp {
                     </div>
                   </div>
                 </div>
-                <div class="form-row-2">
-                  <div class="field">
-                    <label>Storage Area</label>
-                    <input class="input" name="storage_location" list="scan-areas-dl" value="${esc(f.storage_location)}" placeholder="Wine Fridge / Cellar" />
-                    <datalist id="scan-areas-dl">
-                      ${this.state.areas.map((a) => `<option value="${esc(a)}"></option>`).join("")}
-                    </datalist>
-                  </div>
-                  <div class="field">
-                    <label>Quantity &amp; Price (${esc(this.state.currency)})</label>
-                    <div class="form-row-2">
-                      <input class="input" type="number" inputmode="numeric" pattern="[0-9]*" name="quantity" min="1" required value="${esc(f.quantity || 1)}" />
-                      <input class="input" type="number" inputmode="decimal" step="0.01" name="purchase_price" value="${esc(f.purchase_price)}" placeholder="Price" />
-                    </div>
-                  </div>
-                </div>
-                <div class="field">
-                  <label>Bought At (Store / Winery)</label>
-                  <input class="input" name="purchase_location" value="${esc(f.purchase_location)}" />
-                </div>
+                ${
+                  isTastedDest
+                    ? `<div class="form-row-2">
+                        <div class="field">
+                          <label>My Personal Rating (1–5 ★)</label>
+                          <input class="input" type="number" inputmode="decimal" step="0.5" min="1" max="5" name="personal_rating" value="${esc(f.personal_rating ?? "")}" placeholder="e.g. 4.5" />
+                        </div>
+                        <div class="field">
+                          <label>Where Tasted / Bought &amp; Price (${esc(this.state.currency)})</label>
+                          <div class="form-row-2">
+                            <input class="input" name="purchase_location" value="${esc(f.purchase_location)}" placeholder="Restaurant / Store" />
+                            <input class="input" type="number" inputmode="decimal" step="0.01" name="purchase_price" value="${esc(f.purchase_price)}" placeholder="Price" />
+                          </div>
+                        </div>
+                      </div>
+                      <div class="field">
+                        <label>Tasting Notes</label>
+                        <textarea class="textarea" name="general_notes" rows="2" placeholder="What did you think of this wine?">${esc(f.general_notes)}</textarea>
+                      </div>`
+                    : `<div class="form-row-2">
+                        <div class="field">
+                          <label>Storage Area</label>
+                          <input class="input" name="storage_location" list="scan-areas-dl" value="${esc(f.storage_location)}" placeholder="Wine Fridge / Cellar" />
+                          <datalist id="scan-areas-dl">
+                            ${this.state.areas.map((a) => `<option value="${esc(a)}"></option>`).join("")}
+                          </datalist>
+                        </div>
+                        <div class="field">
+                          <label>Quantity &amp; Price (${esc(this.state.currency)})</label>
+                          <div class="form-row-2">
+                            <input class="input" type="number" inputmode="numeric" pattern="[0-9]*" name="quantity" min="1" required value="${esc(f.quantity || 1)}" />
+                            <input class="input" type="number" inputmode="decimal" step="0.01" name="purchase_price" value="${esc(f.purchase_price)}" placeholder="Price" />
+                          </div>
+                        </div>
+                      </div>
+                      <div class="field">
+                        <label>Bought At (Store / Winery)</label>
+                        <input class="input" name="purchase_location" value="${esc(f.purchase_location)}" />
+                      </div>`
+                }
                 <button type="submit" class="btn btn-primary btn-lg" style="width:100%;" ${this.state.scanBusy ? "disabled" : ""}>
-                  ✓ Save Scanned Wine to Cellar
+                  ${isTastedDest ? "🥂 Save Scanned Wine to Tasted" : "✓ Save Scanned Wine to Cellar"}
                 </button>
               </form>
             </div>
@@ -2036,9 +2290,15 @@ class LekkersappieMobileApp {
 
     let activeViewHtml = "";
     if (this.state.activeNav === "stats") activeViewHtml = this._renderStatsView();
+    else if (this.state.activeNav === "tasted") activeViewHtml = this._renderTastedView();
     else if (this.state.activeNav === "add") activeViewHtml = this._renderManualAddView();
     else if (this.state.activeNav === "config") activeViewHtml = this._renderConfigView();
     else activeViewHtml = this._renderCellarView();
+
+    const isTastedPage = this.state.activeNav === "tasted";
+    document.body.classList.toggle("tasted-page-theme", isTastedPage);
+    const tastedCount =
+      stats.tasted_wines ?? this.state.wines.filter((w) => this._isWineTasted(w)).length;
 
     this.root.innerHTML = `
       ${
@@ -2047,11 +2307,11 @@ class LekkersappieMobileApp {
           : ""
       }
       <div id="ptr-indicator" class="ptr-indicator" aria-hidden="true">↻</div>
-      <div class="app-shell">
+      <div class="app-shell ${isTastedPage ? "tasted-page-theme" : ""}">
 
         <main class="scaled-zone">
           <div class="status-strip" aria-label="Cellar summary">
-            <span><strong>${stats.total_bottles || 0}</strong> bottles · ${stats.unique_wines || 0} wines</span>
+            <span><strong>${stats.total_bottles || 0}</strong> bottles · ${stats.unique_wines || 0} wines · <strong>${tastedCount}</strong> tasted</span>
             ${this.state.tempDisplay ? `<span class="climate-chip">🌡️ ${esc(this.state.tempDisplay)}</span>` : ""}
             ${this.state.humidityDisplay ? `<span class="climate-chip">💧 ${esc(this.state.humidityDisplay)}</span>` : ""}
           </div>
@@ -2076,7 +2336,7 @@ class LekkersappieMobileApp {
         </main>
       </div>
 
-      <nav class="bottom-nav" aria-label="Mobile Navigation">
+      <nav class="bottom-nav ${isTastedPage ? "tasted-page-theme" : ""}" aria-label="Mobile Navigation">
         <div class="bottom-nav-inner">
           <button class="nav-tab ${this.state.activeNav === "cellar" ? "active" : ""}" data-nav="cellar" aria-label="Cellar">
             <span class="nav-ico">🍷</span>
@@ -2090,9 +2350,9 @@ class LekkersappieMobileApp {
             <span class="nav-ico">📷</span>
             <span>SCAN</span>
           </button>
-          <button class="nav-tab ${this.state.activeNav === "add" ? "active" : ""}" data-nav="add" aria-label="Add wine">
-            <span class="nav-ico">➕</span>
-            <span>Add</span>
+          <button class="nav-tab ${this.state.activeNav === "tasted" ? "active" : ""}" data-nav="tasted" aria-label="Tasted wines">
+            <span class="nav-ico">🥂</span>
+            <span>Tasted</span>
           </button>
           <button class="nav-tab ${this.state.activeNav === "config" ? "active" : ""}" data-nav="config" aria-label="Config">
             <span class="nav-ico">⚙️</span>
@@ -2148,6 +2408,10 @@ class LekkersappieMobileApp {
     scope.querySelectorAll("[data-open-scan]").forEach((btn) => {
       btn.addEventListener("click", () => {
         this.state.scanForm = this._emptyForm();
+        this.state.scanDestination =
+          btn.dataset.openScan === "tasted" || this.state.activeNav === "tasted"
+            ? "tasted"
+            : "cellar";
         this.state.activeSheet = "scan";
         this.render();
       });
@@ -2188,6 +2452,7 @@ class LekkersappieMobileApp {
     });
     r.querySelector("#btn-nav-scan")?.addEventListener("click", () => {
       this.state.scanForm = this._emptyForm();
+      this.state.scanDestination = this.state.activeNav === "tasted" ? "tasted" : "cellar";
       this.state.scanError = "";
       this.state.scanResultNote = "";
       this.state.existingWine = null;
@@ -2222,9 +2487,41 @@ class LekkersappieMobileApp {
       this.state.sortBy = e.target.value;
       this.render();
     });
-    r.querySelectorAll(".filter-pill").forEach((pill) => {
+    r.querySelectorAll(".filter-pill[data-tab]").forEach((pill) => {
       pill.addEventListener("click", () => {
         this.state.filterTab = pill.dataset.tab;
+        this.render();
+      });
+    });
+
+    // Search & filter in Tasted view
+    const tastedSearchInput = r.querySelector("#mobile-tasted-search-input");
+    if (tastedSearchInput) {
+      tastedSearchInput.addEventListener("input", (e) => {
+        this.state.tastedSearchQuery = e.target.value;
+        clearTimeout(this._searchDebounce);
+        this._searchDebounce = setTimeout(() => this.refreshTastedBottleListOnly(), 120);
+      });
+      tastedSearchInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") tastedSearchInput.blur();
+      });
+    }
+    r.querySelector("#btn-mobile-clear-tasted-search")?.addEventListener("click", () => {
+      this.state.tastedSearchQuery = "";
+      const inp = r.querySelector("#mobile-tasted-search-input");
+      if (inp) {
+        inp.value = "";
+        inp.focus();
+      }
+      this.refreshTastedBottleListOnly();
+    });
+    r.querySelector("#mobile-tasted-sort-select")?.addEventListener("change", (e) => {
+      this.state.tastedSortBy = e.target.value;
+      this.render();
+    });
+    r.querySelectorAll(".filter-pill[data-tasted-tab]").forEach((pill) => {
+      pill.addEventListener("click", () => {
+        this.state.tastedFilterTab = pill.dataset.tastedTab;
         this.render();
       });
     });
@@ -2380,6 +2677,12 @@ class LekkersappieMobileApp {
     }
 
     // Scanner & Crop handlers
+    r.querySelectorAll("[data-scan-dest]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        this.state.scanDestination = btn.dataset.scanDest === "tasted" ? "tasted" : "cellar";
+        this.render();
+      });
+    });
     r.querySelector("#mobile-scan-file")?.addEventListener("change", (e) => this._onScanFilePicked(e));
     r.querySelector("#mobile-scan-library")?.addEventListener("change", (e) => this._onScanFilePicked(e));
     r.querySelector("#btn-reopen-crop")?.addEventListener("click", () => {
@@ -2394,15 +2697,21 @@ class LekkersappieMobileApp {
       scanSaveForm.addEventListener("submit", async (e) => {
         e.preventDefault();
         const fd = new FormData(scanSaveForm);
+        const isTastedDest = this.state.scanDestination === "tasted";
         const payload = this._sanitizeWinePayload({
           ...this.state.scanForm,
           ...Object.fromEntries(fd.entries()),
+          as_tasted: isTastedDest,
+          quantity: isTastedDest ? 0 : fd.get("quantity") || this.state.scanForm.quantity || 1,
         });
         try {
           await this.apiPost("add", payload);
           this.state.activeSheet = null;
+          if (isTastedDest) {
+            this.state.activeNav = "tasted";
+          }
           await this.fetchState();
-          this.showToast("Scanned bottle saved!");
+          this.showToast(isTastedDest ? "Wine saved to Tasted!" : "Scanned bottle saved to Cellar!");
         } catch (err) {
           this.showError("Save failed", err);
         }

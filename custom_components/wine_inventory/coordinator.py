@@ -390,7 +390,12 @@ class WineInventoryCoordinator:
         return {"wine": updated, "vivino": page}
 
     async def async_add_wine(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Add a wine or increment an existing wine with batch metadata."""
+        """Add a wine or increment an existing wine with batch metadata (or record as tasted)."""
+        raw_qty = payload.get("quantity")
+        as_tasted = bool(payload.get("as_tasted", False)) or (
+            raw_qty is not None and str(raw_qty).strip() == "0"
+        )
+        qty = 0 if as_tasted else int(raw_qty if raw_qty not in (None, "") else 1)
         wine = await self.hass.async_add_executor_job(
             lambda: self.db.add_or_increment_wine(
                 wine_id=payload.get("wine_id"),
@@ -417,12 +422,13 @@ class WineInventoryCoordinator:
                 general_notes=str(payload.get("general_notes") or ""),
                 personal_rating=payload.get("personal_rating"),
                 image_url=str(payload.get("image_url") or ""),
-                quantity=int(payload.get("quantity") or 1),
+                quantity=qty,
                 added_at=payload.get("added_at"),
                 purchase_location=str(payload.get("purchase_location") or ""),
                 purchase_price=payload.get("purchase_price"),
                 storage_location=str(payload.get("storage_location") or ""),
                 batch_notes=str(payload.get("batch_notes") or payload.get("notes") or ""),
+                as_tasted=as_tasted,
             )
         )
         await self.async_refresh()
@@ -433,7 +439,8 @@ class WineInventoryCoordinator:
                 "winery": wine["winery"],
                 "name": wine["name"],
                 "vintage": wine["vintage"],
-                "quantity_added": int(payload.get("quantity") or 1),
+                "quantity_added": qty,
+                "as_tasted": as_tasted,
                 "total_quantity": wine["quantity"],
                 "purchase_location": payload.get("purchase_location") or "",
                 "storage_location": payload.get("storage_location") or "",

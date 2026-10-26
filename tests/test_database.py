@@ -406,6 +406,64 @@ class TestWineDatabase(unittest.TestCase):
             self.assertEqual(updated_good["vivino_url"], "https://www.vivino.com/w/1652?year=2019")
             self.assertEqual(updated_good["image_url"], "/local/wine_inventory/covers/cover_1.jpg")
 
+    def test_v038_tasted_section_and_consumed_from_cellar(self) -> None:
+        """v0.3.8: Verify scanning/adding directly to Tasted (0 stock) and cellar wines consumed by 1+ showing in Tasted."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = WineDatabase(Path(tmpdir) / "wine_inventory.db")
+            db.initialize()
+
+            # 1. Scan / add a wine directly to Tasted (as_tasted=True)
+            tasted_only = db.add_or_increment_wine(
+                winery="Domaine Weinbach",
+                name="Riesling Schlossberg Grand Cru",
+                vintage=2021,
+                wine_type="white",
+                varietal="Riesling",
+                region="Alsace",
+                country="France",
+                personal_rating=4.7,
+                as_tasted=True,
+                batch_notes="Drank at restaurant in Colmar — electric minerality!",
+            )
+            self.assertEqual(tasted_only["quantity"], 0)
+            self.assertTrue(tasted_only["is_tasted"])
+            self.assertEqual(tasted_only["tasted_count"], 1)
+            self.assertEqual(tasted_only["tasted_bottles"], 1)
+            self.assertEqual(tasted_only["personal_rating"], 4.7)
+            self.assertEqual(len(tasted_only["batches"]), 0)
+            self.assertEqual(len(tasted_only["timeline"]), 1)
+            self.assertEqual(tasted_only["timeline"][0]["event_type"], "tasted")
+
+            # 2. Add a wine to Cellar with 3 bottles — initially NOT tasted
+            cellar_wine = db.add_or_increment_wine(
+                winery="Vega Sicilia",
+                name="Valbuena 5°",
+                vintage=2018,
+                wine_type="red",
+                quantity=3,
+            )
+            self.assertEqual(cellar_wine["quantity"], 3)
+            self.assertFalse(cellar_wine["is_tasted"])
+            self.assertEqual(cellar_wine["tasted_count"], 0)
+
+            # 3. Consume 1 bottle from the cellar (3 -> 2): now in BOTH Cellar (quantity=2) and Tasted (is_tasted=True)!
+            after_consume = db.adjust_quantity(
+                wine_id=cellar_wine["id"],
+                delta=-1,
+                personal_rating=4.8,
+                notes="Opened for Sunday roast",
+            )
+            self.assertEqual(after_consume["quantity"], 2)
+            self.assertTrue(after_consume["is_tasted"])
+            self.assertEqual(after_consume["tasted_count"], 1)
+            self.assertEqual(after_consume["tasted_bottles"], 1)
+
+            stats = db.get_statistics()
+            self.assertEqual(stats["total_bottles"], 2)
+            self.assertEqual(stats["unique_wines"], 1)
+            self.assertEqual(stats["tasted_wines"], 2)
+            self.assertEqual(stats["tasted_bottles"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()
