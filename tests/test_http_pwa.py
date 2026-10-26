@@ -24,6 +24,7 @@ MOBILE_DIR = INTEGRATION_DIR / "frontend" / "mobile"
 class _StubConfig:
     def __init__(self, root: str) -> None:
         self._root = Path(root)
+        self.config_dir = str(self._root)
 
     def path(self, *parts: str) -> str:
         return str(self._root.joinpath(*parts))
@@ -389,6 +390,79 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Wine Cellar", html)
         self.assertIn("2000", html)
         self.assertIn("sessionStorage", html)
+
+    async def test_v035_float_bug_splash_version_fullscreen_stepper_and_autosize(self) -> None:
+        """v0.3.5: empty-string float bug fixed, splash shows version, full-screen pages, no cellar +/- stepper, auto-scaling notes."""
+        # 1. Saving a wine from the mobile scan form with empty strings "" in numeric fields
+        # must succeed AND all subsequent DB updates must succeed without ValueError.
+        status, added = await async_handle_pwa_post(
+            self.hass,
+            "add",
+            {
+                "winery": "Cloudy Bay",
+                "name": "Sauvignon Blanc",
+                "vintage": "",
+                "wine_type": "white",
+                "quantity": 2,
+                "vivino_rating": "",
+                "vivino_price_estimate": "",
+                "purchase_price": "",
+                "drink_from_year": "",
+                "drink_until_year": "",
+            },
+        )
+        self.assertEqual(status, 200)
+        wine_id = added["wine"]["id"]
+        self.assertIsNone(added["wine"]["vivino_price_estimate"])
+        self.assertIsNone(added["wine"]["purchase_price"])
+
+        # Subsequent DB updates (update, adjust) must also succeed without float('') error
+        status, updated = await async_handle_pwa_post(
+            self.hass,
+            "update",
+            {
+                "wine_id": wine_id,
+                "updates": {
+                    "general_notes": "Crisp passionfruit and lime.",
+                    "purchase_price": "",
+                },
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(updated["wine"]["general_notes"], "Crisp passionfruit and lime.")
+
+        status, adjusted = await async_handle_pwa_post(
+            self.hass, "adjust", {"wine_id": wine_id, "delta": 1}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(adjusted["wine"]["quantity"], 3)
+
+        app_js = (MOBILE_DIR / "app.js").read_text(encoding="utf-8")
+        html = (MOBILE_DIR / "index.html").read_text(encoding="utf-8")
+        css = (MOBILE_DIR / "styles.css").read_text(encoding="utf-8")
+
+        # 2. Splash screen shows version in small font
+        self.assertIn("ls-splash-version", html)
+        self.assertIn(f"v{VERSION}", html)
+
+        # 3. Full-screen pages (no bottom-sheet overlay handle, 100dvh surface, border-radius: 0)
+        self.assertNotIn('<div class="sheet-handle"></div>', app_js)
+        self.assertIn("height: 100dvh;", css)
+        self.assertIn("border-radius: 0;", css)
+
+        # 4. Main Cellar list removed +/- stepper buttons, while Details still has +/- buttons
+        bottle_list_fn = app_js.split("_renderBottleListItems(wines) {")[1].split("_renderCellarView() {")[0]
+        self.assertNotIn("data-step-minus", bottle_list_fn)
+        self.assertNotIn("data-step-plus", bottle_list_fn)
+        self.assertIn("pill-qty", bottle_list_fn)
+        self.assertIn('id="btn-detail-minus"', app_js)
+        self.assertIn('id="btn-detail-plus"', app_js)
+
+        # 5. Master Wine Notes textarea in Details scales automatically with text
+        self.assertIn('id="detail-master-notes"', app_js)
+        self.assertIn("_autoResizeTextarea", app_js)
+        self.assertIn("_autoResizeTextareas", app_js)
+        self.assertIn("_sanitizeWinePayload", app_js)
 
 
 if __name__ == "__main__":

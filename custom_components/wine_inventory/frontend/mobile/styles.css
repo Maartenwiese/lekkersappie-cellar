@@ -443,6 +443,7 @@ html, body {
 .pill-dessert, .pill-fortified { background: rgba(123, 31, 162, 0.14); color: #7b1fa2; }
 .pill-vintage { background: var(--surface-alt); color: var(--text); }
 .pill-area { background: var(--brand-soft); color: var(--brand); text-transform: none; }
+.pill-qty { background: var(--brand); color: #ffffff; text-transform: none; font-weight: 800; }
 
 .bottle-winery {
   font-size: 12px;
@@ -689,8 +690,11 @@ html, body {
 }
 
 .textarea {
-  min-height: 76px;
-  resize: vertical;
+  min-height: 84px;
+  height: auto;
+  overflow-y: hidden;
+  resize: none;
+  line-height: 1.45;
 }
 
 /* Segmented Pickers (Text Size & Theme) */
@@ -796,56 +800,40 @@ html, body {
   cursor: pointer;
 }
 
-/* Slide-Up Bottom Sheets (Detailed View, Scanner, Crop/Rotate, iOS Guide) */
+/* Full-Screen Pages (Detailed View, Scanner, Crop/Rotate, Preview, Install Guide) */
 .sheet-backdrop {
   position: fixed;
   inset: 0;
   z-index: 100;
-  background: rgba(0, 0, 0, 0.58);
+  background: var(--bg);
   display: flex;
-  align-items: flex-end;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
   overflow: hidden;
-  animation: fadeIn 0.16s ease;
 }
 
 .sheet-surface {
   width: 100%;
   max-width: 640px;
-  max-height: 92dvh;
-  background: var(--surface);
+  height: 100dvh;
+  max-height: 100dvh;
+  background: var(--bg);
   color: var(--text);
-  border-radius: 22px 22px 0 0;
+  border-radius: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  box-shadow: var(--shadow-md);
-  animation: slideUp 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-.sheet-handle {
-  width: 48px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--border);
-  margin: 10px auto 4px;
-  flex-shrink: 0;
-  /* Generous invisible grip area for swipe-down-to-close. */
-  box-shadow: 0 0 0 14px transparent;
-  touch-action: none;
-  cursor: grab;
-}
-
-.sheet-header {
-  touch-action: none;
+  box-shadow: none;
 }
 
 .sheet-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 10px 16px 12px;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: calc(10px + env(safe-area-inset-top, 0px)) 16px 12px;
+  background: var(--surface);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   zoom: var(--ls-app-scale, 1.15);
@@ -870,7 +858,8 @@ html, body {
 }
 
 .sheet-surface-tall {
-  height: 92dvh;
+  height: 100dvh;
+  max-height: 100dvh;
 }
 
 /* Detailed Sheet Specifics (Scalable with --ls-app-scale) */
@@ -1124,26 +1113,37 @@ html, body {
   color: var(--text-muted);
 }
 
-/* Touch confirm sheet (replaces window.confirm) */
+/* Full-screen confirm page (replaces window.confirm) */
 .confirm-backdrop {
   position: fixed;
   inset: 0;
   z-index: 300;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--bg);
   display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  animation: fadeIn 0.14s ease;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
 }
 
 .confirm-sheet {
   width: 100%;
-  max-width: 520px;
-  background: var(--surface);
+  max-width: 640px;
+  height: 100dvh;
+  max-height: 100dvh;
+  background: var(--bg);
   color: var(--text);
-  border-radius: 22px 22px 0 0;
-  padding: 4px 18px calc(18px + env(safe-area-inset-bottom, 0px));
-  animation: slideUp 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+  border-radius: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.confirm-body {
+  flex: 1;
+  padding: 24px 20px calc(24px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  zoom: var(--ls-app-scale, 1.15);
 }
 
 .confirm-title {

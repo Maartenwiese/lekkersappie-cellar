@@ -25,23 +25,51 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def _opt_float(val: Any) -> float | None:
+    """Safely convert a value to float, returning None for None, empty string, or non-numeric."""
+    if val is None or isinstance(val, bool):
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    text = str(val).strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except (ValueError, TypeError):
+        return None
+
+
+def _opt_int(val: Any) -> int | None:
+    """Safely convert a value to int, returning None for None, empty string, or non-numeric."""
+    num = _opt_float(val)
+    if num is None:
+        return None
+    try:
+        return int(num)
+    except (ValueError, TypeError):
+        return None
+
+
 def compute_drink_status(
-    drink_from_year: int | None,
-    drink_until_year: int | None,
+    drink_from_year: int | str | None,
+    drink_until_year: int | str | None,
     reference_year: int | None = None,
 ) -> str:
     """Compute drinking readiness status from structured drink window years."""
     current_year = reference_year or datetime.now(timezone.utc).year
-    if drink_from_year is None and drink_until_year is None:
+    from_year = _opt_int(drink_from_year)
+    until_year = _opt_int(drink_until_year)
+    if from_year is None and until_year is None:
         return DRINK_STATUS_UNKNOWN
 
-    if drink_from_year is not None and current_year < drink_from_year:
+    if from_year is not None and current_year < from_year:
         return DRINK_STATUS_HOLD
 
-    if drink_until_year is not None:
-        if current_year > drink_until_year:
+    if until_year is not None:
+        if current_year > until_year:
             return DRINK_STATUS_PAST_PEAK
-        if (drink_until_year - current_year) <= 1:
+        if (until_year - current_year) <= 1:
             return DRINK_STATUS_DRINK_SOON
 
     return DRINK_STATUS_READY
@@ -157,6 +185,31 @@ class WineDatabase:
             if "vivino_match_confidence" not in cols:
                 conn.execute("ALTER TABLE wines ADD COLUMN vivino_match_confidence TEXT NOT NULL DEFAULT '';")
             self._migrate_vivino_grounding(conn)
+            self._migrate_empty_numeric_strings(conn)
+
+    @staticmethod
+    def _migrate_empty_numeric_strings(conn: sqlite3.Connection) -> None:
+        """Clean up any empty strings '' stored in numeric SQLite columns (idempotent)."""
+        numeric_cols = (
+            "vintage",
+            "alcohol_pct",
+            "vivino_rating",
+            "vivino_ratings_count",
+            "vivino_price_estimate",
+            "vivino_wine_id",
+            "drink_from_year",
+            "drink_until_year",
+            "personal_rating",
+            "purchase_price",
+        )
+        for col in numeric_cols:
+            conn.execute(f"UPDATE wines SET {col} = NULL WHERE {col} = '';")
+        conn.execute(
+            "UPDATE inventory_additions SET purchase_price = NULL WHERE purchase_price = '';"
+        )
+        conn.execute(
+            "UPDATE consumption_history SET personal_rating = NULL WHERE personal_rating = '';"
+        )
 
     @staticmethod
     def _migrate_vivino_grounding(conn: sqlite3.Connection) -> None:
@@ -212,6 +265,29 @@ class WineDatabase:
             pairings = [p.strip() for p in str(raw).split(",") if p.strip()]
 
         data["food_pairings"] = pairings
+        for int_col in (
+            "vintage",
+            "vivino_ratings_count",
+            "vivino_wine_id",
+            "drink_from_year",
+            "drink_until_year",
+        ):
+            data[int_col] = _opt_int(data.get(int_col))
+        for float_col in (
+            "alcohol_pct",
+            "vivino_rating",
+            "vivino_price_estimate",
+            "personal_rating",
+            "purchase_price",
+        ):
+            data[float_col] = _opt_float(data.get(float_col))
+        if batches is not None:
+            for b in batches:
+                b["purchase_price"] = _opt_float(b.get("purchase_price"))
+        if timeline is not None:
+            for h in timeline:
+                h["personal_rating"] = _opt_float(h.get("personal_rating"))
+
         data["drink_status"] = compute_drink_status(
             data.get("drink_from_year"),
             data.get("drink_until_year"),
@@ -222,11 +298,6 @@ class WineDatabase:
             or data.get("last_purchase_location")
             or ""
         ).strip()
-        data["purchase_price"] = (
-            data.get("purchase_price")
-            if data.get("purchase_price") is not None
-            else data.get("last_purchase_price")
-        )
         data["research_notes"] = data.get("research_notes") or ""
         if batches is not None:
             data["batches"] = batches
@@ -240,6 +311,8 @@ class WineDatabase:
             )
             if not data["storage_location"] and data["last_storage_location"]:
                 data["storage_location"] = data["last_storage_location"]
+            if not data["purchase_location"] and data["last_purchase_location"]:
+                data["purchase_location"] = data["last_purchase_location"]
             data["last_purchase_price"] = next(
                 (
                     b["purchase_price"]
@@ -257,6 +330,11 @@ class WineDatabase:
             )
             data["active_storage_locations"] = active_locations
             data["latest_added_at"] = batches[0]["added_at"] if batches else data["created_at"]
+        data["purchase_price"] = (
+            data.get("purchase_price")
+            if data.get("purchase_price") is not None
+            else data.get("last_purchase_price")
+        )
         if timeline is not None:
             data["timeline"] = timeline
         return data
@@ -265,12 +343,13 @@ class WineDatabase:
         self,
         winery: str,
         name: str,
-        vintage: int | None,
+        vintage: int | str | None,
     ) -> dict[str, Any] | None:
         """Find an existing wine by normalized (winery, name, vintage)."""
         norm_winery = (winery or "").strip().lower()
         norm_name = (name or "").strip().lower()
-        norm_vintage = int(vintage) if vintage else 0
+        v_int = _opt_int(vintage)
+        norm_vintage = v_int if v_int and v_int > 0 else 0
         if not norm_winery and not norm_name:
             return None
 
@@ -363,14 +442,26 @@ class WineDatabase:
         wine_id: int | None = None,
     ) -> dict[str, Any]:
         """Add a new wine or add a purchase batch to an existing wine."""
-        qty = max(1, int(quantity))
+        qty = max(1, _opt_int(quantity) or 1)
         timestamp = (added_at or "").strip() or utc_now_iso()
         normalized_type = (
             wine_type.lower().strip()
             if wine_type and wine_type.lower().strip() in WINE_TYPES
             else WINE_TYPE_RED
         )
-        normalized_vintage = int(vintage) if vintage and int(vintage) > 0 else None
+        v_int = _opt_int(vintage)
+        normalized_vintage = v_int if v_int and v_int > 0 else None
+        alcohol_pct = _opt_float(alcohol_pct)
+        bottle_size_ml = _opt_int(bottle_size_ml) or 750
+        vivino_rating = _opt_float(vivino_rating)
+        vivino_ratings_count = _opt_int(vivino_ratings_count)
+        vivino_price_estimate = _opt_float(vivino_price_estimate)
+        vivino_wine_id = _opt_int(vivino_wine_id)
+        drink_from_year = _opt_int(drink_from_year)
+        drink_until_year = _opt_int(drink_until_year)
+        personal_rating = _opt_float(personal_rating)
+        purchase_price = _opt_float(purchase_price)
+        wine_id = _opt_int(wine_id)
 
         if isinstance(food_pairings, list):
             pairings_json = json.dumps([str(p).strip() for p in food_pairings if str(p).strip()])
@@ -572,6 +663,9 @@ class WineDatabase:
         personal_rating: float | None = None,
     ) -> dict[str, Any]:
         """Adjust bottle quantity (+N adds a batch; -N consumes from batch or FIFO)."""
+        purchase_price = _opt_float(purchase_price)
+        personal_rating = _opt_float(personal_rating)
+        batch_id = _opt_int(batch_id)
         if delta == 0:
             detail = self.get_wine_detail(wine_id)
             if detail is None:
@@ -725,6 +819,21 @@ class WineDatabase:
             "purchase_price",
             "research_notes",
         }
+        float_fields = {
+            "alcohol_pct",
+            "vivino_rating",
+            "vivino_price_estimate",
+            "personal_rating",
+            "purchase_price",
+        }
+        int_fields = {
+            "vintage",
+            "bottle_size_ml",
+            "vivino_ratings_count",
+            "vivino_wine_id",
+            "drink_from_year",
+            "drink_until_year",
+        }
         set_clauses: list[str] = []
         values: list[Any] = []
 
@@ -736,6 +845,14 @@ class WineDatabase:
                     val = json.dumps([str(x).strip() for x in val if str(x).strip()])
                 elif isinstance(val, str):
                     val = json.dumps([x.strip() for x in val.split(",") if x.strip()])
+            elif key in float_fields:
+                val = _opt_float(val)
+            elif key in int_fields:
+                val = _opt_int(val)
+                if key == "vintage" and val is not None and val <= 0:
+                    val = None
+                elif key == "bottle_size_ml" and val is None:
+                    val = 750
             set_clauses.append(f"{key} = ?")
             values.append(val)
 
@@ -943,11 +1060,13 @@ class WineDatabase:
             elif status == DRINK_STATUS_PAST_PEAK:
                 past_peak_bottles += qty
 
-            unit_price = w.get("last_purchase_price")
+            unit_price = _opt_float(w.get("last_purchase_price"))
             if unit_price is None:
-                unit_price = w.get("vivino_price_estimate")
+                unit_price = _opt_float(w.get("purchase_price"))
+            if unit_price is None:
+                unit_price = _opt_float(w.get("vivino_price_estimate"))
             if unit_price is not None:
-                estimated_value += float(unit_price) * qty
+                estimated_value += unit_price * qty
 
         purchase_locations = sorted(
             {

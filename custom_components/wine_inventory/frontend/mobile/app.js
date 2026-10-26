@@ -1,5 +1,5 @@
 /**
- * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.3.4)
+ * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.3.5)
  * Runs parallel to the native Home Assistant UI, inherits Home Assistant OAuth2
  * authentication, defaults to Large (L) text scale, and supports Home Screen installation.
  */
@@ -129,7 +129,7 @@ class LekkersappieMobileApp {
   /* ================= Touch helpers: confirm sheet, toast, gestures ================= */
 
   /**
-   * Touch-friendly replacement for the native confirm dialog: a bottom sheet with large
+   * Touch-friendly replacement for the native confirm dialog: a full-screen page with large
    * buttons. Rendered in its own DOM node so it never disturbs app state.
    */
   confirmAction({ title, message, confirmLabel = "Confirm", cancelLabel = "Cancel", danger = false }) {
@@ -140,12 +140,17 @@ class LekkersappieMobileApp {
       host.setAttribute("aria-modal", "true");
       host.innerHTML = `
         <div class="confirm-sheet">
-          <div class="sheet-handle"></div>
-          <h3 class="confirm-title">${esc(title)}</h3>
-          <p class="confirm-message">${esc(message)}</p>
-          <div class="confirm-actions">
-            <button type="button" class="btn btn-lg ${danger ? "btn-danger-solid" : "btn-primary"}" data-confirm="yes">${esc(confirmLabel)}</button>
-            <button type="button" class="btn btn-lg" data-confirm="no">${esc(cancelLabel)}</button>
+          <div class="sheet-header">
+            <button type="button" class="btn btn-icon btn-back" data-confirm="no" aria-label="Back"><span aria-hidden="true">‹</span></button>
+            <h2>${esc(title)}</h2>
+          </div>
+          <div class="confirm-body">
+            <h3 class="confirm-title">${esc(title)}</h3>
+            <p class="confirm-message">${esc(message)}</p>
+            <div class="confirm-actions">
+              <button type="button" class="btn btn-lg ${danger ? "btn-danger-solid" : "btn-primary"}" data-confirm="yes">${esc(confirmLabel)}</button>
+              <button type="button" class="btn btn-lg" data-confirm="no">${esc(cancelLabel)}</button>
+            </div>
           </div>
         </div>
       `;
@@ -154,13 +159,64 @@ class LekkersappieMobileApp {
         resolve(val);
       };
       host.addEventListener("click", (e) => {
-        if (e.target === host) finish(false);
         const btn = e.target.closest("[data-confirm]");
         if (btn) finish(btn.dataset.confirm === "yes");
       });
       document.body.appendChild(host);
       host.querySelector('[data-confirm="no"]')?.focus({ preventScroll: true });
     });
+  }
+
+  /**
+   * Normalize numeric fields in wine payloads so empty strings "" are always converted
+   * to null before sending to the backend SQLite API.
+   */
+  _sanitizeWinePayload(raw) {
+    const out = { ...raw };
+    const numericFields = [
+      "wine_id",
+      "vintage",
+      "alcohol_pct",
+      "bottle_size_ml",
+      "vivino_rating",
+      "vivino_ratings_count",
+      "vivino_price_estimate",
+      "vivino_wine_id",
+      "drink_from_year",
+      "drink_until_year",
+      "personal_rating",
+      "purchase_price",
+    ];
+    numericFields.forEach((k) => {
+      if (!(k in out)) return;
+      const v = out[k];
+      if (v === "" || v === null || v === undefined || (typeof v === "string" && !v.trim())) {
+        out[k] = null;
+      } else {
+        const n = Number(v);
+        out[k] = Number.isFinite(n) ? n : null;
+      }
+    });
+    if ("quantity" in out) {
+      const q = Number(out.quantity);
+      out.quantity = Number.isFinite(q) && q >= 1 ? Math.round(q) : 1;
+    }
+    return out;
+  }
+
+  /** Auto-scale a textarea's height to fit all of its text content without inner scrollbars. */
+  _autoResizeTextarea(el) {
+    if (!el) return;
+    el.style.height = "0px";
+    const scale = el.closest(".scaled-zone") ? Math.max(1, Number(this.state.fontScale) || 1) : 1;
+    const rawScroll = el.scrollHeight || 0;
+    const nextHeight = Math.max(84, Math.ceil(rawScroll * scale) + 12);
+    el.style.height = `${nextHeight}px`;
+  }
+
+  _autoResizeTextareas() {
+    if (!this.root) return;
+    this.root.querySelectorAll("textarea.textarea").forEach((el) => this._autoResizeTextarea(el));
   }
 
   _setupTouchGestures() {
@@ -230,48 +286,8 @@ class LekkersappieMobileApp {
     });
   }
 
-  /** Swipe the sheet down by its handle/header to dismiss it. */
-  _bindSheetSwipe() {
-    const surface = this.root.querySelector(".sheet-surface");
-    if (!surface) return;
-    const grips = surface.querySelectorAll(".sheet-handle, .sheet-header");
-    grips.forEach((grip) => {
-      grip.addEventListener("pointerdown", (e) => {
-        if (e.target.closest("button, a, input, select, textarea")) return;
-        if (e.pointerType === "mouse" && e.button !== 0) return;
-        const startY = e.clientY;
-        let dy = 0;
-        try {
-          grip.setPointerCapture(e.pointerId);
-        } catch (_) {
-          /* ignore */
-        }
-        surface.style.transition = "none";
-        const move = (ev) => {
-          dy = Math.max(0, ev.clientY - startY);
-          surface.style.transform = `translateY(${dy}px)`;
-        };
-        const up = () => {
-          grip.removeEventListener("pointermove", move);
-          grip.removeEventListener("pointerup", up);
-          grip.removeEventListener("pointercancel", up);
-          surface.style.transition = "transform 0.18s ease";
-          if (dy > 110) {
-            surface.style.transform = "translateY(100%)";
-            setTimeout(() => this.goBack(), 160);
-          } else {
-            surface.style.transform = "";
-          }
-        };
-        grip.addEventListener("pointermove", move);
-        grip.addEventListener("pointerup", up);
-        grip.addEventListener("pointercancel", up);
-      });
-    });
-  }
-
   /**
-   * Back navigation: the on-screen ‹ Back button, swipe-down, and the phone's
+   * Back navigation: the on-screen ‹ Back button and the phone's
    * hardware back button / back gesture all go to the previous page.
    * Open sheets are mirrored as browser history entries (this._sheetStack).
    */
@@ -936,6 +952,7 @@ class LekkersappieMobileApp {
             </div>
             <div class="bottle-card-main" data-detail-id="${w.id}">
               <div class="bottle-meta-top">
+                <span class="pill pill-qty" title="Bottles in cellar">${Number(w.quantity || 0)}×</span>
                 <span class="pill pill-${esc(w.wine_type)}">${esc(typeLabel)}</span>
                 <span class="pill pill-vintage">📅 ${esc(w.vintage || "NV")}</span>
                 ${area ? `<span class="pill pill-area">📍 ${esc(area)}</span>` : ""}
@@ -959,13 +976,6 @@ class LekkersappieMobileApp {
                 }
                 ${w.personal_rating ? `<span class="meta-chip" style="color:var(--brand);">★ ${esc(w.personal_rating)}/5</span>` : ""}
                 <span style="color:${drinkMeta.color}; font-weight:600; font-size:11.5px;">● ${esc(drinkMeta.label)}${esc(drinkWindowYears)}</span>
-              </div>
-            </div>
-            <div class="bottle-stepper">
-              <div class="stepper-capsule">
-                <button class="step-btn" data-step-minus="${w.id}" aria-label="Consume 1 bottle">−</button>
-                <span class="step-qty">${Number(w.quantity || 0)}</span>
-                <button class="step-btn" data-step-plus="${w.id}" aria-label="Add 1 bottle">+</button>
               </div>
             </div>
           </div>
@@ -1462,7 +1472,6 @@ class LekkersappieMobileApp {
     return `
       <div class="sheet-backdrop" id="sheet-backdrop">
         <div class="sheet-surface">
-          <div class="sheet-handle"></div>
           <div class="sheet-header">
             <button class="btn btn-icon btn-back" id="btn-close-sheet" aria-label="Back"><span aria-hidden="true">‹</span></button>
             <h2>${esc(w.winery)} – ${esc(w.name)} (${esc(w.vintage || "NV")})</h2>
@@ -1662,7 +1671,7 @@ class LekkersappieMobileApp {
                 </div>
                 <div class="field">
                   <label>Master Wine Notes</label>
-                  <textarea class="textarea" name="general_notes">${esc(df.general_notes)}</textarea>
+                  <textarea class="textarea" id="detail-master-notes" name="general_notes" rows="2">${esc(df.general_notes)}</textarea>
                 </div>
 
                 <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
@@ -1709,7 +1718,6 @@ class LekkersappieMobileApp {
     return `
       <div class="sheet-backdrop" id="sheet-backdrop">
         <div class="sheet-surface">
-          <div class="sheet-handle"></div>
           <div class="sheet-header">
             <button class="btn btn-icon btn-back" id="btn-close-sheet" aria-label="Back"><span aria-hidden="true">‹</span></button>
             <h2>📷 Scan Wine Label</h2>
@@ -1862,7 +1870,6 @@ class LekkersappieMobileApp {
     return `
       <div class="sheet-backdrop" id="sheet-backdrop">
         <div class="sheet-surface sheet-surface-tall">
-          <div class="sheet-handle"></div>
           <div class="sheet-header">
             <button class="btn btn-icon btn-back" id="btn-cancel-crop" aria-label="Back"><span aria-hidden="true">‹</span></button>
             <h2>✂️ Crop &amp; Rotate</h2>
@@ -1897,17 +1904,14 @@ class LekkersappieMobileApp {
     const w = this.state.previewWine;
     if (!w || !w.image_url) return "";
     return `
-      <div class="sheet-backdrop" id="sheet-backdrop" style="align-items:center; padding:16px;">
-        <div class="panel-card" style="max-width:480px; width:100%; padding:14px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-            <div>
-              <strong style="font-size:15px;">${esc(w.name)}</strong>
-              <div style="font-size:12px; color:var(--text-muted);">${esc(w.winery)} (${esc(w.vintage || "NV")})</div>
-            </div>
+      <div class="sheet-backdrop" id="sheet-backdrop">
+        <div class="sheet-surface">
+          <div class="sheet-header">
             <button class="btn btn-icon btn-back" id="btn-close-preview" aria-label="Back"><span aria-hidden="true">‹</span></button>
+            <h2>${esc(w.winery)} – ${esc(w.name)} (${esc(w.vintage || "NV")})</h2>
           </div>
-          <div style="display:flex; justify-content:center; background:#111; border-radius:12px; padding:8px;">
-            <img src="${esc(w.image_url)}" alt="${esc(w.name)}" style="max-height:70dvh; max-width:100%; object-fit:contain; border-radius:8px;" />
+          <div class="sheet-body" style="display:flex; align-items:center; justify-content:center; background:#111;">
+            <img src="${esc(w.image_url)}" alt="${esc(w.name)}" style="max-height:82dvh; max-width:100%; object-fit:contain; border-radius:8px;" />
           </div>
         </div>
       </div>
@@ -1918,7 +1922,6 @@ class LekkersappieMobileApp {
     return `
       <div class="sheet-backdrop" id="sheet-backdrop">
         <div class="sheet-surface">
-          <div class="sheet-handle"></div>
           <div class="sheet-header">
             <button class="btn btn-icon btn-back" id="btn-close-sheet" aria-label="Back"><span aria-hidden="true">‹</span></button>
             <h2>📲 Install Lekkersappie as an App</h2>
@@ -2051,6 +2054,8 @@ class LekkersappieMobileApp {
     `;
 
     this._bindEvents();
+    this._autoResizeTextareas();
+    requestAnimationFrame(() => this._autoResizeTextareas());
 
     // Restore scroll: same sheet keeps its position; same tab keeps page position.
     const newSheetBody = this.root.querySelector(".sheet-body");
@@ -2085,20 +2090,6 @@ class LekkersappieMobileApp {
         }
       });
     });
-    scope.querySelectorAll("[data-step-plus]").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const wine = this.state.wines.find((w) => Number(w.id) === Number(btn.dataset.stepPlus));
-        if (wine) this.adjustBottleStock(wine, 1);
-      });
-    });
-    scope.querySelectorAll("[data-step-minus]").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const wine = this.state.wines.find((w) => Number(w.id) === Number(btn.dataset.stepMinus));
-        if (wine) this.adjustBottleStock(wine, -1);
-      });
-    });
     scope.querySelectorAll("[data-open-scan]").forEach((btn) => {
       btn.addEventListener("click", () => {
         this.state.scanForm = this._emptyForm();
@@ -2117,10 +2108,12 @@ class LekkersappieMobileApp {
       await this.fetchState();
       this.showToast("Cellar refreshed");
     });
-    this._bindSheetSwipe();
     this._bindFormState(r.querySelector("#mobile-detail-form"), this.state.detailForm);
     this._bindFormState(r.querySelector("#mobile-scan-save-form"), this.state.scanForm);
     this._bindFormState(r.querySelector("#mobile-manual-add-form"), this.state.scanForm);
+    r.querySelectorAll("textarea.textarea").forEach((el) => {
+      el.addEventListener("input", () => this._autoResizeTextarea(el));
+    });
     r.querySelector("#btn-top-font-scale")?.addEventListener("click", () => this.cycleFontScale());
     r.querySelector("#btn-top-install")?.addEventListener("click", () => this.handleInstallClick());
     r.querySelector("#btn-banner-install")?.addEventListener("click", () => this.handleInstallClick());
@@ -2220,16 +2213,7 @@ class LekkersappieMobileApp {
       manualForm.addEventListener("submit", async (e) => {
         e.preventDefault();
         const fd = new FormData(manualForm);
-        const payload = Object.fromEntries(fd.entries());
-        payload.quantity = Number(payload.quantity || 1);
-        if (payload.vintage) payload.vintage = Number(payload.vintage);
-        else delete payload.vintage;
-        if (payload.purchase_price) payload.purchase_price = Number(payload.purchase_price);
-        else delete payload.purchase_price;
-        if (payload.drink_from_year) payload.drink_from_year = Number(payload.drink_from_year);
-        else delete payload.drink_from_year;
-        if (payload.drink_until_year) payload.drink_until_year = Number(payload.drink_until_year);
-        else delete payload.drink_until_year;
+        const payload = this._sanitizeWinePayload(Object.fromEntries(fd.entries()));
         try {
           await this.apiPost("add", payload);
           this.state.scanForm = this._emptyForm();
@@ -2242,15 +2226,9 @@ class LekkersappieMobileApp {
       });
     }
 
-    // Sheet close handlers
+    // Full-screen page back buttons
     r.querySelector("#btn-close-sheet")?.addEventListener("click", () => this.goBack());
     r.querySelector("#btn-close-preview")?.addEventListener("click", () => this.goBack());
-    r.querySelector("#sheet-backdrop")?.addEventListener("click", (e) => {
-      // Only read-only sheets close on a stray backdrop tap; sheets with forms
-      // (detail, scan, crop) require ✕ or a swipe-down so edits are not lost.
-      if (e.target.id !== "sheet-backdrop") return;
-      if (["preview", "install_guide"].includes(this.state.activeSheet)) this.goBack();
-    });
 
     // Detail sheet handlers
     r.querySelector("#btn-detail-zoom-img")?.addEventListener("click", () => {
@@ -2334,12 +2312,7 @@ class LekkersappieMobileApp {
         const w = this.state.detailWine;
         if (!w) return;
         const fd = new FormData(detailForm);
-        const updates = Object.fromEntries(fd.entries());
-        updates.vintage = updates.vintage ? Number(updates.vintage) : null;
-        updates.purchase_price = updates.purchase_price !== "" ? Number(updates.purchase_price) : null;
-        updates.drink_from_year = updates.drink_from_year ? Number(updates.drink_from_year) : null;
-        updates.drink_until_year = updates.drink_until_year ? Number(updates.drink_until_year) : null;
-        updates.personal_rating = updates.personal_rating ? Number(updates.personal_rating) : null;
+        const updates = this._sanitizeWinePayload(Object.fromEntries(fd.entries()));
         try {
           const res = await this.apiPost("update", { wine_id: w.id, updates });
           if (res.wine) this.state.detailWine = res.wine;
@@ -2366,10 +2339,10 @@ class LekkersappieMobileApp {
       scanSaveForm.addEventListener("submit", async (e) => {
         e.preventDefault();
         const fd = new FormData(scanSaveForm);
-        const payload = { ...this.state.scanForm, ...Object.fromEntries(fd.entries()) };
-        payload.quantity = Number(payload.quantity || 1);
-        payload.vintage = payload.vintage ? Number(payload.vintage) : null;
-        payload.purchase_price = payload.purchase_price ? Number(payload.purchase_price) : null;
+        const payload = this._sanitizeWinePayload({
+          ...this.state.scanForm,
+          ...Object.fromEntries(fd.entries()),
+        });
         try {
           await this.apiPost("add", payload);
           this.state.activeSheet = null;
@@ -2768,12 +2741,16 @@ class LekkersappieMobileApp {
     this.state.selectedCandidateIdx = idx;
     if (idx < 0 || !this.state.scanCandidates[idx]) {
       this.state.scanForm.vivino_rating = "";
+      this.state.scanForm.vivino_ratings_count = null;
+      this.state.scanForm.vivino_price_estimate = "";
       this.state.scanForm.vivino_url = "";
       this.state.scanForm.vivino_wine_id = null;
       this.state.scanForm.vivino_match_confidence = "";
     } else {
       const c = this.state.scanCandidates[idx];
       this.state.scanForm.vivino_rating = c.vivino_rating ?? "";
+      this.state.scanForm.vivino_ratings_count = c.vivino_ratings_count ?? null;
+      this.state.scanForm.vivino_price_estimate = c.vivino_price_estimate ?? "";
       this.state.scanForm.vivino_url = c.vivino_url || "";
       this.state.scanForm.vivino_wine_id = c.vivino_wine_id ?? null;
       this.state.scanForm.vivino_match_confidence = "confirmed";

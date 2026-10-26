@@ -292,6 +292,82 @@ class TestWineDatabase(unittest.TestCase):
             self.assertEqual(g["vivino_wine_id"], 1136930)
             self.assertEqual(g["vivino_match_confidence"], "high")
 
+    def test_empty_string_numeric_fields_and_legacy_db_self_healing(self) -> None:
+        """v0.3.5 regression: empty strings '' in numeric fields never raise ValueError in float()."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = WineDatabase(Path(tmpdir) / "wine_inventory.db")
+            db.initialize()
+
+            # 1. Saving a wine with empty strings "" in numeric fields (like an unlinked scan form)
+            wine = db.add_or_increment_wine(
+                winery="Bodegas Muga",
+                name="Reserva",
+                vintage="",  # type: ignore[arg-type]
+                vivino_rating="",  # type: ignore[arg-type]
+                vivino_price_estimate="",  # type: ignore[arg-type]
+                purchase_price="",  # type: ignore[arg-type]
+                personal_rating="",  # type: ignore[arg-type]
+                alcohol_pct="",  # type: ignore[arg-type]
+                drink_from_year="",  # type: ignore[arg-type]
+                drink_until_year="",  # type: ignore[arg-type]
+                quantity=2,
+            )
+            self.assertIsNone(wine["vintage"])
+            self.assertIsNone(wine["vivino_rating"])
+            self.assertIsNone(wine["vivino_price_estimate"])
+            self.assertIsNone(wine["purchase_price"])
+            stats = db.get_statistics()
+            self.assertEqual(stats["total_bottles"], 2)
+            self.assertEqual(stats["estimated_value"], 0.0)
+
+            # 2. Updating a wine with empty strings "" in numeric fields
+            updated = db.update_wine(
+                wine["id"],
+                {
+                    "vintage": "",
+                    "purchase_price": "",
+                    "vivino_rating": "",
+                    "vivino_price_estimate": "",
+                    "drink_from_year": "",
+                    "drink_until_year": "",
+                    "personal_rating": "",
+                },
+            )
+            self.assertIsNone(updated["purchase_price"])
+            self.assertIsNone(updated["vivino_price_estimate"])
+            self.assertEqual(db.get_statistics()["estimated_value"], 0.0)
+
+            # 3. Simulate a pre-v0.3.5 database row that already has '' stored in REAL/INTEGER columns
+            with db._connect() as conn, conn:
+                conn.execute(
+                    """
+                    UPDATE wines
+                    SET vivino_price_estimate = '',
+                        vivino_rating = '',
+                        purchase_price = '',
+                        drink_from_year = '',
+                        drink_until_year = ''
+                    WHERE id = ?
+                    """,
+                    (wine["id"],),
+                )
+            # Even before re-running initialize(), list_wines() and get_statistics() must not fail
+            stats_before_init = db.get_statistics()
+            self.assertEqual(stats_before_init["total_bottles"], 2)
+            self.assertEqual(stats_before_init["estimated_value"], 0.0)
+
+            # Running initialize() heals the raw SQLite columns back to NULL
+            db.initialize()
+            with db._connect() as conn:
+                raw_row = conn.execute(
+                    "SELECT vivino_price_estimate, vivino_rating, purchase_price, drink_from_year FROM wines WHERE id = ?",
+                    (wine["id"],),
+                ).fetchone()
+                self.assertIsNone(raw_row["vivino_price_estimate"])
+                self.assertIsNone(raw_row["vivino_rating"])
+                self.assertIsNone(raw_row["purchase_price"])
+                self.assertIsNone(raw_row["drink_from_year"])
+
 
 if __name__ == "__main__":
     unittest.main()

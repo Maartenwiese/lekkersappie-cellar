@@ -33,15 +33,17 @@
     #ls-splash img { width: 132px; height: 132px; animation: ls-pop 0.6s cubic-bezier(0.2, 0.8, 0.2, 1); }
     #ls-splash .ls-splash-name { font-size: 26px; font-weight: 800; color: #a61a2e; letter-spacing: -0.3px; text-align: center; }
     #ls-splash .ls-splash-sub { font-size: 15px; color: #6c5e63; margin-top: -10px; }
+    #ls-splash .ls-splash-version { font-size: 12px; font-weight: 600; color: #8c7b80; margin-top: -10px; letter-spacing: 0.3px; }
     @keyframes ls-pop { from { transform: scale(0.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
   </style>
-  <link rel="stylesheet" href="/lekkersappie/styles.css?v=0.3.4" />
+  <link rel="stylesheet" href="/lekkersappie/styles.css?v=0.3.5" />
 </head>
 <body>
   <div id="ls-splash" role="img" aria-label="Lekkersappie Wine Cellar">
     <img src="/lekkersappie/icon-512.png" alt="" />
     <div class="ls-splash-name">Lekkersappie</div>
     <div class="ls-splash-sub">Wine Cellar</div>
+    <div class="ls-splash-version">v0.3.5</div>
   </div>
   <script>
     // Show the splash for 2 seconds on the first launch of each session only.
@@ -58,6 +60,6 @@
     })();
   </script>
   <div id="lekkersappie-mobile-root"></div>
-  <script src="/lekkersappie/app.js?v=0.3.4"></script>
+  <script src="/lekkersappie/app.js?v=0.3.5"></script>
 </body>
 </html>
