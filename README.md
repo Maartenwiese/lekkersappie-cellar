@@ -42,7 +42,10 @@ Built following the [**`homeassistant-ai/skills`**](https://github.com/homeassis
   - Ships with a complete Home Assistant **`sections` dashboard** (`dashboards/wine-cellar-dashboard.yaml`) featuring native `heading`, `tile`, and `distribution` cards alongside `custom:wine-inventory-card` and `custom:wine-cellar-summary-card`.
 - **📱 Standalone Installable Mobile Web App (`/lekkersappie`)**:
   - Runs a modern, mobile-first Progressive Web App (PWA) at **`http://<your-home-assistant>:8123/lekkersappie`** in parallel to the native Home Assistant UI.
-  - Installable directly to your iPhone/iPad or Android Home Screen (`display: standalone`) with a thumb-friendly bottom navigation bar, floating `SCAN` camera button, slide-up Wine Details sheet, `Aa` text scaling (`S` / `M` / `L` / `XL`) across all views and modals, and Service Worker caching.
+  - **Inherits Home Assistant Authentication**: Automatically reuses your Home Assistant login session (`hassTokens` / synced token with automatic OAuth2 refresh and native `/auth/authorize` login fallback) and enforces `requires_auth = True` on all mobile API endpoints.
+  - **Rich Mobile List View & Large (`L`) Default Text**: Defaults to Large (`L`, `115%`) font sizing and displays grape variety (`🍇`), bought/added date (`🗓️`), store (`🛒`), price (`💰`), vintage (`📅`), storage area (`📍`), origin (`🌍`), Vivino badge (`★`), and drinking window status on each line item.
+  - **Camera & Photo Library Support**: Scanning a bottle offers both **📷 Take Photo (Camera)** and **🖼️ Choose from Library** with interactive crop & rotate.
+  - Installable directly to your iPhone/iPad or Android Home Screen (`display: standalone`) with a thumb-friendly bottom navigation bar, floating `SCAN` button, smooth-scrolling slide-up Wine Details sheet, `Aa` text scaling (`S` / `M` / `L` / `XL`) across all views and modals, and Service Worker caching.
 
 ---
 
@@ -136,10 +139,8 @@ Lekkersappie serves a parallel, mobile-first web app designed for one-handed pho
 Open your **Lekkersappie** dashboard card. You have two ways to add a bottle:
 
 #### Method A: Scan a Bottle Photo (Gemini Flash-Lite + Vivino)
-1. Click the primary **Scan Bottle** button (`📷`) in the top-right of the Lekkersappie card.
-2. In the **Scan Wine Bottle** dialog, click **Take Photo / Upload Label**.
-   - On a phone or tablet, this directly activates your device camera so you can take a photo of the bottle.
-   - On a desktop, select any bottle photo from your computer.
+1. Click the primary **Scan Bottle** button (`📷`) in the top-right of the Lekkersappie card (or the floating **SCAN** button in the mobile app).
+2. In the **Scan Wine Bottle** dialog, choose either **📷 Take Photo (Camera)** to snap a live photo with your phone's camera or **🖼️ Choose from Library** to pick an existing photo from your phone's photo library / computer.
 3. The interactive **Crop & Rotate Bottle Label** modal opens immediately:
    - Click **Rotate Left (90°)** or **Rotate Right (90°)** if the bottle was photographed sideways or upside down until the label is upright.
    - Drag the crop rectangle and corner handles to tightly frame the front wine label, cutting out tables, backgrounds, reflections, or bottle necks.

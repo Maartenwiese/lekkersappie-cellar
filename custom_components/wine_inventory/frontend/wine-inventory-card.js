@@ -252,11 +252,21 @@ class WineInventoryCard extends HTMLElement {
   set hass(hass) {
     const firstBind = !this._hass;
     this._hass = hass;
+    this._syncHaAuthTokens(hass);
     if (firstBind) {
       this._fetchInventory();
     } else {
       this._updateEnvironmentBadges();
     }
+  }
+
+  _syncHaAuthTokens(hass) {
+    try {
+      const authData = hass?.auth?.data || hass?.connection?.options?.auth?.data;
+      if (authData && authData.access_token) {
+        window.localStorage.setItem("lekkersappie_ha_tokens", JSON.stringify(authData));
+      }
+    } catch (_) {}
   }
 
   getCardSize() {
@@ -1703,8 +1713,13 @@ class WineInventoryCard extends HTMLElement {
                     <div class="scan-buttons-row">
                       <label class="ha-btn primary-btn file-label">
                         <ha-icon icon="mdi:camera"></ha-icon>
-                        <span>Take Photo / Upload Label</span>
+                        <span>Take Photo (Camera)</span>
                         <input type="file" id="bottle-file-input" accept="image/*" capture="environment" hidden />
+                      </label>
+                      <label class="ha-btn secondary-btn file-label">
+                        <ha-icon icon="mdi:image-multiple-outline"></ha-icon>
+                        <span>Choose from Library</span>
+                        <input type="file" id="bottle-library-input" accept="image/*" hidden />
                       </label>
                       ${
                         this._cropState?.image
@@ -2730,6 +2745,7 @@ class WineInventoryCard extends HTMLElement {
     });
 
     root.querySelector("#bottle-file-input")?.addEventListener("change", (e) => this._handleFileSelected(e));
+    root.querySelector("#bottle-library-input")?.addEventListener("change", (e) => this._handleFileSelected(e));
     root.querySelector("#vivino-candidate-select")?.addEventListener("change", (e) => {
       this._applyVivinoCandidate(Number(e.target.value));
     });
@@ -4364,6 +4380,12 @@ class WineCellarSummaryCard extends HTMLElement {
   set hass(hass) {
     const first = !this._hass;
     this._hass = hass;
+    try {
+      const authData = hass?.auth?.data || hass?.connection?.options?.auth?.data;
+      if (authData && authData.access_token) {
+        window.localStorage.setItem("lekkersappie_ha_tokens", JSON.stringify(authData));
+      }
+    } catch (_) {}
     if (this._helperCard) {
       this._helperCard.hass = hass;
     }

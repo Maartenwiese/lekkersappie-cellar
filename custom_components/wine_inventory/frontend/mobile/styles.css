@@ -1,11 +1,11 @@
 /* ==========================================================================
-   Lekkersappie Standalone Mobile Web App (PWA) Stylesheet (v0.3.0)
+   Lekkersappie Standalone Mobile Web App (PWA) Stylesheet (v0.3.1)
    Designed mobile-first with safe-area support, adjustable text size
-   (--ls-app-scale: 0.9 / 1.0 / 1.15 / 1.3), and light/dark themes.
+   (--ls-app-scale: 0.9 / 1.0 / 1.15 / 1.3, default L = 1.15), and light/dark themes.
    ========================================================================== */
 
 :root {
-  --ls-app-scale: 1;
+  --ls-app-scale: 1.15;
   --brand: #a61a2e;
   --brand-dark: #7d1122;
   --brand-soft: rgba(166, 26, 46, 0.11);
@@ -66,7 +66,7 @@ html, body {
 }
 
 .scaled-zone {
-  zoom: var(--ls-app-scale, 1);
+  zoom: var(--ls-app-scale, 1.15);
   container-type: inline-size;
   container-name: mobileview;
 }
@@ -409,11 +409,32 @@ html, body {
   font-weight: 700;
   color: var(--text);
   line-height: 1.25;
-  margin: 1px 0 3px;
+  margin: 1px 0 4px;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+.bottle-detail-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 4px 0 6px;
+}
+
+.meta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--surface-alt);
+  color: var(--text);
+  border: 1px solid var(--border);
+  line-height: 1.3;
 }
 
 .bottle-subline {
@@ -475,7 +496,7 @@ html, body {
 }
 
 /* Narrow container progressive disclosure when L/XL scale is selected */
-@container mobileview (max-width: 360px) {
+@container mobileview (max-width: 365px) {
   .bottle-card {
     flex-wrap: wrap;
   }
@@ -485,9 +506,6 @@ html, body {
     justify-content: flex-end;
     padding-top: 6px;
     border-top: 1px dashed var(--border);
-  }
-  .bottle-subline .sub-origin {
-    display: none;
   }
 }
 
@@ -723,13 +741,14 @@ html, body {
   display: flex;
   align-items: flex-end;
   justify-content: center;
+  overflow: hidden;
   animation: fadeIn 0.16s ease;
 }
 
 .sheet-surface {
   width: 100%;
   max-width: 640px;
-  max-height: 93dvh;
+  max-height: 92dvh;
   background: var(--surface);
   color: var(--text);
   border-radius: 22px 22px 0 0;
@@ -757,6 +776,7 @@ html, body {
   padding: 10px 16px 12px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  zoom: var(--ls-app-scale, 1.15);
 }
 
 .sheet-header h2 {
@@ -769,9 +789,13 @@ html, body {
 }
 
 .sheet-body {
-  padding: 14px 16px calc(24px + env(safe-area-inset-bottom, 0px));
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 14px 16px calc(32px + env(safe-area-inset-bottom, 0px));
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
 }
 
 /* Detailed Sheet Specifics (Scalable with --ls-app-scale) */

@@ -1,6 +1,7 @@
 /**
- * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.3.0)
- * Runs parallel to the native Home Assistant UI and supports full Home Screen installation.
+ * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.3.1)
+ * Runs parallel to the native Home Assistant UI, inherits Home Assistant OAuth2
+ * authentication, defaults to Large (L) text scale, and supports Home Screen installation.
  */
 
 const WINE_TYPES = {
@@ -63,6 +64,8 @@ class LekkersappieMobileApp {
       wines: [],
       loading: true,
       error: "",
+      authRequired: false,
+      authenticatedUser: null,
       isOnline: navigator.onLine,
 
       // Navigation: "cellar" | "areas" | "add" | "settings"
@@ -117,7 +120,138 @@ class LekkersappieMobileApp {
     this._setupPWAEvents();
     this._parseUrlParams();
     this.render();
-    this.fetchState();
+    this._initAuthAndFetchState();
+  }
+
+  async _initAuthAndFetchState() {
+    await this._handleAuthCallback();
+    await this.fetchState();
+  }
+
+  _readStoredTokens() {
+    const keys = ["hassTokens", "lekkersappie_ha_tokens"];
+    for (const key of keys) {
+      try {
+        const raw = localStorage.getItem(key);
+        if (!raw) continue;
+        const parsed = JSON.parse(raw);
+        if (parsed && (parsed.access_token || parsed.refresh_token)) {
+          return parsed;
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  _saveTokens(tokenData) {
+    if (!tokenData || typeof tokenData !== "object") return;
+    try {
+      localStorage.setItem("lekkersappie_ha_tokens", JSON.stringify(tokenData));
+      if (!localStorage.getItem("hassTokens")) {
+        localStorage.setItem("hassTokens", JSON.stringify(tokenData));
+      }
+    } catch (_) {}
+  }
+
+  async _handleAuthCallback() {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    if (!code) return;
+    const clientId = `${window.location.origin}/`;
+    try {
+      const body = new URLSearchParams({
+        grant_type: "authorization_code",
+        code,
+        client_id: clientId,
+      });
+      const res = await fetch("/auth/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: body.toString(),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const expiresInMs = Number(data.expires_in || 1800) * 1000;
+        const tokenObj = {
+          hassUrl: window.location.origin,
+          clientId,
+          access_token: data.access_token,
+          refresh_token: data.refresh_token,
+          token_type: data.token_type || "Bearer",
+          expires_in: data.expires_in || 1800,
+          expires: Date.now() + expiresInMs,
+        };
+        this._saveTokens(tokenObj);
+        this.state.authRequired = false;
+      }
+    } catch (err) {
+      console.warn("HA OAuth token exchange failed:", err);
+    } finally {
+      params.delete("code");
+      params.delete("auth_callback");
+      params.delete("state");
+      const cleanQs = params.toString();
+      const cleanUrl = `${window.location.pathname}${cleanQs ? `?${cleanQs}` : ""}`;
+      window.history.replaceState({}, document.title, cleanUrl);
+    }
+  }
+
+  async _refreshAccessToken(tokenData) {
+    if (!tokenData || !tokenData.refresh_token) return null;
+    const clientId = tokenData.clientId || `${window.location.origin}/`;
+    try {
+      const body = new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: tokenData.refresh_token,
+        client_id: clientId,
+      });
+      const res = await fetch("/auth/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: body.toString(),
+      });
+      if (!res.ok) return null;
+      const refreshed = await res.json();
+      if (!refreshed.access_token) return null;
+      const expiresInMs = Number(refreshed.expires_in || 1800) * 1000;
+      const updated = {
+        ...tokenData,
+        access_token: refreshed.access_token,
+        expires_in: refreshed.expires_in || 1800,
+        expires: Date.now() + expiresInMs,
+      };
+      this._saveTokens(updated);
+      try {
+        if (localStorage.getItem("hassTokens")) {
+          localStorage.setItem("hassTokens", JSON.stringify(updated));
+        }
+      } catch (_) {}
+      return updated.access_token;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async _getValidAccessToken(forceRefresh = false) {
+    const tokenData = this._readStoredTokens();
+    if (!tokenData) return null;
+    const now = Date.now();
+    const isExpired =
+      forceRefresh ||
+      !tokenData.access_token ||
+      (tokenData.expires && Number(tokenData.expires) - 60000 < now);
+    if (isExpired && tokenData.refresh_token) {
+      const fresh = await this._refreshAccessToken(tokenData);
+      if (fresh) return fresh;
+    }
+    return tokenData.access_token || null;
+  }
+
+  redirectToHomeAssistantLogin() {
+    const clientId = `${window.location.origin}/`;
+    const redirectUri = `${window.location.origin}/lekkersappie/?auth_callback=1`;
+    const authUrl = `/auth/authorize?response_type=code&client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}`;
+    window.location.assign(authUrl);
   }
 
   _emptyForm() {
@@ -151,12 +285,14 @@ class LekkersappieMobileApp {
   }
 
   _loadFontScale() {
-    const val = parseFloat(localStorage.getItem("lekkersappie_font_scale") || "");
-    return val >= 0.8 && val <= 1.5 ? val : 1.0;
+    const val = parseFloat(
+      localStorage.getItem("lekkersappie_mobile_font_scale") || ""
+    );
+    return val >= 0.8 && val <= 1.5 ? val : 1.15;
   }
 
   _fontScaleLabel() {
-    let best = FONT_SCALES[1];
+    let best = FONT_SCALES[2];
     FONT_SCALES.forEach((s) => {
       if (Math.abs(s.value - this.state.fontScale) < Math.abs(best.value - this.state.fontScale)) {
         best = s;
@@ -168,7 +304,7 @@ class LekkersappieMobileApp {
   setFontScale(value) {
     this.state.fontScale = value;
     try {
-      localStorage.setItem("lekkersappie_font_scale", String(value));
+      localStorage.setItem("lekkersappie_mobile_font_scale", String(value));
     } catch (_) {}
     this._applyThemeAndScale();
     this.render();
@@ -256,19 +392,57 @@ class LekkersappieMobileApp {
   async apiGet(action, params = {}) {
     const qs = new URLSearchParams(params).toString();
     const url = `/api/wine_inventory/pwa/${action}${qs ? `?${qs}` : ""}`;
-    const res = await fetch(url, { credentials: "same-origin" });
+    let token = await this._getValidAccessToken(false);
+    const headers = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    let res = await fetch(url, { credentials: "same-origin", headers });
+    if (res.status === 401) {
+      token = await this._getValidAccessToken(true);
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+        res = await fetch(url, { credentials: "same-origin", headers });
+      }
+    }
+    if (res.status === 401) {
+      this.state.authRequired = true;
+      throw new Error("Home Assistant authentication required. Tap Sign In below.");
+    }
+    this.state.authRequired = false;
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     return data;
   }
 
   async apiPost(action, body = {}) {
-    const res = await fetch(`/api/wine_inventory/pwa/${action}`, {
+    let token = await this._getValidAccessToken(false);
+    const headers = { "Content-Type": "application/json" };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    let res = await fetch(`/api/wine_inventory/pwa/${action}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       credentials: "same-origin",
       body: JSON.stringify(body),
     });
+    if (res.status === 401) {
+      token = await this._getValidAccessToken(true);
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+        res = await fetch(`/api/wine_inventory/pwa/${action}`, {
+          method: "POST",
+          headers,
+          credentials: "same-origin",
+          body: JSON.stringify(body),
+        });
+      }
+    }
+    if (res.status === 401) {
+      this.state.authRequired = true;
+      this.render();
+      throw new Error("Home Assistant authentication required.");
+    }
+    this.state.authRequired = false;
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     return data;
@@ -285,6 +459,7 @@ class LekkersappieMobileApp {
       this.state.areas = data.areas || ["Wine Cellar", "Wine Fridge", "Kitchen Rack"];
       this.state.statistics = data.statistics || {};
       this.state.wines = data.wines || [];
+      this.state.authenticatedUser = data.authenticated_user || null;
       this.state.error = "";
     } catch (err) {
       this.state.error = err?.message || "Could not connect to Home Assistant Wine Inventory API.";
@@ -486,6 +661,20 @@ class LekkersappieMobileApp {
         const area =
           (w.active_storage_locations || [])[0] || w.storage_location || w.last_storage_location || "";
         const rating = w.vivino_rating ? Number(w.vivino_rating).toFixed(1) : null;
+        const boughtDateRaw = w.latest_added_at || w.created_at || "";
+        const boughtDateLabel = boughtDateRaw ? fmtDate(boughtDateRaw) : "";
+        const store = w.purchase_location || w.last_purchase_location || "";
+        const price =
+          w.purchase_price !== null && w.purchase_price !== undefined && w.purchase_price !== ""
+            ? w.purchase_price
+            : w.last_purchase_price !== null && w.last_purchase_price !== undefined && w.last_purchase_price !== ""
+              ? w.last_purchase_price
+              : null;
+        const originText = [w.country, w.region].filter(Boolean).join(" • ");
+        const drinkWindowYears =
+          w.drink_from_year || w.drink_until_year
+            ? ` (${w.drink_from_year || "now"}–${w.drink_until_year || "…"})`
+            : "";
 
         return `
           <div class="bottle-card" data-wine-id="${w.id}">
@@ -499,11 +688,18 @@ class LekkersappieMobileApp {
             <div class="bottle-card-main" data-detail-id="${w.id}">
               <div class="bottle-meta-top">
                 <span class="pill pill-${esc(w.wine_type)}">${esc(typeLabel)}</span>
-                <span class="pill pill-vintage">${esc(w.vintage || "NV")}</span>
+                <span class="pill pill-vintage">📅 ${esc(w.vintage || "NV")}</span>
                 ${area ? `<span class="pill pill-area">📍 ${esc(area)}</span>` : ""}
+                ${originText ? `<span class="pill pill-vintage sub-origin">🌍 ${esc(originText)}</span>` : ""}
               </div>
               <div class="bottle-winery">${esc(w.winery)}</div>
               <div class="bottle-name">${esc(w.name)}</div>
+              <div class="bottle-detail-chips">
+                ${w.varietal ? `<span class="meta-chip" title="Grape Variety">🍇 ${esc(w.varietal)}</span>` : ""}
+                ${boughtDateLabel ? `<span class="meta-chip" title="Bought / Added Date">🗓️ ${esc(boughtDateLabel)}</span>` : ""}
+                ${store ? `<span class="meta-chip" title="Bought At">🛒 ${esc(store)}</span>` : ""}
+                ${price !== null ? `<span class="meta-chip" title="Purchase Price">💰 ${esc(price)} ${esc(this.state.currency)}</span>` : ""}
+              </div>
               <div class="bottle-subline">
                 ${
                   rating
@@ -512,8 +708,8 @@ class LekkersappieMobileApp {
                       : `<span class="vivino-tag">★ ${esc(rating)}</span>`
                     : ""
                 }
-                <span style="color:${drinkMeta.color}; font-weight:600; font-size:11.5px;">● ${esc(drinkMeta.label)}</span>
-                ${w.country || w.varietal ? `<span class="sub-origin">• ${esc([w.varietal, w.country].filter(Boolean).join(" · "))}</span>` : ""}
+                ${w.personal_rating ? `<span class="meta-chip" style="color:var(--brand);">★ ${esc(w.personal_rating)}/5</span>` : ""}
+                <span style="color:${drinkMeta.color}; font-weight:600; font-size:11.5px;">● ${esc(drinkMeta.label)}${esc(drinkWindowYears)}</span>
               </div>
             </div>
             <div class="bottle-stepper">
@@ -870,18 +1066,18 @@ class LekkersappieMobileApp {
       <div class="sheet-backdrop" id="sheet-backdrop">
         <div class="sheet-surface">
           <div class="sheet-handle"></div>
-          <div class="scaled-zone">
-            <div class="sheet-header">
-              <h2>${esc(w.winery)} – ${esc(w.name)} (${esc(w.vintage || "NV")})</h2>
-              <div style="display:flex; gap:6px; align-items:center;">
-                <button class="btn btn-icon font-pill-btn" id="btn-sheet-font-scale" title="Adjust text size">
-                  Aa <small>${this._fontScaleLabel()}</small>
-                </button>
-                <button class="btn btn-icon" id="btn-close-sheet" aria-label="Close">✕</button>
-              </div>
+          <div class="sheet-header">
+            <h2>${esc(w.winery)} – ${esc(w.name)} (${esc(w.vintage || "NV")})</h2>
+            <div style="display:flex; gap:6px; align-items:center;">
+              <button class="btn btn-icon font-pill-btn" id="btn-sheet-font-scale" title="Adjust text size">
+                Aa <small>${this._fontScaleLabel()}</small>
+              </button>
+              <button class="btn btn-icon" id="btn-close-sheet" aria-label="Close">✕</button>
             </div>
+          </div>
 
-            <div class="sheet-body">
+          <div class="sheet-body" id="detail-sheet-body">
+            <div class="scaled-zone">
               <div class="detail-hero">
                 ${
                   w.image_url
@@ -893,6 +1089,7 @@ class LekkersappieMobileApp {
                     <span class="pill pill-${esc(w.wine_type)}">${esc(typeLabel)}</span>
                     <span class="pill pill-vintage">📅 ${esc(w.vintage || "NV")}</span>
                     ${w.varietal ? `<span class="pill pill-vintage">🍇 ${esc(w.varietal)}</span>` : ""}
+                    ${w.latest_added_at || w.created_at ? `<span class="pill pill-vintage">🗓️ ${esc(fmtDate(w.latest_added_at || w.created_at))}</span>` : ""}
                     <span class="pill" style="border:1px solid ${drinkMeta.color}; color:${drinkMeta.color};">${esc(drinkMeta.label)}</span>
                   </div>
                   <div style="font-size:13px; color:var(--text-muted); font-weight:600;">${esc(w.winery)}</div>
@@ -1105,6 +1302,9 @@ class LekkersappieMobileApp {
                   }
                 </div>
               </div>
+              <div style="margin-top:6px; font-size:12.5px; color:var(--text-muted); margin-bottom:8px;">
+                🗓️ Bought / Added: <strong>${esc(fmtDate(w.latest_added_at || w.created_at))}</strong>
+              </div>
             </div>
           </div>
         </div>
@@ -1118,22 +1318,26 @@ class LekkersappieMobileApp {
       <div class="sheet-backdrop" id="sheet-backdrop">
         <div class="sheet-surface">
           <div class="sheet-handle"></div>
-          <div class="scaled-zone">
-            <div class="sheet-header">
-              <h2>📷 Scan Wine Label with Gemini AI</h2>
-              <div style="display:flex; gap:6px; align-items:center;">
-                <button class="btn btn-icon font-pill-btn" id="btn-sheet-font-scale">
-                  Aa <small>${this._fontScaleLabel()}</small>
-                </button>
-                <button class="btn btn-icon" id="btn-close-sheet">✕</button>
-              </div>
+          <div class="sheet-header">
+            <h2>📷 Scan Wine Label with Gemini AI</h2>
+            <div style="display:flex; gap:6px; align-items:center;">
+              <button class="btn btn-icon font-pill-btn" id="btn-sheet-font-scale">
+                Aa <small>${this._fontScaleLabel()}</small>
+              </button>
+              <button class="btn btn-icon" id="btn-close-sheet">✕</button>
             </div>
-            <div class="sheet-body">
+          </div>
+          <div class="sheet-body" id="scan-sheet-body">
+            <div class="scaled-zone">
               <div style="padding:14px; border-radius:14px; background:var(--surface-alt); border:1px solid var(--border); margin-bottom:14px;">
                 <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                  <label class="btn btn-primary" style="flex:1; cursor:pointer;">
-                    📷 Snap Photo / Upload Label
+                  <label class="btn btn-primary" style="flex:1; min-width:140px; cursor:pointer;">
+                    📷 Take Photo (Camera)
                     <input type="file" id="mobile-scan-file" accept="image/*" capture="environment" hidden />
+                  </label>
+                  <label class="btn btn-soft" style="flex:1; min-width:140px; cursor:pointer;">
+                    🖼️ Choose from Library
+                    <input type="file" id="mobile-scan-library" accept="image/*" hidden />
                   </label>
                   ${
                     this.state.cropState?.image
@@ -1306,12 +1510,12 @@ class LekkersappieMobileApp {
       <div class="sheet-backdrop" id="sheet-backdrop">
         <div class="sheet-surface">
           <div class="sheet-handle"></div>
-          <div class="scaled-zone">
-            <div class="sheet-header">
-              <h2>📲 Install Lekkersappie as an App</h2>
-              <button class="btn btn-icon" id="btn-close-sheet">✕</button>
-            </div>
-            <div class="sheet-body">
+          <div class="sheet-header">
+            <h2>📲 Install Lekkersappie as an App</h2>
+            <button class="btn btn-icon" id="btn-close-sheet">✕</button>
+          </div>
+          <div class="sheet-body">
+            <div class="scaled-zone">
               <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
                 <img src="/lekkersappie/icon-192.png" alt="Lekkersappie" class="brand-icon" style="width:52px; height:52px;" />
                 <div>
@@ -1352,6 +1556,7 @@ class LekkersappieMobileApp {
 
   render() {
     if (!this.root) return;
+    document.body.style.overflow = this.state.activeSheet ? "hidden" : "";
     const stats = this.state.statistics || {};
     const scaleLabel = this._fontScaleLabel();
 
@@ -1397,11 +1602,21 @@ class LekkersappieMobileApp {
 
         <main class="scaled-zone">
           ${
-            this.state.error
-              ? `<div style="margin:12px; padding:12px; border-radius:12px; background:rgba(198,40,40,0.12); color:var(--danger); font-size:13px;">
-                  ${esc(this.state.error)}
+            this.state.authRequired
+              ? `<div class="panel-card" style="margin:12px; border:1px solid var(--brand); background:var(--surface);">
+                  <h3 style="margin-bottom:6px;">🔐 Home Assistant Sign-In Required</h3>
+                  <p style="font-size:13px; color:var(--text-muted); margin:0 0 12px; line-height:1.45;">
+                    Lekkersappie inherits your Home Assistant session. Sign in once with your Home Assistant account to unlock your cellar.
+                  </p>
+                  <button class="btn btn-primary" id="btn-ha-login" style="width:100%; min-height:46px;">
+                    🔐 Sign in with Home Assistant
+                  </button>
                 </div>`
-              : ""
+              : this.state.error
+                ? `<div style="margin:12px; padding:12px; border-radius:12px; background:rgba(198,40,40,0.12); color:var(--danger); font-size:13px;">
+                    ${esc(this.state.error)}
+                  </div>`
+                : ""
           }
           ${activeViewHtml}
         </main>
@@ -1486,6 +1701,7 @@ class LekkersappieMobileApp {
 
   _bindEvents() {
     const r = this.root;
+    r.querySelector("#btn-ha-login")?.addEventListener("click", () => this.redirectToHomeAssistantLogin());
     r.querySelector("#btn-top-font-scale")?.addEventListener("click", () => this.cycleFontScale());
     r.querySelector("#btn-sheet-font-scale")?.addEventListener("click", () => this.cycleFontScale());
     r.querySelector("#btn-top-install")?.addEventListener("click", () => this.handleInstallClick());
@@ -1713,6 +1929,7 @@ class LekkersappieMobileApp {
 
     // Scanner & Crop handlers
     r.querySelector("#mobile-scan-file")?.addEventListener("change", (e) => this._onScanFilePicked(e));
+    r.querySelector("#mobile-scan-library")?.addEventListener("change", (e) => this._onScanFilePicked(e));
     r.querySelector("#btn-reopen-crop")?.addEventListener("click", () => {
       this.state.activeSheet = "crop";
       this.render();

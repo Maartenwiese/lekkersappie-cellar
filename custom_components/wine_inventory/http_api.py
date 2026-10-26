@@ -1,9 +1,10 @@
-"""HTTP REST API and Redirect Views for the Standalone Lekkersappie Mobile Web App (PWA)."""
+"""HTTP REST API and Asset Views for the Standalone Lekkersappie Mobile Web App (PWA)."""
 
 from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
 from aiohttp import web
@@ -20,8 +21,9 @@ except ImportError:  # pragma: no cover - allows standalone unit test imports
         """Minimal stub base class when homeassistant runtime is absent."""
 
         url: str = ""
+        extra_urls: list[str] = []
         name: str = ""
-        requires_auth: bool = False
+        requires_auth: bool = True
 
         @staticmethod
         def json(
@@ -38,6 +40,18 @@ from .const import DOMAIN, MOBILE_APP_URL_BASE, VERSION
 from .coordinator import WineInventoryCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+MOBILE_FRONTEND_DIR = Path(__file__).parent / "frontend" / "mobile"
+
+CONTENT_TYPES: dict[str, str] = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".webmanifest": "application/manifest+json; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+}
 
 DEFAULT_STORAGE_AREAS = [
     "Wine Cellar",
@@ -102,6 +116,8 @@ async def async_handle_pwa_get(
     hass: HomeAssistant,
     action: str,
     query: dict[str, Any],
+    *,
+    authenticated_user: str | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Execute GET actions for the standalone mobile PWA."""
     coordinator = _resolve_coordinator(hass, query.get("entry_id"))
@@ -128,6 +144,7 @@ async def async_handle_pwa_get(
 
         return 200, {
             "version": VERSION,
+            "authenticated_user": authenticated_user or "",
             "cellar_name": coordinator.cellar_name,
             "currency": coordinator.currency,
             "temperature_entity": coordinator.temperature_entity,
@@ -220,31 +237,78 @@ async def async_handle_pwa_post(
     return 404, {"error": f"Unknown POST action: {action}"}
 
 
-class WineInventoryMobileRedirectView(HomeAssistantView):
-    """Redirect /lekkersappie to /lekkersappie/index.html for instant mobile access."""
+class WineInventoryMobileAssetView(HomeAssistantView):
+    """Serve standalone Mobile PWA static assets at /lekkersappie and /api/wine_inventory/mobile."""
 
-    url = MOBILE_APP_URL_BASE
-    name = "api:wine_inventory:mobile_redirect"
+    url = f"{MOBILE_APP_URL_BASE}/{{filename}}"
+    extra_urls = [
+        MOBILE_APP_URL_BASE,
+        f"{MOBILE_APP_URL_BASE}/",
+        "/api/wine_inventory/mobile",
+        "/api/wine_inventory/mobile/",
+        "/api/wine_inventory/mobile/{filename}",
+    ]
+    name = "api:wine_inventory:mobile_assets"
     requires_auth = False
 
-    async def get(self, request: web.Request) -> web.StreamResponse:
-        """Redirect bare /lekkersappie path to /lekkersappie/index.html."""
-        raise web.HTTPFound(f"{MOBILE_APP_URL_BASE}/index.html")
+    async def get(
+        self, request: web.Request, filename: str | None = None
+    ) -> web.StreamResponse:
+        """Serve the requested mobile asset or redirect bare paths to index.html."""
+        if not filename:
+            prefix = (
+                "/api/wine_inventory/mobile"
+                if request.path.startswith("/api/wine_inventory/mobile")
+                else MOBILE_APP_URL_BASE
+            )
+            qs = f"?{request.query_string}" if request.query_string else ""
+            raise web.HTTPFound(f"{prefix}/index.html{qs}")
+
+        clean_name = Path(filename).name
+        if clean_name != filename or ".." in filename:
+            return web.Response(status=403, text="Forbidden")
+
+        file_path = MOBILE_FRONTEND_DIR / clean_name
+        if not file_path.is_file():
+            return web.Response(status=404, text="Not Found")
+
+        content_type = CONTENT_TYPES.get(
+            file_path.suffix.lower(), "application/octet-stream"
+        )
+        hass: HomeAssistant | None = request.app.get("hass")
+        if hass is not None and hasattr(hass, "async_add_executor_job"):
+            body = await hass.async_add_executor_job(file_path.read_bytes)
+        else:
+            body = file_path.read_bytes()
+
+        headers: dict[str, str] = {"Cache-Control": "no-cache"}
+        if clean_name == "sw.js":
+            headers["Service-Worker-Allowed"] = "/"
+        return web.Response(body=body, headers=headers, content_type=content_type)
+
+
+# Keep alias for backwards compatibility in imports
+WineInventoryMobileRedirectView = WineInventoryMobileAssetView
 
 
 class WineInventoryPwaApiView(HomeAssistantView):
-    """REST endpoint for the standalone Lekkersappie Mobile PWA."""
+    """Authenticated REST endpoint for the standalone Lekkersappie Mobile PWA."""
 
     url = "/api/wine_inventory/pwa/{action}"
     name = "api:wine_inventory:pwa_api"
-    requires_auth = False
+    requires_auth = True
 
     async def get(self, request: web.Request, action: str) -> web.Response:
-        """Handle GET requests from the mobile PWA."""
+        """Handle authenticated GET requests from the mobile PWA."""
         hass: HomeAssistant = request.app["hass"]
+        hass_user = request.get("hass_user")
+        user_name = getattr(hass_user, "name", None) if hass_user else None
         try:
             status, data = await async_handle_pwa_get(
-                hass, action, dict(request.query)
+                hass,
+                action,
+                dict(request.query),
+                authenticated_user=user_name,
             )
             return self.json(data, status_code=status)
         except Exception as err:  # noqa: BLE001
@@ -252,7 +316,7 @@ class WineInventoryPwaApiView(HomeAssistantView):
             return self.json({"error": str(err)}, status_code=500)
 
     async def post(self, request: web.Request, action: str) -> web.Response:
-        """Handle POST requests from the mobile PWA."""
+        """Handle authenticated POST requests from the mobile PWA."""
         hass: HomeAssistant = request.app["hass"]
         try:
             payload = await request.json() if request.can_read_body else {}
@@ -269,5 +333,5 @@ def async_register_http_views(hass: HomeAssistant) -> None:
     """Register HTTP views for the standalone mobile PWA."""
     if not hasattr(hass, "http") or hass.http is None:
         return
-    hass.http.register_view(WineInventoryMobileRedirectView())
+    hass.http.register_view(WineInventoryMobileAssetView())
     hass.http.register_view(WineInventoryPwaApiView())

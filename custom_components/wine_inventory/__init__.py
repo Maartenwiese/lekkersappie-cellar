@@ -62,22 +62,15 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     if not domain_meta.get("_frontend_registered"):
         if hasattr(hass, "http") and hass.http is not None:
             try:
-                static_configs = [
-                    StaticPathConfig(
-                        f"{FRONTEND_URL_BASE}/{CARD_JS_FILENAME}",
-                        str(card_js_path),
-                        cache_headers=True,
-                    )
-                ]
-                if mobile_dir.exists():
-                    static_configs.append(
+                await hass.http.async_register_static_paths(
+                    [
                         StaticPathConfig(
-                            MOBILE_APP_URL_BASE,
-                            str(mobile_dir),
-                            cache_headers=False,
+                            f"{FRONTEND_URL_BASE}/{CARD_JS_FILENAME}",
+                            str(card_js_path),
+                            cache_headers=True,
                         )
-                    )
-                await hass.http.async_register_static_paths(static_configs)
+                    ]
+                )
             except Exception as err:  # noqa: BLE001
                 _LOGGER.debug("Static path already registered or failed: %s", err)
             try:

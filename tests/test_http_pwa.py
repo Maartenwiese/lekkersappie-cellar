@@ -10,6 +10,8 @@ import unittest
 from custom_components.wine_inventory.const import DOMAIN, MOBILE_APP_URL_BASE, VERSION
 from custom_components.wine_inventory.coordinator import WineInventoryCoordinator
 from custom_components.wine_inventory.http_api import (
+    WineInventoryMobileAssetView,
+    WineInventoryPwaApiView,
     async_handle_pwa_get,
     async_handle_pwa_post,
 )
@@ -194,6 +196,63 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
         self.assertIn("btn-detail-font-scale", card_js)
         self.assertIn(".modal-inner", card_js)
         self.assertIn("@container lsmodal", card_js)
+        self.assertIn("lekkersappie_ha_tokens", card_js)
+        self.assertIn("bottle-library-input", card_js)
+
+    async def test_v031_mobile_auth_font_list_scroll_and_library(self) -> None:
+        """Verify v0.3.1 HA authentication inheritance, L default font, list icons, scroll fix, and library upload."""
+        self.assertTrue(WineInventoryPwaApiView.requires_auth)
+        self.assertEqual(WineInventoryMobileAssetView.url, "/lekkersappie/{filename}")
+        for route in (
+            "/lekkersappie",
+            "/lekkersappie/",
+            "/api/wine_inventory/mobile",
+            "/api/wine_inventory/mobile/",
+            "/api/wine_inventory/mobile/{filename}",
+        ):
+            self.assertIn(route, WineInventoryMobileAssetView.extra_urls)
+
+        status, state = await async_handle_pwa_get(
+            self.hass,
+            "state",
+            {},
+            authenticated_user={"id": "ha_user_1", "name": "Maarten"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(state["authenticated_user"]["name"], "Maarten")
+
+        app_js = (MOBILE_DIR / "app.js").read_text(encoding="utf-8")
+        styles_css = (MOBILE_DIR / "styles.css").read_text(encoding="utf-8")
+
+        # 1. Home Assistant authentication inheritance
+        self.assertIn("hassTokens", app_js)
+        self.assertIn("lekkersappie_ha_tokens", app_js)
+        self.assertIn("/auth/token", app_js)
+        self.assertIn("/auth/authorize", app_js)
+        self.assertIn("Bearer ${token}", app_js)
+
+        # 2. Default font size L (1.15)
+        self.assertIn("--ls-app-scale: 1.15;", styles_css)
+        self.assertIn("lekkersappie_mobile_font_scale", app_js)
+        self.assertIn("val >= 0.8 && val <= 1.5 ? val : 1.15;", app_js)
+
+        # 3. Richer mobile list view with grape and bought date icons
+        self.assertIn("bottle-detail-chips", app_js)
+        self.assertIn("🍇 ${esc(w.varietal)}", app_js)
+        self.assertIn("🗓️ ${esc(boughtDateLabel)}", app_js)
+        self.assertIn(".bottle-detail-chips", styles_css)
+        self.assertIn(".meta-chip", styles_css)
+
+        # 4. Scrollable Detailed sheet structure (.sheet-body wraps .scaled-zone with min-height: 0)
+        self.assertIn('id="detail-sheet-body"', app_js)
+        self.assertIn("min-height: 0;", styles_css)
+        self.assertIn("overflow-y: auto;", styles_css)
+        self.assertIn("touch-action: pan-y;", styles_css)
+
+        # 5. Photo library selection alongside camera capture
+        self.assertIn('id="mobile-scan-file"', app_js)
+        self.assertIn('id="mobile-scan-library"', app_js)
+        self.assertIn("Choose from Library", app_js)
 
 
 if __name__ == "__main__":
