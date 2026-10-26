@@ -1,5 +1,5 @@
 /**
- * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.3.6)
+ * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.3.7)
  * Runs parallel to the native Home Assistant UI, inherits Home Assistant OAuth2
  * authentication, defaults to Large (L) text scale, and supports Home Screen installation.
  */

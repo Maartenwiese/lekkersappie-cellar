@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 from pathlib import Path
 import tempfile
+from types import MappingProxyType, SimpleNamespace
 import unittest
 import zipfile
 import yaml
@@ -16,7 +18,8 @@ from custom_components.wine_inventory.backup import (
     list_available_backups,
     restore_backup_archive,
 )
-from custom_components.wine_inventory.const import VERSION
+from custom_components.wine_inventory.config_flow import WineInventoryOptionsFlowHandler
+from custom_components.wine_inventory.const import DOMAIN, VERSION
 from custom_components.wine_inventory.database import WineDatabase
 
 
@@ -254,6 +257,95 @@ class TestBackupRestoreAndViews(unittest.TestCase):
             with self.assertRaises(ValueError) as ctx_slip:
                 restore_backup_archive(config_dir, db, zip_slip_buf.getvalue())
             self.assertIn("unsafe member path", str(ctx_slip.exception))
+
+    def test_v037_options_flow_backup_restore_and_import(self) -> None:
+        """v0.3.7: Verify OptionsFlow 'Create Full Database Backup (.zip)', Restore, and Import complete without NameError."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_dir = Path(tmpdir)
+            db_file = config_dir / "wine_inventory.db"
+            db = WineDatabase(db_file)
+            db.initialize()
+            db.add_or_increment_wine(
+                winery="Château Margaux",
+                name="Premier Grand Cru Classé",
+                vintage=2015,
+                wine_type="red",
+                quantity=2,
+            )
+
+            class _FakeCoordinator:
+                def __init__(self) -> None:
+                    self.fail_backup = False
+
+                async def async_create_backup(self) -> dict:
+                    if self.fail_backup:
+                        raise RuntimeError("disk full")
+                    return create_backup_archive(config_dir, db)
+
+                async def async_list_backups(self) -> list[dict]:
+                    return list_available_backups(config_dir)
+
+                async def async_restore_backup(self, file_path: str) -> dict:
+                    return restore_backup_archive(config_dir, db, file_path)
+
+                async def async_import_wines(self, payload: str, format_type: str = "auto") -> dict:
+                    return import_wines_archive(config_dir, db, payload, format_type)
+
+            coord = _FakeCoordinator()
+            entry = SimpleNamespace(
+                entry_id="entry_test_037",
+                data={"cellar_name": "Lekkersappie", "currency": "EUR"},
+                options=MappingProxyType({"low_stock_threshold": 3}),
+            )
+            fake_hass = SimpleNamespace(
+                config=SimpleNamespace(path=lambda *parts: str(config_dir.joinpath(*parts))),
+                data={DOMAIN: {"entry_test_037": {"coordinator": coord}}},
+            )
+
+            flow = WineInventoryOptionsFlowHandler(entry)
+            flow.hass = fake_hass
+
+            # 1. Initial menu step renders menu options
+            menu_res = asyncio.run(flow.async_step_init(None))
+            self.assertEqual(menu_res["type"], "menu")
+            self.assertIn("backup", menu_res["menu_options"])
+
+            # 2. Backup confirmation form and execution
+            backup_form = asyncio.run(flow.async_step_backup(None))
+            self.assertEqual(backup_form["type"], "form")
+            backup_done = asyncio.run(flow.async_step_backup({}))
+            self.assertEqual(backup_done["type"], "create_entry")
+            self.assertIsInstance(backup_done["data"], dict)
+            self.assertEqual(backup_done["data"]["low_stock_threshold"], 3)
+
+            backups = list_available_backups(config_dir)
+            self.assertEqual(len(backups), 1)
+            backup_filename = backups[0]["filename"]
+
+            # 3. Backup error path logs cleanly without NameError and shows form error
+            coord.fail_backup = True
+            backup_err = asyncio.run(flow.async_step_backup({}))
+            self.assertEqual(backup_err["type"], "form")
+            self.assertEqual(backup_err["errors"].get("base"), "backup_failed")
+            coord.fail_backup = False
+
+            # 4. Restore execution via OptionsFlow
+            restore_done = asyncio.run(
+                flow.async_step_restore({"backup_file": backup_filename})
+            )
+            self.assertEqual(restore_done["type"], "create_entry")
+
+            # 5. Import execution via OptionsFlow
+            import_payload = json.dumps(
+                [{"winery": "Krug", "name": "Grande Cuvée", "vintage": 2012, "wine_type": "sparkling", "quantity": 1}]
+            )
+            import_done = asyncio.run(
+                flow.async_step_import_wines(
+                    {"import_source": import_payload, "import_format": "json"}
+                )
+            )
+            self.assertEqual(import_done["type"], "create_entry")
+            self.assertEqual(len(db.list_wines()), 2)
 
 
 if __name__ == "__main__":

@@ -85,21 +85,21 @@ def _migrate_legacy_public_files(config_dir: Path) -> None:
         ),
     )
     for legacy_dir, private_dir, patterns in migrations:
-        if not legacy_dir.exists() or not legacy_dir.is_dir():
-            continue
-        for pat in patterns:
-            for item in legacy_dir.glob(pat):
-                if not item.is_file() or item.is_symlink():
-                    continue
-                private_dir.mkdir(parents=True, exist_ok=True)
-                dest = private_dir / item.name
-                try:
+        try:
+            if not legacy_dir.exists() or not legacy_dir.is_dir():
+                continue
+            for pat in patterns:
+                for item in legacy_dir.glob(pat):
+                    if not item.is_file() or item.is_symlink():
+                        continue
+                    private_dir.mkdir(parents=True, exist_ok=True)
+                    dest = private_dir / item.name
                     if not dest.exists():
                         shutil.move(str(item), str(dest))
                     else:
                         item.unlink()
-                except OSError as err:
-                    _LOGGER.debug("Could not migrate legacy file %s: %s", item, err)
+        except OSError as err:
+            _LOGGER.debug("Could not migrate legacy files from %s: %s", legacy_dir, err)
 
 
 def resolve_safe_storage_path(
@@ -173,7 +173,10 @@ def list_available_backups(config_dir: Path) -> list[dict[str, Any]]:
 def create_backup_archive(config_dir: Path, db: WineDatabase) -> dict[str, Any]:
     """Create a complete .zip backup containing SQLite db, metadata.json, and cover images."""
     _migrate_legacy_public_files(config_dir)
-    db.checkpoint_wal()
+    try:
+        db.checkpoint_wal()
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.debug("SQLite WAL checkpoint warning before backup: %s", err)
     timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     filename = f"lekkersappie_backup_{timestamp_str}.zip"
 
@@ -195,6 +198,12 @@ def create_backup_archive(config_dir: Path, db: WineDatabase) -> dict[str, Any]:
         else:
             full_wines.append(w)
 
+    def _safe_qty(val: Any) -> int:
+        try:
+            return int(float(val or 0))
+        except (ValueError, TypeError):
+            return 0
+
     metadata = {
         "format_version": "1.0",
         "integration": "wine_inventory",
@@ -203,7 +212,7 @@ def create_backup_archive(config_dir: Path, db: WineDatabase) -> dict[str, Any]:
         "created_at": datetime.now(timezone.utc).isoformat(),
         "cellar_name": str(getattr(db, "cellar_name", "Lekkersappie")),
         "wines_count": len(full_wines),
-        "total_bottles": sum(int(w.get("quantity") or 0) for w in full_wines),
+        "total_bottles": sum(_safe_qty(w.get("quantity")) for w in full_wines),
         "statistics": db.get_statistics(),
         "wines": full_wines,
     }
@@ -222,13 +231,16 @@ def create_backup_archive(config_dir: Path, db: WineDatabase) -> dict[str, Any]:
                     zf.write(img_file, arcname=f"covers/{img_file.name}")
                     images_count += 1
 
+    size_bytes = target_zip.stat().st_size
     return {
         "file_path": str(target_zip),
         "filename": filename,
+        "backup_filename": filename,
         "download_url": f"/api/wine_inventory/download/backup/{filename}",
-        "size_bytes": target_zip.stat().st_size,
-        "size_kb": round(target_zip.stat().st_size / 1024, 1),
+        "size_bytes": size_bytes,
+        "size_kb": round(size_bytes / 1024, 1),
         "wines_count": len(full_wines),
+        "wine_count": len(full_wines),
         "images_count": images_count,
         "created_at": metadata["created_at"],
     }

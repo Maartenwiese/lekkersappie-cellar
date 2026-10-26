@@ -453,8 +453,15 @@ async def ws_create_backup(
     if not _require_admin_user(connection, msg):
         return
     try:
+        import base64
+        from pathlib import Path
+
         coordinator = _get_coordinator(hass, msg.get("entry_id"))
-        res = await coordinator.async_create_backup()
+        res = dict(await coordinator.async_create_backup())
+        zip_path = Path(str(res.get("file_path") or ""))
+        if zip_path.is_file() and zip_path.stat().st_size <= 20 * 1024 * 1024:
+            raw_bytes = await hass.async_add_executor_job(zip_path.read_bytes)
+            res["archive_base64"] = base64.b64encode(raw_bytes).decode("ascii")
         connection.send_result(msg["id"], res)
     except Exception as err:  # noqa: BLE001
         connection.send_error(msg["id"], "backup_failed", str(err))
@@ -464,7 +471,9 @@ async def ws_create_backup(
     {
         vol.Required("type"): "wine_inventory/restore_backup",
         vol.Optional("file_path"): str,
+        vol.Optional("backup_filename"): str,
         vol.Optional("zip_data"): str,
+        vol.Optional("archive_base64"): str,
         vol.Optional("entry_id"): str,
     }
 )
@@ -480,8 +489,8 @@ async def ws_restore_backup(
         return
     try:
         coordinator = _get_coordinator(hass, msg.get("entry_id"))
-        zip_data = msg.get("zip_data")
-        file_path = msg.get("file_path")
+        zip_data = msg.get("zip_data") or msg.get("archive_base64")
+        file_path = msg.get("file_path") or msg.get("backup_filename")
         if zip_data:
             import base64
 
@@ -505,6 +514,8 @@ async def ws_restore_backup(
         vol.Optional("source"): str,
         vol.Optional("file_data"): str,
         vol.Optional("wines"): list,
+        vol.Optional("payload"): vol.Any(str, list, dict),
+        vol.Optional("format_type"): str,
         vol.Optional("entry_id"): str,
     }
 )
@@ -523,6 +534,8 @@ async def ws_import_wines(
         file_data = msg.get("file_data")
         source = msg.get("source")
         wines_list = msg.get("wines")
+        payload = msg.get("payload")
+        format_type = str(msg.get("format_type") or "auto")
 
         if file_data:
             import base64
@@ -530,11 +543,21 @@ async def ws_import_wines(
             if "," in file_data:
                 file_data = file_data.split(",", 1)[1]
             raw_bytes = base64.b64decode(file_data)
-            res = await coordinator.async_import_wines(raw_bytes)
+            res = await coordinator.async_import_wines(raw_bytes, format_type)
+        elif payload is not None:
+            if format_type == "zip" and isinstance(payload, str):
+                import base64
+
+                raw_str = payload.split(",", 1)[1] if "," in payload else payload
+                res = await coordinator.async_import_wines(
+                    base64.b64decode(raw_str), "zip"
+                )
+            else:
+                res = await coordinator.async_import_wines(payload, format_type)
         elif source:
-            res = await coordinator.async_import_wines(source)
+            res = await coordinator.async_import_wines(source, format_type)
         elif wines_list is not None:
-            res = await coordinator.async_import_wines(wines_list)
+            res = await coordinator.async_import_wines(wines_list, format_type)
         else:
             raise ValueError("No import payload provided.")
 

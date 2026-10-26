@@ -2,9 +2,42 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
-import voluptuous as vol
+try:
+    import voluptuous as vol
+except ImportError:  # pragma: no cover - fallback for standalone unit tests
+    class _StubVol:
+        class Schema:
+            def __init__(self, schema: Any) -> None:
+                self.schema = schema
+
+        @staticmethod
+        def Required(key: Any, **kwargs: Any) -> Any:
+            return key
+
+        @staticmethod
+        def Optional(key: Any, **kwargs: Any) -> Any:
+            return key
+
+        @staticmethod
+        def All(*args: Any) -> Any:
+            return args
+
+        @staticmethod
+        def Coerce(typ: Any) -> Any:
+            return typ
+
+        @staticmethod
+        def Range(**kwargs: Any) -> Any:
+            return kwargs
+
+        @staticmethod
+        def In(values: Any) -> Any:
+            return values
+
+    vol = _StubVol()  # type: ignore[assignment]
 
 try:
     from homeassistant import config_entries
@@ -15,7 +48,27 @@ try:
         TextSelectorType,
     )
 except ImportError:  # pragma: no cover - fallback for standalone unit tests
-    config_entries = Any  # type: ignore[assignment]
+    class _StubConfigFlow:
+        def __init_subclass__(cls, **kwargs: Any) -> None:
+            super().__init_subclass__()
+
+        def async_show_form(self, **kwargs: Any) -> dict[str, Any]:
+            return {"type": "form", **kwargs}
+
+        def async_create_entry(self, **kwargs: Any) -> dict[str, Any]:
+            return {"type": "create_entry", **kwargs}
+
+    class _StubOptionsFlow(_StubConfigFlow):
+        def async_show_menu(self, **kwargs: Any) -> dict[str, Any]:
+            return {"type": "menu", **kwargs}
+
+    class _StubConfigEntries:
+        ConfigFlow = _StubConfigFlow
+        OptionsFlow = _StubOptionsFlow
+        ConfigEntry = Any
+        FlowResult = dict[str, Any]
+
+    config_entries = _StubConfigEntries()  # type: ignore[assignment]
 
     def callback(func: Any) -> Any:  # type: ignore[no-redef]
         return func
@@ -41,6 +94,8 @@ from .const import (
     DOMAIN,
 )
 
+_LOGGER = logging.getLogger(__name__)
+
 
 def _build_schema(defaults: dict[str, Any], include_cellar_name: bool = True) -> vol.Schema:
     """Build Voluptuous schema for Config Flow and Options Flow."""
@@ -49,7 +104,7 @@ def _build_schema(defaults: dict[str, Any], include_cellar_name: bool = True) ->
         fields[
             vol.Required(
                 CONF_CELLAR_NAME,
-                default=defaults.get(CONF_CELLAR_NAME, DEFAULT_CELLAR_NAME),
+                default=str(defaults.get(CONF_CELLAR_NAME) or DEFAULT_CELLAR_NAME),
             )
         ] = str
 
@@ -59,39 +114,45 @@ def _build_schema(defaults: dict[str, Any], include_cellar_name: bool = True) ->
         else str
     )
 
+    raw_threshold = defaults.get(CONF_LOW_STOCK_THRESHOLD)
+    default_threshold = (
+        int(raw_threshold)
+        if raw_threshold is not None and str(raw_threshold).strip() != ""
+        else DEFAULT_LOW_STOCK_THRESHOLD
+    )
+
     fields.update(
         {
             vol.Optional(
                 CONF_GEMINI_API_KEY,
-                default=defaults.get(CONF_GEMINI_API_KEY, ""),
+                default=str(defaults.get(CONF_GEMINI_API_KEY) or ""),
             ): api_key_validator,
             vol.Required(
                 CONF_GEMINI_MODEL,
-                default=defaults.get(CONF_GEMINI_MODEL, DEFAULT_GEMINI_MODEL),
+                default=str(defaults.get(CONF_GEMINI_MODEL) or DEFAULT_GEMINI_MODEL),
             ): str,
             vol.Required(
                 CONF_CURRENCY,
-                default=defaults.get(CONF_CURRENCY, DEFAULT_CURRENCY),
+                default=str(defaults.get(CONF_CURRENCY) or DEFAULT_CURRENCY),
             ): str,
             vol.Required(
                 CONF_VIVINO_COUNTRY_CODE,
-                default=defaults.get(
-                    CONF_VIVINO_COUNTRY_CODE, DEFAULT_VIVINO_COUNTRY_CODE
+                default=str(
+                    defaults.get(CONF_VIVINO_COUNTRY_CODE)
+                    or DEFAULT_VIVINO_COUNTRY_CODE
                 ),
             ): str,
             vol.Required(
                 CONF_LOW_STOCK_THRESHOLD,
-                default=defaults.get(
-                    CONF_LOW_STOCK_THRESHOLD, DEFAULT_LOW_STOCK_THRESHOLD
-                ),
+                default=default_threshold,
             ): vol.All(vol.Coerce(int), vol.Range(min=0, max=50)),
             vol.Optional(
                 CONF_TEMPERATURE_ENTITY,
-                default=defaults.get(CONF_TEMPERATURE_ENTITY, ""),
+                default=str(defaults.get(CONF_TEMPERATURE_ENTITY) or ""),
             ): str,
             vol.Optional(
                 CONF_HUMIDITY_ENTITY,
-                default=defaults.get(CONF_HUMIDITY_ENTITY, ""),
+                default=str(defaults.get(CONF_HUMIDITY_ENTITY) or ""),
             ): str,
         }
     )
@@ -144,9 +205,22 @@ def _get_coordinator_for_entry(hass: Any, entry_id: str) -> Any:
 class WineInventoryOptionsFlowHandler(config_entries.OptionsFlow):
     """Handle Wine Inventory options updates, backups, restores, and imports."""
 
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+    def __init__(self, config_entry: config_entries.ConfigEntry | None = None) -> None:
         """Initialize options flow."""
         self._config_entry = config_entry
+
+    @property
+    def _entry(self) -> Any:
+        """Return active config entry across HA versions."""
+        return getattr(self, "_config_entry", None) or getattr(
+            self, "config_entry", None
+        )
+
+    def _entry_options_dict(self) -> dict[str, Any]:
+        """Return a mutable copy of the current config entry options."""
+        entry = self._entry
+        raw_opts = getattr(entry, "options", None) if entry is not None else None
+        return dict(raw_opts) if raw_opts else {}
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -162,9 +236,11 @@ class WineInventoryOptionsFlowHandler(config_entries.OptionsFlow):
     ) -> config_entries.FlowResult:
         """Manage general cellar settings."""
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            return self.async_create_entry(title="", data=dict(user_input))
 
-        merged = {**self._config_entry.data, **self._config_entry.options}
+        entry = self._entry
+        data_dict = dict(getattr(entry, "data", None) or {})
+        merged = {**data_dict, **self._entry_options_dict()}
         return self.async_show_form(
             step_id="settings",
             data_schema=_build_schema(merged, include_cellar_name=False),
@@ -176,15 +252,29 @@ class WineInventoryOptionsFlowHandler(config_entries.OptionsFlow):
         """Create a full database, metadata, and images .zip backup."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            coordinator = _get_coordinator_for_entry(self.hass, self._config_entry.entry_id)
+            entry = self._entry
+            entry_id = getattr(entry, "entry_id", "") if entry is not None else ""
+            coordinator = _get_coordinator_for_entry(self.hass, entry_id)
             if coordinator:
                 try:
                     res = await coordinator.async_create_backup()
-                    _LOGGER.info("Created backup %s with %s wines", res.get("filename"), res.get("wines_count"))
-                    return self.async_create_entry(title="", data=self._config_entry.options)
+                    _LOGGER.info(
+                        "Created backup %s with %s wines",
+                        res.get("filename"),
+                        res.get("wines_count"),
+                    )
+                    return self.async_create_entry(
+                        title="", data=self._entry_options_dict()
+                    )
                 except Exception as err:  # noqa: BLE001
-                    _LOGGER.error("Backup failed: %s", err)
+                    _LOGGER.exception("Backup failed: %s", err)
                     errors["base"] = "backup_failed"
+            else:
+                _LOGGER.error(
+                    "Backup failed: no active coordinator found for entry %s",
+                    entry_id,
+                )
+                errors["base"] = "backup_failed"
 
         return self.async_show_form(
             step_id="backup",
@@ -197,29 +287,42 @@ class WineInventoryOptionsFlowHandler(config_entries.OptionsFlow):
     ) -> config_entries.FlowResult:
         """Restore database from an existing or custom .zip backup."""
         errors: dict[str, str] = {}
-        coordinator = _get_coordinator_for_entry(self.hass, self._config_entry.entry_id)
-        available_backups = await coordinator.async_list_backups() if coordinator else []
+        entry = self._entry
+        entry_id = getattr(entry, "entry_id", "") if entry is not None else ""
+        coordinator = _get_coordinator_for_entry(self.hass, entry_id)
+        try:
+            available_backups = (
+                await coordinator.async_list_backups() if coordinator else []
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("Could not list available backups: %s", err)
+            available_backups = []
         backup_filenames = [b["filename"] for b in available_backups]
 
-        if user_input is not None and coordinator:
-            chosen = user_input.get("backup_file")
-            custom_path = (user_input.get("custom_path") or "").strip()
-            target_path = custom_path or chosen
-            if target_path:
-                try:
-                    await coordinator.async_restore_backup(target_path)
-                    return self.async_create_entry(title="", data=self._config_entry.options)
-                except Exception as err:  # noqa: BLE001
-                    _LOGGER.error("Restore failed: %s", err)
-                    errors["base"] = "restore_failed"
+        if user_input is not None:
+            if not coordinator:
+                errors["base"] = "restore_failed"
             else:
-                errors["base"] = "no_backup_selected"
+                chosen = user_input.get("backup_file")
+                custom_path = (user_input.get("custom_path") or "").strip()
+                target_path = custom_path or chosen
+                if target_path:
+                    try:
+                        await coordinator.async_restore_backup(target_path)
+                        return self.async_create_entry(
+                            title="", data=self._entry_options_dict()
+                        )
+                    except Exception as err:  # noqa: BLE001
+                        _LOGGER.exception("Restore failed: %s", err)
+                        errors["base"] = "restore_failed"
+                else:
+                    errors["base"] = "no_backup_selected"
 
         schema_fields: dict[Any, Any] = {}
         if backup_filenames:
-            schema_fields[vol.Optional("backup_file", default=backup_filenames[0])] = vol.In(
-                backup_filenames
-            )
+            schema_fields[
+                vol.Optional("backup_file", default=backup_filenames[0])
+            ] = vol.In(backup_filenames)
         schema_fields[vol.Optional("custom_path", default="")] = str
 
         return self.async_show_form(
@@ -233,19 +336,26 @@ class WineInventoryOptionsFlowHandler(config_entries.OptionsFlow):
     ) -> config_entries.FlowResult:
         """Import wines from file path or JSON text."""
         errors: dict[str, str] = {}
-        coordinator = _get_coordinator_for_entry(self.hass, self._config_entry.entry_id)
+        entry = self._entry
+        entry_id = getattr(entry, "entry_id", "") if entry is not None else ""
+        coordinator = _get_coordinator_for_entry(self.hass, entry_id)
 
-        if user_input is not None and coordinator:
-            source = (user_input.get("import_source") or "").strip()
-            if source:
-                try:
-                    await coordinator.async_import_wines(source)
-                    return self.async_create_entry(title="", data=self._config_entry.options)
-                except Exception as err:  # noqa: BLE001
-                    _LOGGER.error("Import failed: %s", err)
-                    errors["base"] = "import_failed"
+        if user_input is not None:
+            if not coordinator:
+                errors["base"] = "import_failed"
             else:
-                errors["base"] = "no_import_source"
+                source = (user_input.get("import_source") or "").strip()
+                if source:
+                    try:
+                        await coordinator.async_import_wines(source)
+                        return self.async_create_entry(
+                            title="", data=self._entry_options_dict()
+                        )
+                    except Exception as err:  # noqa: BLE001
+                        _LOGGER.exception("Import failed: %s", err)
+                        errors["base"] = "import_failed"
+                else:
+                    errors["base"] = "no_import_source"
 
         return self.async_show_form(
             step_id="import_wines",
