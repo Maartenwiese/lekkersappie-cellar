@@ -30,7 +30,7 @@
           "download_backup": "Download Created Backup (.zip)",
           "restore": "Restore Database from Backup (.zip)",
           "import_wines": "Import Wines (JSON / CSV / ZIP)",
-          "upload_vivino": "Upload Vivino History (CSV)"
+          "upload_vivino": "Upload Vivino Export (ZIP / CSV)"
         }
       },
       "settings": {
@@ -58,11 +58,11 @@
         }
       },
       "upload_vivino": {
-        "title": "Upload Vivino History (CSV)",
-        "description": "Import wines, ratings, and tasting notes from a Vivino History CSV export. You can paste the CSV content below or provide a file path.",
+        "title": "Upload Vivino Export (ZIP / CSV)",
+        "description": "Import wines, ratings, and cellar inventory from an official Vivino ZIP archive (contains full_wine_list.csv and cellar.csv with cover images) or a Vivino CSV file.",
         "data": {
-          "csv_content": "Paste Vivino CSV Content",
-          "csv_file_path": "Or specify relative CSV path in config (e.g., vivino_export.csv)"
+          "file_path": "File path in config directory (e.g., vivino_data.zip or vivino.csv)",
+          "csv_content": "Or paste CSV text directly"
         }
       },
       "restore": {

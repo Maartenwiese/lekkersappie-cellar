@@ -254,8 +254,20 @@ async def async_handle_pwa_post(
         }
 
     if action == "import":
-        fmt = str(payload.get("format") or payload.get("format_type") or "auto")
+        fmt = str(payload.get("format") or payload.get("format_type") or "auto").lower()
         content = payload.get("content") or payload.get("payload") or payload.get("source") or ""
+        if isinstance(content, str):
+            if content.startswith("data:") and ";base64," in content:
+                import base64
+
+                content = base64.b64decode(content.split(";base64,", 1)[1])
+            elif fmt == "zip" and not content.endswith(".zip") and len(content) > 100:
+                import base64
+
+                try:
+                    content = base64.b64decode(content)
+                except Exception:
+                    pass
         res = await coordinator.async_import_wines(content, format_type=fmt)
         return 200, {**res, "statistics": coordinator.statistics}
 

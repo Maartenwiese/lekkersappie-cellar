@@ -497,6 +497,76 @@ class TestBackupRestoreAndViews(unittest.TestCase):
             self.assertEqual(vivino_res["type"], "create_entry")
             self.assertEqual(len(db.list_wines()), 1)
 
+    def test_v040_vivino_export_zip_import(self) -> None:
+        """v0.4.0: Verify Vivino ZIP archive import parses full_wine_list.csv as Tasted, cellar.csv into cellar stock, and downloads covers."""
+        from custom_components.wine_inventory.backup import (
+            is_vivino_export_zip,
+            import_vivino_export_zip,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_dir = Path(tmp_dir)
+            db_path = config_dir / "wine_inventory.db"
+            db = WineDatabase(db_path)
+            db.initialize()
+
+            # Test with a synthetic zip first
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr(
+                    "vivino_data/full_wine_list.csv",
+                    "Winery,Wine name,Vintage,Region,Country,Regional wine style,Average rating,Wine ratings count,Your rating,Your review,Personal Note,Wine type,Drinking Window,Link to wine,Label image\n"
+                    'Tenuta San Guido,Sassicaia,2018,Bolgheri,Italy,Tuscan Red,4.7,12500,4.8,"Incredible structure","Cellar favorite",Red,2025-2045,https://www.vivino.com/wines/12345,https://images.vivino.com/labels/sassicaia2018.jpg\n'
+                    'Château Margaux,Margaux Premier Grand Cru Classé,2015,Margaux,France,Bordeaux Red,4.8,8900,4.9,"Velvety perfection","",Red,2024-2050,https://www.vivino.com/wines/67890,https://images.vivino.com/labels/margaux2015.jpg\n'
+                )
+                zf.writestr(
+                    "vivino_data/cellar.csv",
+                    "Winery,Wine name,Vintage,Region,Country,Regional wine style,Average rating,Wine ratings count,User cellar count,Link to wine\n"
+                    "Tenuta San Guido,Sassicaia,2018,Bolgheri,Italy,Tuscan Red,4.7,12500,2,https://www.vivino.com/wines/12345\n"
+                )
+
+            zip_bytes = zip_buffer.getvalue()
+            self.assertTrue(is_vivino_export_zip(zip_bytes, config_dir=config_dir))
+
+            # Run import without downloading images over network in unit test
+            res = import_vivino_export_zip(config_dir, db, zip_bytes, download_images=False)
+            self.assertTrue(res["success"])
+            self.assertEqual(res["cellar_imported"], 1)
+            self.assertEqual(res["cellar_bottles"], 2)
+            self.assertEqual(res["tasted_imported"], 2)
+
+            wines = db.list_wines()
+            self.assertEqual(len(wines), 2)
+            sassicaia = [w for w in wines if "Sassicaia" in w["name"]][0]
+            self.assertEqual(sassicaia["quantity"], 2)
+            self.assertEqual(sassicaia["personal_rating"], 4.8)
+            self.assertIn("Incredible structure", sassicaia["general_notes"])
+            self.assertEqual(sassicaia["drink_from_year"], 2025)
+            self.assertEqual(sassicaia["drink_until_year"], 2045)
+
+            margaux = [w for w in wines if "Margaux" in w["name"]][0]
+            self.assertEqual(margaux["quantity"], 0)
+            self.assertEqual(margaux["personal_rating"], 4.9)
+
+            stats = db.get_statistics()
+            self.assertEqual(stats["total_bottles"], 2)
+            self.assertEqual(stats["unique_wines"], 1)
+            self.assertEqual(stats["tasted_wines"], 2)
+
+            # Also verify with the actual uploaded user zip if present on disk
+            real_zip_path = Path("/usr/local/google/home/maartenw/.gemini/jetski/brain/d789ffa3-5b47-4a4d-bf20-6fc7cecfef15/.user_uploaded/media_1793127093064_fb972978.zip")
+            if real_zip_path.exists():
+                self.assertTrue(is_vivino_export_zip(real_zip_path, config_dir=config_dir))
+                # Create a fresh db to test real zip full extraction
+                db2_path = config_dir / "wine_inventory_real.db"
+                db2 = WineDatabase(db2_path)
+                db2.initialize()
+                real_res = import_vivino_export_zip(config_dir, db2, real_zip_path, download_images=False)
+                self.assertTrue(real_res["success"])
+                self.assertEqual(real_res["cellar_imported"], 54)
+                self.assertEqual(real_res["cellar_bottles"], 77)
+                self.assertGreaterEqual(real_res["tasted_imported"], 430)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -760,12 +760,46 @@ class WineInventoryCoordinator:
 
     async def async_import_vivino_csv(self, csv_text: str) -> dict[str, Any]:
         """Import wines and tasted history from a Vivino CSV export."""
-        from .backup import import_vivino_history_csv
+        from .backup import _import_wines_from_csv, import_vivino_history_csv
 
+        config_dir = Path(getattr(self.hass.config, "config_dir", "."))
+        first_line = csv_text.splitlines()[0].lower() if csv_text.strip() else ""
+        if "label image" in first_line or "user cellar count" in first_line:
+            res_count = await self.hass.async_add_executor_job(
+                _import_wines_from_csv,
+                self.db,
+                csv_text,
+                config_dir,
+            )
+            res = {
+                "success": True,
+                "imported_count": res_count,
+                "imported_wines": res_count,
+            }
+        else:
+            res = await self.hass.async_add_executor_job(
+                import_vivino_history_csv,
+                self.db,
+                csv_text,
+            )
+        await self.async_refresh()
+        return res
+
+    async def async_import_vivino_zip(
+        self,
+        zip_source: Path | bytes | str,
+        download_images: bool = True,
+    ) -> dict[str, Any]:
+        """Import wines, cellar inventory, and cover images from a Vivino ZIP export archive."""
+        from .backup import import_vivino_export_zip
+
+        config_dir = Path(getattr(self.hass.config, "config_dir", "."))
         res = await self.hass.async_add_executor_job(
-            import_vivino_history_csv,
+            import_vivino_export_zip,
+            config_dir,
             self.db,
-            csv_text,
+            zip_source,
+            download_images,
         )
         await self.async_refresh()
         return res

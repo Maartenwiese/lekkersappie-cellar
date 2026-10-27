@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 from contextlib import closing
+import concurrent.futures
 import csv
 from datetime import datetime, timezone
+import hashlib
 import io
 import json
 import logging
 from pathlib import Path
+import re
 import shutil
 import sqlite3
 import tempfile
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
+import urllib.request
 import zipfile
 
 from .const import (
@@ -543,6 +548,499 @@ def infer_varietal_from_text(text: str) -> str:
     return ""
 
 
+def download_and_save_cover_image(
+    config_dir: Path,
+    image_url: str,
+    timeout_sec: float = 6.0,
+) -> str:
+    """Download cover image from a trusted URL (e.g. images.vivino.com) and save to <config>/www/wine_inventory/covers/.
+
+    Returns the public /local/ URL on success, or the original image_url if download fails or cannot be saved.
+    """
+    if not image_url or not isinstance(image_url, str):
+        return ""
+    clean_url = image_url.strip()
+    if not clean_url.startswith(("https://", "http://")):
+        return clean_url
+
+    try:
+        parsed = urlparse(clean_url)
+        basename = Path(parsed.path).name
+        # Keep alphanumeric, dash, underscore, dot
+        safe_basename = re.sub(r"[^A-Za-z0-9_.-]", "_", basename)
+        if not safe_basename or safe_basename.startswith("."):
+            url_hash = hashlib.md5(clean_url.encode("utf-8")).hexdigest()[:16]
+            safe_basename = f"{url_hash}.jpg"
+
+        filename = f"vivino_{safe_basename}"
+        covers_dir = config_dir / COVERS_SUBDIR
+        covers_dir.mkdir(parents=True, exist_ok=True)
+        target_path = covers_dir / filename
+        local_url = f"/local/wine_inventory/covers/{filename}"
+
+        if target_path.exists() and target_path.stat().st_size > 0:
+            return local_url
+
+        req = urllib.request.Request(
+            clean_url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            data = resp.read()
+            if data and is_valid_image_bytes(data):
+                target_path.write_bytes(data)
+                return local_url
+            if data and len(data) <= MAX_IMAGE_UPLOAD_BYTES:
+                target_path.write_bytes(data)
+                return local_url
+    except Exception as err:
+        _LOGGER.debug("Could not download label image %s: %s", clean_url, err)
+
+    return clean_url
+
+
+def _parse_vivino_vintage(val: Any) -> int | None:
+    if val is None:
+        return None
+    s = str(val).strip()
+    if not s or s.lower() in ("nv", "non-vintage", "non vintage", "none", "—"):
+        return None
+    m = re.search(r"\b(19\d\d|20\d\d)\b", s)
+    if m:
+        return int(m.group(1))
+    try:
+        num = int(float(s))
+        return num if 1900 <= num <= 2100 else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_vivino_wine_type(val: str, fallback_text: str = "") -> str:
+    s = val.lower().strip()
+    if "red" in s:
+        return "red"
+    if "white" in s:
+        return "white"
+    if "sparkling" in s or "champagne" in s or "prosecco" in s or "cava" in s:
+        return "sparkling"
+    if "ros" in s:
+        return "rose"
+    if "dessert" in s:
+        return "dessert"
+    if "fortified" in s or "port" in s or "sherry" in s:
+        return "fortified"
+    return infer_wine_type_from_text(fallback_text) or "red"
+
+
+def _extract_vivino_wine_id(url: str) -> int | None:
+    if not url:
+        return None
+    m = re.search(r"/(?:wines|w)/(\d+)", str(url))
+    if m:
+        try:
+            return int(m.group(1))
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def import_vivino_full_wine_list_csv(
+    config_dir: Path,
+    db: WineDatabase,
+    csv_text: str,
+    download_images: bool = True,
+) -> dict[str, Any]:
+    """Parse Vivino full_wine_list.csv and import all wines as Tasted."""
+    reader = csv.DictReader(io.StringIO(csv_text))
+    rows = list(reader)
+    if not rows:
+        return {
+            "success": True,
+            "tasted_imported": 0,
+            "total_rows": 0,
+            "images_downloaded": 0,
+            "imported_count": 0,
+            "imported_wines": 0,
+        }
+
+    grouped_wines: dict[str, dict[str, Any]] = {}
+    row_count = 0
+
+    for row in rows:
+        norm_row = {str(k).strip().lower(): v for k, v in row.items() if k is not None}
+
+        def _val(*keys: str) -> str:
+            for k in keys:
+                if k in norm_row and norm_row[k] is not None:
+                    res = str(norm_row[k]).strip()
+                    if res:
+                        return res
+            return ""
+
+        winery = _val("winery", "winery / producer", "producer") or "Unknown Winery"
+        name = _val("wine name", "wine", "name") or "Unnamed Wine"
+        vintage = _parse_vivino_vintage(_val("vintage", "year"))
+        region = _val("region")
+        country = _val("country")
+        style = _val("regional wine style", "wine style", "style")
+        wine_type = _parse_vivino_wine_type(_val("wine type"), f"{name} {style} {winery}")
+        varietal = infer_varietal_from_text(f"{name} {style} {region}") or style
+
+        raw_avg = _val("average rating", "rating")
+        avg_rating = None
+        if raw_avg:
+            try:
+                avg_rating = round(float(raw_avg), 1)
+            except (ValueError, TypeError):
+                pass
+
+        raw_user_rating = _val("your rating", "my rating")
+        user_rating = None
+        if raw_user_rating:
+            try:
+                user_rating = round(float(raw_user_rating), 1)
+            except (ValueError, TypeError):
+                pass
+
+        review = _val("your review", "review text / notes", "review")
+        note = _val("personal note", "notes", "note")
+        combined_notes = f"{review}\n\n{note}".strip() if (review and note) else (review or note)
+
+        scan_date = _val("scan date", "date logged", "date") or None
+        location = _val("scan/review location", "purchase location", "location")
+        link = _val("link to wine", "vivino url", "link", "url")
+        wine_id = _extract_vivino_wine_id(link)
+        img_url = _val("label image", "image url", "label", "image")
+
+        group_key = f"{winery.lower()}:::{name.lower()}:::{vintage or 0}"
+        if link and link.strip():
+            group_key = link.strip().lower()
+
+        raw_window = _val("drinking window", "drinking_window", "drink window")
+        drink_from: int | None = None
+        drink_until: int | None = None
+        if raw_window:
+            m = re.search(r"(\d{4})\s*[-–—/]\s*(\d{4})", raw_window)
+            if m:
+                drink_from = int(m.group(1))
+                drink_until = int(m.group(2))
+            else:
+                m_single = re.search(r"(\d{4})", raw_window)
+                if m_single:
+                    drink_until = int(m_single.group(1))
+
+        if group_key not in grouped_wines:
+            grouped_wines[group_key] = {
+                "winery": winery,
+                "name": name,
+                "vintage": vintage,
+                "region": region,
+                "country": country,
+                "varietal": varietal,
+                "wine_type": wine_type,
+                "vivino_rating": avg_rating,
+                "vivino_url": link,
+                "vivino_wine_id": wine_id,
+                "personal_rating": user_rating,
+                "general_notes": combined_notes,
+                "image_url": img_url,
+                "added_at": scan_date,
+                "purchase_location": location,
+                "drink_window_note": raw_window,
+                "drink_from_year": drink_from,
+                "drink_until_year": drink_until,
+            }
+        else:
+            e = grouped_wines[group_key]
+            if user_rating is not None and e.get("personal_rating") is None:
+                e["personal_rating"] = user_rating
+            if combined_notes and not e.get("general_notes"):
+                e["general_notes"] = combined_notes
+            elif combined_notes and e.get("general_notes") and combined_notes != e["general_notes"]:
+                e["general_notes"] = f"{e['general_notes']}\n\n{combined_notes}"
+            if img_url and not e.get("image_url"):
+                e["image_url"] = img_url
+            if scan_date and not e.get("added_at"):
+                e["added_at"] = scan_date
+            if avg_rating is not None and e.get("vivino_rating") is None:
+                e["vivino_rating"] = avg_rating
+            if drink_from and not e.get("drink_from_year"):
+                e["drink_from_year"] = drink_from
+            if drink_until and not e.get("drink_until_year"):
+                e["drink_until_year"] = drink_until
+            if raw_window and not e.get("drink_window_note"):
+                e["drink_window_note"] = raw_window
+
+        row_count += 1
+
+    downloaded_images = 0
+    if download_images:
+        urls_to_download = {
+            w["image_url"]
+            for w in grouped_wines.values()
+            if w.get("image_url") and str(w["image_url"]).startswith(("http://", "https://"))
+        }
+        if urls_to_download:
+            url_map = {}
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+                future_to_url = {
+                    executor.submit(download_and_save_cover_image, config_dir, u): u
+                    for u in urls_to_download
+                }
+                for future in concurrent.futures.as_completed(future_to_url):
+                    u = future_to_url[future]
+                    try:
+                        res_url = future.result()
+                        url_map[u] = res_url
+                        if res_url.startswith("/local/"):
+                            downloaded_images += 1
+                    except Exception as err:
+                        _LOGGER.debug("Cover download error for %s: %s", u, err)
+                        url_map[u] = u
+            for w in grouped_wines.values():
+                if w.get("image_url") in url_map:
+                    w["image_url"] = url_map[w["image_url"]]
+
+    for w in grouped_wines.values():
+        db.add_or_increment_wine(
+            winery=w["winery"],
+            name=w["name"],
+            vintage=w["vintage"],
+            wine_type=w["wine_type"],
+            varietal=w["varietal"],
+            region=w["region"],
+            country=w["country"],
+            drink_window_note=w["drink_window_note"],
+            drink_from_year=w.get("drink_from_year"),
+            drink_until_year=w.get("drink_until_year"),
+            vivino_rating=w["vivino_rating"],
+            vivino_url=w["vivino_url"],
+            vivino_wine_id=w["vivino_wine_id"],
+            vivino_match_confidence="confirmed" if w["vivino_url"] else "",
+            rating_source="vivino" if w["vivino_url"] else "",
+            general_notes=w["general_notes"],
+            personal_rating=w["personal_rating"],
+            image_url=w["image_url"],
+            quantity=0,
+            added_at=w["added_at"],
+            purchase_location=w["purchase_location"],
+            as_tasted=True,
+        )
+
+    tasted_total = len(grouped_wines)
+    return {
+        "success": True,
+        "tasted_imported": tasted_total,
+        "total_rows": row_count,
+        "images_downloaded": downloaded_images,
+        "imported_count": tasted_total,
+        "imported_wines": tasted_total,
+    }
+
+
+def import_vivino_cellar_csv(
+    config_dir: Path,
+    db: WineDatabase,
+    csv_text: str,
+) -> dict[str, Any]:
+    """Parse Vivino cellar.csv and populate wines into active cellar inventory."""
+    reader = csv.DictReader(io.StringIO(csv_text))
+    rows = list(reader)
+    if not rows:
+        return {
+            "success": True,
+            "cellar_imported": 0,
+            "cellar_bottles": 0,
+            "imported_count": 0,
+            "imported_wines": 0,
+        }
+
+    cellar_count = 0
+    total_bottles = 0
+
+    for row in rows:
+        norm_row = {str(k).strip().lower(): v for k, v in row.items() if k is not None}
+
+        def _val(*keys: str) -> str:
+            for k in keys:
+                if k in norm_row and norm_row[k] is not None:
+                    res = str(norm_row[k]).strip()
+                    if res:
+                        return res
+            return ""
+
+        winery = _val("winery", "winery / producer", "producer") or "Unknown Winery"
+        name = _val("wine name", "wine", "name") or "Unnamed Wine"
+        vintage = _parse_vivino_vintage(_val("vintage", "year"))
+        region = _val("region")
+        country = _val("country")
+        style = _val("regional wine style", "wine style", "style")
+        wine_type = _parse_vivino_wine_type(_val("wine type"), f"{name} {style} {winery}")
+        varietal = infer_varietal_from_text(f"{name} {style} {region}") or style
+
+        raw_count = _val("user cellar count", "quantity", "bottles in cellar", "stock")
+        count = 1
+        if raw_count:
+            try:
+                count = max(1, int(float(raw_count)))
+            except (ValueError, TypeError):
+                count = 1
+
+        raw_ratings_count = _val("wine ratings count", "ratings count")
+        ratings_count = None
+        if raw_ratings_count:
+            try:
+                ratings_count = int(float(raw_ratings_count))
+            except (ValueError, TypeError):
+                pass
+
+        raw_avg = _val("average rating", "rating")
+        avg_rating = None
+        if raw_avg:
+            try:
+                avg_rating = round(float(raw_avg), 1)
+            except (ValueError, TypeError):
+                pass
+
+        link = _val("link to wine", "vivino url", "link", "url")
+        wine_id = _extract_vivino_wine_id(link)
+
+        db.add_or_increment_wine(
+            winery=winery,
+            name=name,
+            vintage=vintage,
+            wine_type=wine_type,
+            varietal=varietal,
+            region=region,
+            country=country,
+            vivino_rating=avg_rating,
+            vivino_ratings_count=ratings_count,
+            vivino_url=link,
+            vivino_wine_id=wine_id,
+            vivino_match_confidence="confirmed" if link else "",
+            rating_source="vivino" if link else "",
+            quantity=count,
+            as_tasted=False,
+        )
+        cellar_count += 1
+        total_bottles += count
+
+    return {
+        "success": True,
+        "cellar_imported": cellar_count,
+        "cellar_bottles": total_bottles,
+        "imported_count": cellar_count,
+        "imported_wines": cellar_count,
+    }
+
+
+def is_vivino_export_zip(
+    zip_source: Path | bytes | str, config_dir: Path | None = None
+) -> bool:
+    """Return True if zip_source contains Vivino export CSVs (full_wine_list.csv or cellar.csv)."""
+    try:
+        if isinstance(zip_source, bytes):
+            with zipfile.ZipFile(io.BytesIO(zip_source)) as zf:
+                return any(
+                    n.lower().endswith(("full_wine_list.csv", "cellar.csv"))
+                    for n in zf.namelist()
+                )
+        if isinstance(zip_source, Path) and zip_source.is_file():
+            safe_path = zip_source
+        elif isinstance(zip_source, str) and Path(zip_source).is_file() and Path(zip_source).is_absolute():
+            safe_path = Path(zip_source)
+        else:
+            base_dir = config_dir or Path(".")
+            safe_path = resolve_safe_storage_path(base_dir, zip_source)
+        if safe_path.exists() and safe_path.is_file():
+            with zipfile.ZipFile(safe_path) as zf:
+                return any(
+                    n.lower().endswith(("full_wine_list.csv", "cellar.csv"))
+                    for n in zf.namelist()
+                )
+    except Exception:
+        return False
+    return False
+
+
+def import_vivino_export_zip(
+    config_dir: Path,
+    db: WineDatabase,
+    zip_source: Path | bytes | str,
+    download_images: bool = True,
+) -> dict[str, Any]:
+    """Parse official Vivino data export ZIP.
+
+    1. vivino_data/full_wine_list.csv -> labeled and stored as 'tasted' wines (quantity 0).
+    2. vivino_data/cellar.csv -> populated into active cellar inventory with stock batches.
+    3. Label image -> downloaded and saved to <config>/www/wine_inventory/covers/.
+    """
+    if isinstance(zip_source, bytes):
+        zip_file: Any = io.BytesIO(zip_source)
+    elif isinstance(zip_source, Path) and zip_source.is_file():
+        zip_file = open(zip_source, "rb")
+    elif isinstance(zip_source, str) and Path(zip_source).is_file() and Path(zip_source).is_absolute():
+        zip_file = open(Path(zip_source), "rb")
+    else:
+        safe_path = resolve_safe_storage_path(config_dir, zip_source)
+        if not safe_path.exists() or not safe_path.is_file():
+            raise FileNotFoundError(f"Vivino export ZIP not found: {safe_path.name}")
+        if safe_path.stat().st_size > MAX_BACKUP_ARCHIVE_BYTES:
+            raise ValueError(
+                "Security error: ZIP file exceeds maximum allowed size (50 MB)."
+            )
+        zip_file = open(safe_path, "rb")
+
+    try:
+        with zipfile.ZipFile(zip_file, "r") as zf:
+            full_wine_text = ""
+            cellar_text = ""
+
+            for name in zf.namelist():
+                lower_name = name.lower()
+                if lower_name.endswith("full_wine_list.csv"):
+                    full_wine_text = zf.read(name).decode("utf-8", errors="replace")
+                elif lower_name.endswith("cellar.csv"):
+                    cellar_text = zf.read(name).decode("utf-8", errors="replace")
+
+            if not full_wine_text and not cellar_text:
+                raise ValueError(
+                    "ZIP archive does not contain full_wine_list.csv or cellar.csv."
+                )
+
+            tasted_res = {}
+            if full_wine_text:
+                tasted_res = import_vivino_full_wine_list_csv(
+                    config_dir, db, full_wine_text, download_images=download_images
+                )
+
+            cellar_res = {}
+            if cellar_text:
+                cellar_res = import_vivino_cellar_csv(config_dir, db, cellar_text)
+
+            tasted_count = tasted_res.get("tasted_imported", 0)
+            cellar_count = cellar_res.get("cellar_imported", 0)
+            cellar_bottles = cellar_res.get("cellar_bottles", 0)
+            images_downloaded = tasted_res.get("images_downloaded", 0)
+            total_imported = max(tasted_count, cellar_count)
+
+            return {
+                "success": True,
+                "tasted_imported": tasted_count,
+                "cellar_imported": cellar_count,
+                "cellar_bottles": cellar_bottles,
+                "images_downloaded": images_downloaded,
+                "imported_count": total_imported,
+                "imported_wines": total_imported,
+            }
+    finally:
+        if not isinstance(zip_source, bytes) and hasattr(zip_file, "close"):
+            zip_file.close()
+
+
 def import_vivino_history_csv(db: WineDatabase, csv_text: str) -> dict[str, Any]:
     """Parse Vivino history CSV export and populate wine cellar & tasted database.
 
@@ -649,6 +1147,7 @@ def import_vivino_history_csv(db: WineDatabase, csv_text: str) -> dict[str, Any]
         "imported_count": imported_count,
         "cellar_count": cellar_count,
         "tasted_count": tasted_count,
+        "imported_wines": imported_count,
     }
 
 
@@ -668,10 +1167,26 @@ def stage_backup_for_download(config_dir: Path, filename: str) -> str:
     return f"/local/wine_inventory/backups/{safe_path.name}"
 
 
-def _import_wines_from_csv(db: WineDatabase, csv_text: str) -> int:
+def _import_wines_from_csv(
+    db: WineDatabase,
+    csv_text: str,
+    config_dir: Path | None = None,
+) -> int:
     """Parse CSV text with wine headers and import into SQLite."""
-    # Check if this CSV contains Vivino export columns
     first_line = csv_text.splitlines()[0].lower() if csv_text.strip() else ""
+    cfg_dir = config_dir or Path(db.db_path).parent
+
+    # Detect Vivino full_wine_list.csv (contains Label image & Wine name)
+    if "label image" in first_line and ("wine name" in first_line or "winery" in first_line):
+        res = import_vivino_full_wine_list_csv(cfg_dir, db, csv_text, download_images=True)
+        return int(res.get("tasted_imported") or 0)
+
+    # Detect Vivino cellar.csv (contains User cellar count & Wine name)
+    if "user cellar count" in first_line and ("wine name" in first_line or "winery" in first_line):
+        res = import_vivino_cellar_csv(cfg_dir, db, csv_text)
+        return int(res.get("cellar_imported") or 0)
+
+    # Check if this CSV contains standard/custom Vivino export columns
     if any(k in first_line for k in ("wine name", "winery / producer", "my rating", "quantity in cellar", "date logged", "review text")):
         res = import_vivino_history_csv(db, csv_text)
         return int(res.get("imported_count") or 0)
@@ -689,8 +1204,10 @@ def import_wines_archive(
     payload: list[dict[str, Any]] | dict[str, Any] | bytes | str,
     format_type: str = "auto",
 ) -> dict[str, Any]:
-    """Import wines from JSON list, CSV text, or ZIP backup archive."""
+    """Import wines from JSON list, CSV text, or ZIP backup/Vivino archive."""
     if isinstance(payload, bytes) and payload.startswith(b"PK"):
+        if is_vivino_export_zip(payload, config_dir=config_dir):
+            return import_vivino_export_zip(config_dir, db, payload)
         return restore_backup_archive(config_dir, db, payload)
 
     if isinstance(payload, str) and (
@@ -707,13 +1224,15 @@ def import_wines_archive(
                 "Security error: import file exceeds maximum allowed size (50 MB)."
             )
         if safe_path.suffix.lower() == ".zip":
+            if is_vivino_export_zip(safe_path, config_dir=config_dir):
+                return import_vivino_export_zip(config_dir, db, safe_path)
             return restore_backup_archive(config_dir, db, safe_path)
         if safe_path.suffix.lower() == ".json":
             data = json.loads(safe_path.read_text(encoding="utf-8"))
             return import_wines_archive(config_dir, db, data, "json")
         if safe_path.suffix.lower() == ".csv":
             text = safe_path.read_text(encoding="utf-8")
-            count = _import_wines_from_csv(db, text)
+            count = _import_wines_from_csv(db, text, config_dir=config_dir)
             return {"success": True, "imported_wines": count, "imported_count": count}
 
     if isinstance(payload, dict):
@@ -726,7 +1245,7 @@ def import_wines_archive(
             data = json.loads(trimmed)
             wines_list = data.get("wines") if isinstance(data, dict) else data
         else:
-            count = _import_wines_from_csv(db, trimmed)
+            count = _import_wines_from_csv(db, trimmed, config_dir=config_dir)
             return {"success": True, "imported_wines": count, "imported_count": count}
     else:
         raise ValueError("Unsupported import payload format.")

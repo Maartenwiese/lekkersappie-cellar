@@ -1,5 +1,5 @@
 /**
- * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.3.9)
+ * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.4.0)
  * Runs parallel to the native Home Assistant UI, inherits Home Assistant OAuth2
  * authentication, defaults to Large (L) text scale, and supports Home Screen installation.
  */
@@ -1810,8 +1810,8 @@ class LekkersappieMobileApp {
                 : `<div style="font-size:12.5px; color:var(--text-muted);">No backup archives created yet.</div>`
             }
             <label class="btn btn-soft" style="width:100%; cursor:pointer;">
-              🍇 Upload Vivino History (.csv)
-              <input type="file" id="mobile-vivino-csv-file" accept=".csv,text/csv" hidden />
+              🍇 Upload Vivino Export (.zip / .csv)
+              <input type="file" id="mobile-vivino-csv-file" accept=".zip,.csv,text/csv,application/zip" hidden />
             </label>
           </div>
         </div>
@@ -2736,23 +2736,34 @@ class LekkersappieMobileApp {
     r.querySelector("#mobile-vivino-csv-file")?.addEventListener("change", (e) => {
       const file = e.target.files?.[0];
       if (!file) return;
+      const isZip = file.name.toLowerCase().endsWith(".zip");
       const reader = new FileReader();
       reader.onload = async () => {
         try {
-          this.showToast("Importing Vivino history…");
-          const res = await this.apiPost("import", {
-            format: "csv",
-            content: String(reader.result || ""),
-          });
+          this.showToast(isZip ? "Importing Vivino ZIP (cellar, tasted & covers)…" : "Importing Vivino history…");
+          const payload = isZip
+            ? { format: "zip", content: String(reader.result || "") }
+            : { format: "csv", content: String(reader.result || "") };
+          const res = await this.apiPost("import", payload);
           await this.fetchState();
-          this.showToast(`Imported ${res?.imported_count ?? 0} wine(s) from Vivino history!`);
+          if (isZip) {
+            this.showToast(
+              `Vivino ZIP imported! ${res?.cellar_imported ?? 0} cellar (${res?.cellar_bottles ?? 0} bottles), ${res?.tasted_imported ?? 0} tasted, ${res?.images_downloaded ?? 0} covers.`
+            );
+          } else {
+            this.showToast(`Imported ${res?.imported_count ?? 0} wine(s) from Vivino history!`);
+          }
         } catch (err) {
           this.showError("Vivino import failed", err);
         } finally {
           e.target.value = "";
         }
       };
-      reader.readAsText(file);
+      if (isZip) {
+        reader.readAsDataURL(file);
+      } else {
+        reader.readAsText(file);
+      }
     });
 
     // Manual add form

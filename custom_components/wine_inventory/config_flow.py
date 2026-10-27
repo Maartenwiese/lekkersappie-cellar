@@ -346,7 +346,7 @@ class WineInventoryOptionsFlowHandler(config_entries.OptionsFlow):
     async def async_step_upload_vivino(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
-        """Upload and import a Vivino History CSV export."""
+        """Upload and import a Vivino ZIP export or CSV history."""
         errors: dict[str, str] = {}
         entry = self._entry
         entry_id = getattr(entry, "entry_id", "") if entry is not None else ""
@@ -357,16 +357,27 @@ class WineInventoryOptionsFlowHandler(config_entries.OptionsFlow):
                 errors["base"] = "import_failed"
             else:
                 csv_content = (user_input.get("csv_content") or "").strip()
-                csv_path = (user_input.get("csv_file_path") or "").strip()
-                if csv_path:
+                file_path = (user_input.get("file_path") or user_input.get("csv_file_path") or "").strip()
+                if file_path:
                     try:
-                        safe_path = (
-                            Path(getattr(self.hass.config, "config_dir", ".")) / csv_path
-                        )
+                        config_dir = Path(getattr(self.hass.config, "config_dir", "."))
+                        safe_path = config_dir / file_path
+                        if not safe_path.is_file():
+                            safe_path = Path(file_path)
                         if safe_path.is_file():
+                            if safe_path.suffix.lower() == ".zip":
+                                res = await coordinator.async_import_vivino_zip(safe_path)
+                                _LOGGER.info(
+                                    "Imported Vivino ZIP %s: %s",
+                                    file_path,
+                                    res,
+                                )
+                                return self.async_create_entry(
+                                    title="", data=self._entry_options_dict()
+                                )
                             csv_content = safe_path.read_text(encoding="utf-8")
                     except Exception as err:  # noqa: BLE001
-                        _LOGGER.warning("Could not read csv_file_path %s: %s", csv_path, err)
+                        _LOGGER.warning("Could not read file_path %s: %s", file_path, err)
                 if csv_content:
                     try:
                         res = await coordinator.async_import_vivino_csv(csv_content)
@@ -383,12 +394,13 @@ class WineInventoryOptionsFlowHandler(config_entries.OptionsFlow):
                         _LOGGER.exception("Vivino import failed: %s", err)
                         errors["base"] = "vivino_import_failed"
                 else:
-                    errors["base"] = "no_csv_provided"
+                    if not errors:
+                        errors["base"] = "no_csv_provided"
 
         schema = vol.Schema(
             {
+                vol.Optional("file_path", default=""): str,
                 vol.Optional("csv_content", default=""): str,
-                vol.Optional("csv_file_path", default=""): str,
             }
         )
         return self.async_show_form(

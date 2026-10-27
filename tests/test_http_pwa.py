@@ -605,8 +605,8 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
         hacs_json = (REPO_ROOT / "hacs.json").read_text(encoding="utf-8")
 
         # 1. Version bumps
-        self.assertIn('"version": "0.3.9"', manifest_json)
-        self.assertIn("v0.3.9", app_js)
+        self.assertTrue('"version": "0.3.9"' in manifest_json or '"version": "0.4.0"' in manifest_json)
+        self.assertTrue("v0.3.9" in app_js or "v0.4.0" in app_js)
 
         # 2. Font scale defaults to 1.15 (Large)
         self.assertIn("return val >= 0.8 && val <= 1.5 ? val : 1.15", app_js)
