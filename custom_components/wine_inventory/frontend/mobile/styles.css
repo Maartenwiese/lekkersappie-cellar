@@ -862,21 +862,28 @@ html, body {
   max-height: 100dvh;
 }
 
-/* Detailed Sheet Specifics (Scalable with --ls-app-scale) */
+/* Detailed Sheet Specifics (Scalable with --ls-app-scale, optimized for L=1.15 default) */
 .detail-hero {
   display: flex;
-  gap: 14px;
-  padding: 13px;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
   border-radius: 14px;
   background: var(--surface-alt);
   border: 1px solid var(--border);
   margin-bottom: 14px;
+}
+
+.detail-hero-top {
+  display: flex;
+  flex-direction: row;
+  gap: 12px;
   align-items: flex-start;
 }
 
 .detail-hero-img {
-  width: 82px;
-  height: 110px;
+  width: 88px;
+  height: 124px;
   border-radius: 10px;
   object-fit: cover;
   flex-shrink: 0;
@@ -884,15 +891,185 @@ html, body {
   box-shadow: var(--shadow-sm);
 }
 
-.detail-hero-info {
+.detail-hero-summary {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
 }
 
-@container mobileview (max-width: 420px) {
-  .detail-hero {
-    flex-direction: column;
-  }
+.detail-hero-winery {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.detail-hero-title {
+  font-size: 16.5px;
+  font-weight: 800;
+  line-height: 1.22;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.detail-hero-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+  margin-top: 2px;
+}
+
+.detail-hero-vivino-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+.detail-hero-vivino-row .input {
+  flex: 1;
+  min-width: 0;
+  min-height: 42px;
+  padding: 6px 10px;
+}
+
+.detail-hero-vivino-row .btn {
+  min-height: 42px;
+  padding: 6px 11px;
+  font-size: 12.5px;
+  flex-shrink: 0;
+}
+
+.detail-hero-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: nowrap;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}
+
+.detail-stepper-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.detail-stepper-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.stepper-capsule.stepper-compact .step-btn {
+  width: 40px;
+  height: 40px;
+  font-size: 20px;
+}
+
+.stepper-capsule.stepper-compact .step-qty {
+  min-width: 24px;
+  padding: 0 6px;
+  font-size: 14px;
+}
+
+.detail-research-btn {
+  flex: 1;
+  min-width: 0;
+  min-height: 42px;
+  padding: 6px 10px;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Personal Rating Slider Card (1.0 to 5.0 in 0.1 increments) */
+.rating-slider-card {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rating-slider-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rating-slider-head label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.rating-slider-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rating-slider-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  background: var(--surface);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+.rating-slider-badge.active {
+  background: var(--brand);
+  color: #ffffff;
+  border-color: transparent;
+}
+
+.rating-clear-btn {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  border-radius: 8px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.rating-range-slider {
+  width: 100%;
+  height: 38px;
+  accent-color: var(--brand);
+  touch-action: pan-x;
+  cursor: pointer;
+  margin: 0;
+}
+
+.rating-range-slider::-webkit-slider-thumb {
+  width: 26px;
+  height: 26px;
+}
+
+.rating-slider-ticks {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-muted);
 }
 
 .taste-card {

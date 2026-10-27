@@ -14,9 +14,11 @@ import yaml
 
 from custom_components.wine_inventory.backup import (
     create_backup_archive,
+    import_vivino_history_csv,
     import_wines_archive,
     list_available_backups,
     restore_backup_archive,
+    stage_backup_for_download,
 )
 from custom_components.wine_inventory.config_flow import WineInventoryOptionsFlowHandler
 from custom_components.wine_inventory.const import DOMAIN, VERSION
@@ -357,6 +359,143 @@ class TestBackupRestoreAndViews(unittest.TestCase):
             )
             self.assertEqual(import_done["type"], "create_entry")
             self.assertEqual(len(db.list_wines()), 2)
+
+    def test_import_vivino_history_csv_lossless(self) -> None:
+        """Verify importing the user's Vivino history CSV with ratings, notes, and cellar quantities."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            db_path = Path(tmp_dir) / "wine_inventory.db"
+            db = WineDatabase(db_path)
+            db.initialize()
+
+            # Exact sample attached by the user plus a 0-quantity tasted row
+            csv_sample = (
+                "Wine Name,Winery / Producer,Vintage,Region,Country,My Rating,Review Text / Notes,Date Logged,Price Paid,Quantity In Cellar\n"
+                'Sassicaia,Tenuta San Guido,2018,Bolgheri,Italy,4.8,"Incredible structure, silky tannins, dark cherry and tobacco.",2025-05-14,250.0,2\n'
+                'Chateau Margaux,Château Margaux,2015,Margaux,France,4.9,"A masterpiece. Velvety, elegant, perfect balance.",2025-11-20,600.0,1\n'
+                'Dom Perignon Brut Champagne,Dom Pérignon,2012,Champagne,France,4.7,"Toasty brioche, crisp acidity, beautiful fine bubbles.",2025-12-31,220.0,3\n'
+                'Tignanello,Marchesi Antinori,2020,Toscana,Italy,4.6,"Classic Sangiovese blend, vibrant acidity, oak notes.",2026-03-15,140.0,4\n'
+                'Silver Oak Alexander Valley Cabernet Sauvignon,Silver Oak,2019,Alexander Valley,United States,4.5,"Classic bold California Cab, vanilla and rich blackberry.",2026-09-02,95.0,2\n'
+                'Barolo Monfortino,Giacomo Conterno,2010,Piemonte,Italy,5.0,"Legendary wine, drank at special anniversary dinner.",2024-10-10,1200.0,0\n'
+            )
+
+            res = import_vivino_history_csv(db, csv_sample)
+            self.assertTrue(res["success"])
+            self.assertEqual(res["imported_count"], 6)
+            self.assertEqual(res["cellar_count"], 5)
+            self.assertEqual(res["tasted_count"], 1)
+
+            wines = db.list_wines(include_out_of_stock=True)
+            self.assertEqual(len(wines), 6)
+
+            # Check Dom Perignon Brut Champagne -> sparkling
+            dom = next(w for w in wines if "Dom Perignon" in w["name"])
+            self.assertEqual(dom["wine_type"], "sparkling")
+            self.assertEqual(dom["vintage"], 2012)
+            self.assertEqual(dom["personal_rating"], 4.7)
+            self.assertEqual(dom["quantity"], 3)
+
+            # Check Sassicaia -> personal rating 4.8 and review notes
+            sass = next(w for w in wines if "Sassicaia" in w["name"])
+            self.assertEqual(sass["winery"], "Tenuta San Guido")
+            self.assertEqual(sass["personal_rating"], 4.8)
+            self.assertIn("silky tannins", sass["general_notes"])
+            self.assertEqual(sass["quantity"], 2)
+
+            # Check Barolo Monfortino -> 0 quantity in cellar, stored with personal_rating=5.0 and notes in tasted
+            barolo = next(w for w in wines if "Monfortino" in w["name"])
+            self.assertEqual(barolo["quantity"], 0)
+            self.assertEqual(barolo["personal_rating"], 5.0)
+
+            # Also verify _import_wines_from_csv auto-detects Vivino CSV headers
+            with tempfile.TemporaryDirectory() as tmp_dir2:
+                db2 = WineDatabase(Path(tmp_dir2) / "wine_inventory.db")
+                db2.initialize()
+                cnt = import_wines_archive(Path(tmp_dir2), db2, csv_sample)
+                self.assertEqual(cnt.get("imported_wines"), 6)
+                self.assertEqual(len(db2.list_wines(include_out_of_stock=True)), 6)
+
+    def test_stage_backup_for_download(self) -> None:
+        """Verify staging backup archive into <config>/www/wine_inventory/backups/ for direct HTTP download."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_dir = Path(tmp_dir)
+            db = WineDatabase(config_dir / "wine_inventory.db")
+            db.initialize()
+            db.add_or_increment_wine(winery="Test Winery", name="Test Wine", quantity=1)
+
+            meta = create_backup_archive(config_dir, db)
+            filename = meta["filename"]
+
+            url = stage_backup_for_download(config_dir, filename)
+            self.assertEqual(url, f"/local/wine_inventory/backups/{filename}")
+            staged_path = config_dir / "www" / "wine_inventory" / "backups" / filename
+            self.assertTrue(staged_path.exists())
+            self.assertEqual(staged_path.stat().st_size, meta["size_bytes"])
+
+    def test_options_flow_download_and_upload_vivino(self) -> None:
+        """Verify OptionsFlow download_backup and upload_vivino menu options."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_dir = Path(tmp_dir)
+            db = WineDatabase(config_dir / "wine_inventory.db")
+            db.initialize()
+
+            class _FakeCoordinator:
+                def __init__(self) -> None:
+                    self.db = db
+
+                async def async_create_backup(self) -> dict:
+                    return create_backup_archive(config_dir, db)
+
+                async def async_list_backups(self) -> list:
+                    return list_available_backups(config_dir)
+
+                async def async_stage_backup_for_download(self, filename: str) -> str:
+                    return stage_backup_for_download(config_dir, filename)
+
+                async def async_import_vivino_csv(self, csv_text: str) -> dict:
+                    return import_vivino_history_csv(db, csv_text)
+
+            coord = _FakeCoordinator()
+            entry = SimpleNamespace(
+                entry_id="entry_test_039",
+                data={"cellar_name": "Lekkersappie"},
+                options=MappingProxyType({"low_stock_threshold": 3}),
+            )
+            fake_hass = SimpleNamespace(
+                config=SimpleNamespace(path=lambda *parts: str(config_dir.joinpath(*parts))),
+                data={DOMAIN: {"entry_test_039": {"coordinator": coord}}},
+            )
+
+            flow = WineInventoryOptionsFlowHandler(entry)
+            flow.hass = fake_hass
+
+            # Check menu options include download_backup and upload_vivino
+            menu_res = asyncio.run(flow.async_step_init(None))
+            self.assertIn("download_backup", menu_res["menu_options"])
+            self.assertIn("upload_vivino", menu_res["menu_options"])
+
+            # Create backup first so download_backup has files
+            asyncio.run(flow.async_step_backup({}))
+            backups = list_available_backups(config_dir)
+            self.assertEqual(len(backups), 1)
+            filename = backups[0]["filename"]
+
+            # Download backup step
+            dl_res = asyncio.run(flow.async_step_download_backup({"backup_file": filename}))
+            self.assertEqual(dl_res["type"], "form")
+            self.assertIn("download_url", dl_res.get("description_placeholders", {}))
+            self.assertEqual(
+                dl_res["description_placeholders"]["download_url"],
+                f"/local/wine_inventory/backups/{filename}",
+            )
+
+            # Upload Vivino history step
+            csv_content = (
+                "Wine Name,Winery / Producer,Vintage,Region,Country,My Rating,Review Text / Notes,Date Logged,Price Paid,Quantity In Cellar\n"
+                'Sassicaia,Tenuta San Guido,2018,Bolgheri,Italy,4.8,"Incredible structure.",2025-05-14,250.0,2\n'
+            )
+            vivino_res = asyncio.run(flow.async_step_upload_vivino({"csv_content": csv_content}))
+            self.assertEqual(vivino_res["type"], "create_entry")
+            self.assertEqual(len(db.list_wines()), 1)
 
 
 if __name__ == "__main__":

@@ -2125,7 +2125,7 @@ class WineInventoryCard extends HTMLElement {
               </div>
               <div class="form-field">
                 <label>Your Personal Rating (1.0–5.0)</label>
-                <input class="ha-input" type="number" step="0.5" min="1" max="5" name="personal_rating" value="${escapeHtml(cf.personal_rating)}" placeholder="e.g. 4.5" />
+                <input class="ha-input" type="number" step="0.1" min="1" max="5" name="personal_rating" value="${escapeHtml(cf.personal_rating)}" placeholder="e.g. 4.5" />
               </div>
               ${
                 activeBatches.length > 0
@@ -2495,7 +2495,7 @@ class WineInventoryCard extends HTMLElement {
                 <label>Vivino Rating &amp; Personal Rating</label>
                 <div class="split-2">
                   <input class="ha-input" type="number" step="0.1" name="vivino_rating" value="${escapeHtml(df.vivino_rating)}" placeholder="Vivino ★" />
-                  <input class="ha-input" type="number" step="0.5" name="personal_rating" value="${escapeHtml(df.personal_rating)}" placeholder="My ★" />
+                  <input class="ha-input" type="number" step="0.1" min="1" max="5" name="personal_rating" value="${escapeHtml(df.personal_rating)}" placeholder="My ★ (1.0–5.0)" />
                 </div>
               </div>
               <div class="form-field">

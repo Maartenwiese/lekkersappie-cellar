@@ -596,6 +596,84 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
         self.assertIn('data-ha-scan-dest="tasted"', card_js)
         self.assertIn("tasted-card-theme", card_js)
 
+    async def test_v039_mobile_detailed_view_and_vivino_import(self) -> None:
+        """v0.3.9: Verify Mobile App Large font default, status-strip removal, detail hero, personal rating slider, and backup/vivino."""
+        app_js = (MOBILE_DIR / "app.js").read_text(encoding="utf-8")
+        css = (MOBILE_DIR / "styles.css").read_text(encoding="utf-8")
+        card_js = (INTEGRATION_DIR / "frontend" / "wine-inventory-card.js").read_text(encoding="utf-8")
+        manifest_json = (INTEGRATION_DIR / "manifest.json").read_text(encoding="utf-8")
+        hacs_json = (REPO_ROOT / "hacs.json").read_text(encoding="utf-8")
+
+        # 1. Version bumps
+        self.assertIn('"version": "0.3.9"', manifest_json)
+        self.assertIn("v0.3.9", app_js)
+
+        # 2. Font scale defaults to 1.15 (Large)
+        self.assertIn("return val >= 0.8 && val <= 1.5 ? val : 1.15", app_js)
+
+        # 3. Status strip removed from render() across all screens
+        self.assertNotIn("status-strip", app_js)
+
+        # 4. Detailed view hero layout and actions on single line
+        self.assertIn(".detail-hero-top", css)
+        self.assertIn(".detail-hero-actions", css)
+        self.assertIn("detail-hero-badges", app_js)
+        self.assertIn("stepper-compact", app_js)
+        self.assertIn("detail-research-btn", app_js)
+        self.assertIn("flex-wrap: nowrap", css)
+
+        # 5. Sommelier & Producer AI Research moved inside form above action buttons
+        self.assertIn('id="mobile-detail-form"', app_js)
+        self.assertIn("detail-research-card", app_js)
+        # Check that in _renderDetailSheet, AI research appears after rating slider and before form buttons
+        detail_sheet_code = app_js[app_js.find("_renderDetailSheet("):app_js.find("_renderScanSheet(")]
+        slider_idx = detail_sheet_code.find("renderPersonalRatingSlider")
+        research_idx = detail_sheet_code.find("detail-research-card")
+        submit_idx = detail_sheet_code.find('type="submit"')
+        self.assertTrue(slider_idx != -1 and research_idx != -1 and submit_idx != -1)
+        self.assertLess(slider_idx, research_idx)
+        self.assertLess(research_idx, submit_idx)
+
+        # 6. Personal rating slider 1.0 to 5.0 with 0.1 step and 5.0 = Excellent!
+        self.assertIn('min="1.0"', app_js)
+        self.assertIn('max="5.0"', app_js)
+        self.assertIn('step="0.1"', app_js)
+        self.assertIn("personalRatingMeta", app_js)
+        self.assertIn("Excellent!", app_js)
+        self.assertIn('step="0.1" min="1" max="5"', card_js)
+
+        # 7. Brand assets populated
+        for brand_dir in [INTEGRATION_DIR / "brand", REPO_ROOT / "brand"]:
+            self.assertTrue((brand_dir / "icon.png").exists())
+            self.assertTrue((brand_dir / "icon@2x.png").exists())
+            self.assertTrue((brand_dir / "dark_icon.png").exists())
+            self.assertTrue((brand_dir / "logo.png").exists())
+
+        # 8. Mobile PWA backup creation & Vivino import API endpoints
+        status_backup, res_backup = await async_handle_pwa_post(self.hass, "backup_create", {})
+        self.assertEqual(status_backup, 200)
+        self.assertTrue(res_backup.get("ok"))
+        self.assertTrue(res_backup.get("download_url", "").startswith("/local/wine_inventory/backups/"))
+
+        csv_content = (
+            "Wine Name,Winery / Producer,Vintage,Region,Country,My Rating,Review Text / Notes,Date Logged,Price Paid,Quantity In Cellar\n"
+            "Château Latour,Château Latour,2010,Pauillac,France,4.9,Monumental Bordeaux,2026-01-01,800.0,3\n"
+        )
+        status_import, res_import = await async_handle_pwa_post(
+            self.hass,
+            "import",
+            {"format_type": "csv", "payload": csv_content},
+        )
+        self.assertEqual(status_import, 200)
+        self.assertEqual(res_import.get("imported_count"), 1)
+        wines = self.coordinator.wines
+        latour = next((w for w in wines if "Latour" in w["winery"]), None)
+        self.assertIsNotNone(latour)
+        self.assertEqual(latour["name"], "Château Latour")
+        self.assertEqual(latour["vintage"], 2010)
+        self.assertEqual(latour["quantity"], 3)
+        self.assertEqual(latour["personal_rating"], 4.9)
+
 
 if __name__ == "__main__":
     unittest.main()

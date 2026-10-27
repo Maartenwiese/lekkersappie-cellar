@@ -167,6 +167,7 @@ async def async_handle_pwa_get(
             "areas": _resolve_available_areas(hass, coordinator),
             "statistics": coordinator.statistics,
             "wines": wines,
+            "backups": await coordinator.async_list_backups(),
         }
 
     if action == "detail":
@@ -242,6 +243,21 @@ async def async_handle_pwa_post(
         wine_id = int(raw_id) if raw_id is not None else None
         res = await coordinator.async_refresh_vivino(wine_id)
         return 200, res
+
+    if action == "backup_create":
+        res = await coordinator.async_create_backup()
+        return 200, {
+            "ok": True,
+            "backup": res,
+            "download_url": res.get("download_url", ""),
+            "statistics": coordinator.statistics,
+        }
+
+    if action == "import":
+        fmt = str(payload.get("format") or payload.get("format_type") or "auto")
+        content = payload.get("content") or payload.get("payload") or payload.get("source") or ""
+        res = await coordinator.async_import_wines(content, format_type=fmt)
+        return 200, {**res, "statistics": coordinator.statistics}
 
     return 404, {"error": f"Unknown POST action: {action}"}
 

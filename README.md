@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/icon.svg" width="112" height="112" alt="Lekkersappie Red Wine Glass Icon" />
+  <img src="brand/icon.png" width="112" height="112" alt="Lekkersappie Red Wine Glass Icon" />
 </p>
 
 <h1 align="center">🍷 Lekkersappie</h1>

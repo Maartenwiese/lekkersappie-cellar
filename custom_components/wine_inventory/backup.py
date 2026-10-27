@@ -450,8 +450,232 @@ def _import_wines_list(db: WineDatabase, wines: list[dict[str, Any]]) -> int:
     return imported
 
 
+def infer_wine_type_from_text(text: str) -> str:
+    """Infer wine type ('red', 'white', 'rose', 'sparkling', 'dessert', 'fortified') from text."""
+    lower = text.lower()
+    if any(
+        k in lower
+        for k in (
+            "champagne",
+            "prosecco",
+            "cava",
+            "brut",
+            "sparkling",
+            "cremant",
+            "crémant",
+            "spumante",
+            "sekt",
+            "franciacorta",
+        )
+    ):
+        return "sparkling"
+    if any(k in lower for k in ("rosé", "rose", "rosato")):
+        return "rose"
+    if any(
+        k in lower
+        for k in (
+            "chardonnay",
+            "sauvignon blanc",
+            "riesling",
+            "pinot grigio",
+            "pinot gris",
+            "chenin",
+            "viognier",
+            "chablis",
+            "sancerre",
+            "white",
+            "albarino",
+            "albariño",
+            "verdejo",
+            "soave",
+            "gavi",
+            "muscadet",
+            "vermentino",
+            "grüner veltliner",
+        )
+    ):
+        return "white"
+    if any(k in lower for k in ("port", "sherry", "madeira", "fortified", "tawny", "marsala")):
+        return "fortified"
+    if any(k in lower for k in ("sauternes", "tokaji", "ice wine", "eiswein", "dessert", "late harvest")):
+        return "dessert"
+    return "red"
+
+
+def infer_varietal_from_text(text: str) -> str:
+    """Infer grape varietal from wine name, cuvée, and region."""
+    lower = text.lower()
+    varietals = [
+        ("cabernet sauvignon", "Cabernet Sauvignon"),
+        ("pinot noir", "Pinot Noir"),
+        ("chardonnay", "Chardonnay"),
+        ("sauvignon blanc", "Sauvignon Blanc"),
+        ("syrah", "Syrah"),
+        ("shiraz", "Shiraz"),
+        ("merlot", "Merlot"),
+        ("sangiovese", "Sangiovese"),
+        ("nebbiolo", "Nebbiolo"),
+        ("tempranillo", "Tempranillo"),
+        ("garnacha", "Garnacha"),
+        ("grenache", "Grenache"),
+        ("malbec", "Malbec"),
+        ("zinfandel", "Zinfandel"),
+        ("riesling", "Riesling"),
+        ("chenin blanc", "Chenin Blanc"),
+        ("viognier", "Viognier"),
+        ("pinot grigio", "Pinot Grigio"),
+        ("pinot gris", "Pinot Gris"),
+        ("cabernet franc", "Cabernet Franc"),
+        ("primitivo", "Primitivo"),
+        ("carmenere", "Carménère"),
+        ("corvina", "Corvina"),
+        ("gamay", "Gamay"),
+    ]
+    for key, name in varietals:
+        if key in lower:
+            return name
+    if any(k in lower for k in ("bolgheri", "sassicaia", "bordeaux", "margaux", "pauillac", "saint-julien")):
+        return "Bordeaux Blend / Cabernet Sauvignon"
+    if any(k in lower for k in ("tignanello", "chianti", "brunello")):
+        return "Sangiovese"
+    if any(k in lower for k in ("champagne", "champenois")):
+        return "Chardonnay / Pinot Noir"
+    return ""
+
+
+def import_vivino_history_csv(db: WineDatabase, csv_text: str) -> dict[str, Any]:
+    """Parse Vivino history CSV export and populate wine cellar & tasted database.
+
+    Recognizes standard Vivino exports and custom column variations:
+      - Wine Name, Winery / Producer, Vintage, Region, Country
+      - My Rating, Review Text / Notes, Date Logged, Price Paid, Quantity In Cellar
+    """
+    reader = csv.DictReader(io.StringIO(csv_text))
+    imported_count = 0
+    tasted_count = 0
+    cellar_count = 0
+
+    for row in reader:
+        # Resolve fields flexibly with case-insensitive / trimmed lookup
+        norm_row = {str(k).strip().lower(): v for k, v in row.items() if k is not None}
+
+        def _val(*keys: str) -> str:
+            for k in keys:
+                k_lower = k.lower()
+                if k_lower in norm_row and norm_row[k_lower] is not None:
+                    res = str(norm_row[k_lower]).strip()
+                    if res:
+                        return res
+            return ""
+
+        name = _val("wine name", "wine", "name", "cuvée", "cuvee")
+        winery = _val("winery / producer", "winery", "producer", "winery name")
+        if not name and not winery:
+            continue
+        if not winery:
+            winery = "Unknown Winery"
+        if not name:
+            name = "Unnamed Wine"
+
+        raw_vintage = _val("vintage", "year")
+        vintage: int | None = None
+        if raw_vintage:
+            try:
+                vintage = int(float(raw_vintage))
+            except (ValueError, TypeError):
+                vintage = None
+
+        region = _val("region")
+        country = _val("country")
+
+        raw_rating = _val("my rating", "personal rating", "user rating", "rating", "your rating")
+        personal_rating: float | None = None
+        if raw_rating:
+            try:
+                personal_rating = round(float(raw_rating), 1)
+            except (ValueError, TypeError):
+                personal_rating = None
+
+        notes = _val("review text / notes", "review text", "review", "notes", "personal note", "note")
+        added_at = _val("date logged", "scan date", "activity date", "date added", "added at", "date") or None
+
+        raw_price = _val("price paid", "price", "purchase price", "bottle price", "wine price")
+        purchase_price: float | None = None
+        if raw_price:
+            try:
+                purchase_price = float(raw_price)
+            except (ValueError, TypeError):
+                purchase_price = None
+
+        raw_qty = _val("quantity in cellar", "quantity", "bottle count", "bottles in cellar", "stock")
+        qty = 0
+        if raw_qty:
+            try:
+                qty = max(0, int(float(raw_qty)))
+            except (ValueError, TypeError):
+                qty = 0
+
+        # Infer wine type and grape varietal from available text
+        text_corpus = f"{name} {winery} {region} {country}"
+        wine_type = _val("wine type", "type", "style") or infer_wine_type_from_text(text_corpus)
+        varietal = _val("varietal", "grape", "grape variety") or infer_varietal_from_text(text_corpus)
+
+        is_as_tasted = qty <= 0
+        db.add_or_increment_wine(
+            winery=winery,
+            name=name,
+            vintage=vintage,
+            wine_type=wine_type,
+            varietal=varietal,
+            region=region,
+            country=country,
+            drink_window_note="",
+            general_notes=notes,
+            batch_notes=notes,
+            personal_rating=personal_rating,
+            quantity=qty if qty > 0 else 0,
+            added_at=added_at,
+            purchase_price=purchase_price,
+            as_tasted=is_as_tasted,
+        )
+        imported_count += 1
+        if is_as_tasted:
+            tasted_count += 1
+        else:
+            cellar_count += 1
+
+    return {
+        "success": True,
+        "imported_count": imported_count,
+        "cellar_count": cellar_count,
+        "tasted_count": tasted_count,
+    }
+
+
+def stage_backup_for_download(config_dir: Path, filename: str) -> str:
+    """Stage a backup .zip file into <config>/www/wine_inventory/backups/ for direct HTTP download.
+
+    Returns the public Home Assistant URL path '/local/wine_inventory/backups/<filename>'.
+    """
+    safe_path = resolve_safe_storage_path(config_dir, filename)
+    if not safe_path.exists() or not safe_path.is_file():
+        raise FileNotFoundError(f"Backup archive {filename} not found.")
+
+    www_backups_dir = config_dir / "www" / "wine_inventory" / "backups"
+    www_backups_dir.mkdir(parents=True, exist_ok=True)
+    target_file = www_backups_dir / safe_path.name
+    shutil.copy2(safe_path, target_file)
+    return f"/local/wine_inventory/backups/{safe_path.name}"
+
+
 def _import_wines_from_csv(db: WineDatabase, csv_text: str) -> int:
     """Parse CSV text with wine headers and import into SQLite."""
+    # Check if this CSV contains Vivino export columns
+    first_line = csv_text.splitlines()[0].lower() if csv_text.strip() else ""
+    if any(k in first_line for k in ("wine name", "winery / producer", "my rating", "quantity in cellar", "date logged", "review text")):
+        res = import_vivino_history_csv(db, csv_text)
+        return int(res.get("imported_count") or 0)
+
     reader = csv.DictReader(io.StringIO(csv_text))
     wines_list = []
     for row in reader:
@@ -490,7 +714,7 @@ def import_wines_archive(
         if safe_path.suffix.lower() == ".csv":
             text = safe_path.read_text(encoding="utf-8")
             count = _import_wines_from_csv(db, text)
-            return {"success": True, "imported_wines": count}
+            return {"success": True, "imported_wines": count, "imported_count": count}
 
     if isinstance(payload, dict):
         wines_list = payload.get("wines") or [payload]
@@ -503,7 +727,7 @@ def import_wines_archive(
             wines_list = data.get("wines") if isinstance(data, dict) else data
         else:
             count = _import_wines_from_csv(db, trimmed)
-            return {"success": True, "imported_wines": count}
+            return {"success": True, "imported_wines": count, "imported_count": count}
     else:
         raise ValueError("Unsupported import payload format.")
 
@@ -511,6 +735,7 @@ def import_wines_archive(
     return {
         "success": True,
         "imported_wines": count,
+        "imported_count": count,
     }
 
 

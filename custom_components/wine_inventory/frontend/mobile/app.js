@@ -1,5 +1,5 @@
 /**
- * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.3.8)
+ * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.3.9)
  * Runs parallel to the native Home Assistant UI, inherits Home Assistant OAuth2
  * authentication, defaults to Large (L) text scale, and supports Home Screen installation.
  */
@@ -78,6 +78,78 @@ function fmtDate(isoStr) {
   const d = new Date(isoStr);
   if (Number.isNaN(d.getTime())) return String(isoStr).slice(0, 16);
   return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+function personalRatingMeta(rawVal) {
+  if (rawVal === null || rawVal === undefined || rawVal === "" || (typeof rawVal === "string" && !rawVal.trim())) {
+    return {
+      rated: false,
+      valueStr: "",
+      sliderValue: "4.0",
+      tier: "Not rated",
+      badgeText: "Slide 1.0–5.0 to rate",
+    };
+  }
+  const num = Number(rawVal);
+  if (!Number.isFinite(num)) {
+    return {
+      rated: false,
+      valueStr: "",
+      sliderValue: "4.0",
+      tier: "Not rated",
+      badgeText: "Slide 1.0–5.0 to rate",
+    };
+  }
+  const clamped = Math.min(5.0, Math.max(1.0, Math.round(num * 10) / 10));
+  const valueStr = clamped.toFixed(1);
+  let tier = "Good";
+  if (clamped >= 4.95) tier = "Excellent!";
+  else if (clamped >= 4.5) tier = "Outstanding";
+  else if (clamped >= 4.0) tier = "Very Good";
+  else if (clamped >= 3.5) tier = "Good";
+  else if (clamped >= 3.0) tier = "Average";
+  else if (clamped >= 2.0) tier = "Below Average";
+  else tier = "Poor";
+  return {
+    rated: true,
+    valueStr,
+    sliderValue: valueStr,
+    tier,
+    badgeText: `★ ${valueStr} / 5.0 — ${tier}`,
+  };
+}
+
+function renderPersonalRatingSlider(prefix, rawVal) {
+  const meta = personalRatingMeta(rawVal);
+  return `
+    <div class="rating-slider-card" data-rating-slider-prefix="${esc(prefix)}">
+      <div class="rating-slider-head">
+        <label for="${esc(prefix)}-rating-range">My Personal Rating (1.0–5.0 ★)</label>
+        <div class="rating-slider-status">
+          <span class="rating-slider-badge ${meta.rated ? "active" : ""}" id="${esc(prefix)}-rating-badge">${esc(meta.badgeText)}</span>
+          <button type="button" class="rating-clear-btn" id="${esc(prefix)}-rating-clear" style="${meta.rated ? "" : "display:none;"}">Clear</button>
+        </div>
+      </div>
+      <input type="hidden" name="personal_rating" id="${esc(prefix)}-rating-hidden" value="${esc(meta.valueStr)}" />
+      <input
+        type="range"
+        class="rating-range-slider"
+        id="${esc(prefix)}-rating-range"
+        min="1.0"
+        max="5.0"
+        step="0.1"
+        value="${esc(meta.sliderValue)}"
+        aria-label="My personal rating from 1.0 to 5.0 in 0.1 increments"
+      />
+      <div class="rating-slider-ticks">
+        <span>1.0</span>
+        <span>2.0</span>
+        <span>3.0 Good</span>
+        <span>4.0 Great</span>
+        <span style="color:var(--brand); font-weight:800;">5.0 Excellent!</span>
+      </div>
+    </div>
+  `;
 }
 
 class LekkersappieMobileApp {
@@ -795,6 +867,7 @@ class LekkersappieMobileApp {
       this.state.areas = data.areas || ["Wine Cellar", "Wine Fridge", "Kitchen Rack"];
       this.state.statistics = data.statistics || {};
       this.state.wines = data.wines || [];
+      this.state.backups = data.backups || [];
       this.state.authenticatedUser = data.authenticated_user || null;
       this.state.error = "";
     } catch (err) {
@@ -1669,6 +1742,7 @@ class LekkersappieMobileApp {
 
   _renderConfigView() {
     const scaleLabel = this._fontScaleLabel();
+    const backups = this.state.backups || [];
     return `
       <div class="section-wrap">
         <h2 class="view-title">⚙️ Config</h2>
@@ -1713,6 +1787,36 @@ class LekkersappieMobileApp {
         </div>
 
         <div class="panel-card">
+          <h3>📦 Backups &amp; Vivino History Import</h3>
+          <div class="form-stack">
+            <button type="button" class="btn btn-primary" id="btn-settings-create-backup" style="width:100%;">
+              💾 Create &amp; Download Full Backup (.zip)
+            </button>
+            ${
+              backups.length > 0
+                ? `<div style="display:flex; gap:8px; align-items:center;">
+                    <select id="select-settings-backup" class="select" style="flex:1; min-width:0;">
+                      ${backups
+                        .map(
+                          (b) =>
+                            `<option value="${esc(b.filename)}">${esc(b.filename)} (${esc(b.size_mb)} MB)</option>`
+                        )
+                        .join("")}
+                    </select>
+                    <button type="button" class="btn btn-soft" id="btn-settings-download-backup" style="flex-shrink:0;">
+                      📥 Download
+                    </button>
+                  </div>`
+                : `<div style="font-size:12.5px; color:var(--text-muted);">No backup archives created yet.</div>`
+            }
+            <label class="btn btn-soft" style="width:100%; cursor:pointer;">
+              🍇 Upload Vivino History (.csv)
+              <input type="file" id="mobile-vivino-csv-file" accept=".csv,text/csv" hidden />
+            </label>
+          </div>
+        </div>
+
+        <div class="panel-card">
           <h3>🍷 Cellar Actions</h3>
           <div class="form-stack">
             <button class="btn" id="btn-settings-refresh-vivino" style="width:100%;">
@@ -1736,6 +1840,7 @@ class LekkersappieMobileApp {
 
     const typeLabel = WINE_TYPES[w.wine_type] || "Wine";
     const drinkMeta = DRINK_META[w.drink_status] || DRINK_META.unknown;
+    const originText = [w.region, w.country].filter(Boolean).join(" • ") || "Origin not specified";
     let research = null;
     if (w.research_notes) {
       try {
@@ -1756,134 +1861,72 @@ class LekkersappieMobileApp {
           <div class="sheet-body" id="detail-sheet-body">
             <div class="scaled-zone">
               <div class="detail-hero">
-                ${
-                  safeImageUrl(w.image_url)
-                    ? `<img class="detail-hero-img" src="${safeImageUrl(w.image_url)}" alt="${esc(w.name)}" id="btn-detail-zoom-img" title="Tap to enlarge photo" />`
-                    : `<div class="detail-hero-img" style="background:var(--brand-soft); display:flex; align-items:center; justify-content:center; font-size:30px;">🍷</div>`
-                }
-                <div class="detail-hero-info">
-                  <div class="bottle-meta-top" style="margin-bottom:6px;">
-                    <span class="pill pill-${esc(w.wine_type)}">${esc(typeLabel)}</span>
-                    <span class="pill pill-vintage">📅 ${esc(w.vintage || "NV")}</span>
-                    ${w.varietal ? `<span class="pill pill-vintage">🍇 ${esc(w.varietal)}</span>` : ""}
-                    ${w.latest_added_at || w.created_at ? `<span class="pill pill-vintage">🗓️ ${esc(fmtDate(w.latest_added_at || w.created_at))}</span>` : ""}
-                    <span class="pill" style="border:1px solid ${drinkMeta.color}; color:${drinkMeta.color};">${esc(drinkMeta.label)}</span>
-                  </div>
-                  <div style="font-size:13px; color:var(--text-muted); font-weight:600;">${esc(w.winery)}</div>
-                  <div style="font-size:18px; font-weight:800; line-height:1.25; margin:2px 0 6px;">${esc(w.name)}</div>
-                  <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:8px;">
-                    🌍 ${esc([w.region, w.country].filter(Boolean).join(" • ") || "Origin not specified")}
-                    ${df.storage_location ? ` • <strong style="color:var(--brand);">📍 ${esc(df.storage_location)}</strong>` : ""}
-                    ${df.purchase_location ? ` • 🛒 ${esc(df.purchase_location)}` : ""}
-                    ${df.purchase_price !== "" && df.purchase_price !== null ? ` • 💰 ${esc(df.purchase_price)} ${esc(this.state.currency)}` : ""}
-                  </div>
-
-                  <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px;">
-                    ${
-                      safeExternalUrl(w.vivino_url)
-                        ? `<a class="vivino-tag" href="${safeExternalUrl(w.vivino_url)}" target="_blank" rel="noopener noreferrer" style="padding:4px 10px; font-size:12.5px;">
-                            ★ ${esc(w.vivino_rating ? Number(w.vivino_rating).toFixed(1) : "Vivino")} ↗
-                          </a>`
-                        : `<span class="pill pill-vintage">No Vivino link</span>`
-                    }
-                    ${
-                      w.vivino_url || w.vivino_rating
-                        ? `<button type="button" class="btn btn-danger" id="btn-mobile-unlink-vivino" style="min-height:44px; padding:6px 12px; font-size:13.5px;">
-                            Remove Vivino Link
-                          </button>`
-                        : ""
-                    }
-                  </div>
-
-                  <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-                    <input class="input" id="mobile-vivino-url-input" type="url" placeholder="Paste exact Vivino URL (…/w/1234)" style="flex:1; min-width:160px;" />
-                    <button type="button" class="btn" id="btn-mobile-link-vivino">
-                      ${this.state.linkingVivinoId === w.id ? "Linking…" : "Link Vivino"}
-                    </button>
-                  </div>
-                  ${this.state.vivinoLinkError ? `<div style="color:var(--danger); font-size:12px; margin-top:4px;">${esc(this.state.vivinoLinkError)}</div>` : ""}
-
-                  <div style="display:flex; align-items:center; gap:10px; margin-top:12px; flex-wrap:wrap;">
-                    <span style="font-size:13px; font-weight:700;">In Cellar:</span>
-                    <div class="stepper-capsule">
-                      <button type="button" class="step-btn" id="btn-detail-minus">−</button>
-                      <span class="step-qty" style="padding:0 10px;">${Number(w.quantity || 0)}</span>
-                      <button type="button" class="step-btn" id="btn-detail-plus">+</button>
-                    </div>
-                    <button type="button" class="btn btn-soft" id="btn-detail-research" style="margin-left:auto;" ${this.state.researchingWineId === w.id ? "disabled" : ""}>
-                      ✨ ${this.state.researchingWineId === w.id ? "Researching…" : "Research Wine (AI)"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              ${
-                this.state.researchError
-                  ? `<div style="padding:10px 12px; border-radius:10px; background:rgba(198,40,40,0.1); color:var(--danger); font-size:12.5px; margin-bottom:12px;">
-                      <strong>Research Error:</strong> ${esc(this.state.researchError)}
-                    </div>`
-                  : ""
-              }
-
-              ${
-                research
-                  ? `<div class="panel-card" style="margin-bottom:14px; background:var(--surface-alt);">
-                      <h3>
-                        <span>✨ Sommelier &amp; Producer AI Research</span>
-                        <button type="button" class="btn btn-icon" id="btn-detail-reresearch" aria-label="Refresh AI research" title="Refresh AI Research">🔄</button>
-                      </h3>
-                      ${research.summary ? `<p style="font-size:13.5px; font-style:italic; margin:0 0 10px; line-height:1.45;">${esc(research.summary)}</p>` : ""}
+                <div class="detail-hero-top">
+                  ${
+                    safeImageUrl(w.image_url)
+                      ? `<img class="detail-hero-img" src="${safeImageUrl(w.image_url)}" alt="${esc(w.name)}" id="btn-detail-zoom-img" title="Tap to enlarge photo" />`
+                      : `<div class="detail-hero-img" style="background:var(--brand-soft); display:flex; align-items:center; justify-content:center; font-size:32px;">🍷</div>`
+                  }
+                  <div class="detail-hero-summary">
+                    <div class="detail-hero-winery">${esc(w.winery)}</div>
+                    <div class="detail-hero-title">${esc(w.name)}</div>
+                    <div class="detail-hero-badges">
+                      <span class="pill pill-${esc(w.wine_type)}">${esc(typeLabel)}</span>
+                      <span class="pill pill-vintage">📅 ${esc(w.vintage || "NV")}</span>
+                      ${w.varietal ? `<span class="pill pill-vintage">🍇 ${esc(w.varietal)}</span>` : ""}
+                      ${w.latest_added_at || w.created_at ? `<span class="pill pill-vintage">🗓️ ${esc(fmtDate(w.latest_added_at || w.created_at))}</span>` : ""}
+                      <span class="pill" style="border:1px solid ${drinkMeta.color}; color:${drinkMeta.color};">${esc(drinkMeta.label)}</span>
+                      <span class="meta-chip">🌍 ${esc(originText)}</span>
+                      ${df.storage_location ? `<span class="meta-chip" style="color:var(--brand); font-weight:700;">📍 ${esc(df.storage_location)}</span>` : ""}
+                      ${df.purchase_location ? `<span class="meta-chip">🛒 ${esc(df.purchase_location)}</span>` : ""}
+                      ${df.purchase_price !== "" && df.purchase_price !== null ? `<span class="meta-chip">💰 ${esc(df.purchase_price)} ${esc(this.state.currency)}</span>` : ""}
                       ${
-                        research.taste_profile
-                          ? `<div class="taste-card">
-                              <div style="font-size:11.5px; font-weight:800; text-transform:uppercase; color:var(--brand); margin-bottom:10px;">
-                                Structural Taste Profile
-                              </div>
-                              <div class="taste-row">
-                                <div class="taste-labels">
-                                  <span>Soft / Round</span>
-                                  <span style="color:var(--brand);">${esc(research.taste_profile.soft_vs_acidic_label || "Balanced")} (${Math.round(Number(research.taste_profile.soft_vs_acidic || 50))}%)</span>
-                                  <span>Acidic / Crisp</span>
-                                </div>
-                                <div class="taste-bar">
-                                  <div class="taste-bar-fill" style="width:${Math.max(4, Math.min(100, Number(research.taste_profile.soft_vs_acidic || 50)))}%; background:linear-gradient(90deg, #c084fc, #a61a2e);"></div>
-                                  <div class="taste-bar-dot" style="left:${Math.max(2, Math.min(98, Number(research.taste_profile.soft_vs_acidic || 50)))}%;"></div>
-                                </div>
-                              </div>
-                              <div class="taste-row">
-                                <div class="taste-labels">
-                                  <span>Light-Bodied</span>
-                                  <span style="color:var(--brand);">${esc(research.taste_profile.light_vs_bold_label || "Medium")} (${Math.round(Number(research.taste_profile.light_vs_bold || 50))}%)</span>
-                                  <span>Bold / Full</span>
-                                </div>
-                                <div class="taste-bar">
-                                  <div class="taste-bar-fill" style="width:${Math.max(4, Math.min(100, Number(research.taste_profile.light_vs_bold || 50)))}%; background:linear-gradient(90deg, #fcd34d, #831843);"></div>
-                                  <div class="taste-bar-dot" style="left:${Math.max(2, Math.min(98, Number(research.taste_profile.light_vs_bold || 50)))}%;"></div>
-                                </div>
-                              </div>
-                              <div class="taste-row">
-                                <div class="taste-labels">
-                                  <span>Bone Dry</span>
-                                  <span style="color:var(--brand);">${esc(research.taste_profile.dry_vs_sweet_label || "Dry")} (${Math.round(Number(research.taste_profile.dry_vs_sweet || 10))}%)</span>
-                                  <span>Sweet / Luscious</span>
-                                </div>
-                                <div class="taste-bar">
-                                  <div class="taste-bar-fill" style="width:${Math.max(4, Math.min(100, Number(research.taste_profile.dry_vs_sweet || 10)))}%; background:linear-gradient(90deg, #93c5fd, #f59e0b);"></div>
-                                  <div class="taste-bar-dot" style="left:${Math.max(2, Math.min(98, Number(research.taste_profile.dry_vs_sweet || 10)))}%;"></div>
-                                </div>
-                              </div>
-                            </div>`
+                        safeExternalUrl(w.vivino_url)
+                          ? `<a class="vivino-tag" href="${safeExternalUrl(w.vivino_url)}" target="_blank" rel="noopener noreferrer" style="padding:3px 8px; font-size:12px;">
+                              ★ ${esc(w.vivino_rating ? Number(w.vivino_rating).toFixed(1) : "Vivino")} ↗
+                            </a>`
+                          : w.vivino_rating
+                            ? `<span class="vivino-tag" style="padding:3px 8px; font-size:12px;">★ ${esc(Number(w.vivino_rating).toFixed(1))}</span>`
+                            : ""
+                      }
+                      ${
+                        df.personal_rating !== "" && df.personal_rating !== null && df.personal_rating !== undefined
+                          ? `<span class="meta-chip" style="color:var(--brand); font-weight:800;">★ ${esc(Number(df.personal_rating).toFixed(1))}/5</span>`
                           : ""
                       }
-                      <div class="form-stack" style="font-size:12.5px; line-height:1.5;">
-                        ${research.producer_history ? `<div><strong style="color:var(--brand);">🏰 Producer Heritage:</strong> ${esc(research.producer_history)}</div>` : ""}
-                        ${research.wine_and_terroir ? `<div><strong style="color:var(--brand);">🍇 Terroir &amp; Vineyards:</strong> ${esc(research.wine_and_terroir)}</div>` : ""}
-                        ${research.tasting_profile ? `<div><strong style="color:var(--brand);">🍷 Tasting Profile:</strong> ${esc(research.tasting_profile)}</div>` : ""}
-                        ${research.serving_and_pairing ? `<div><strong style="color:var(--brand);">🍽️ Pairings:</strong> ${esc(research.serving_and_pairing)}</div>` : ""}
-                      </div>
-                    </div>`
-                  : ""
-              }
+                      ${
+                        w.vivino_url || w.vivino_rating
+                          ? `<button type="button" class="rating-clear-btn" id="btn-mobile-unlink-vivino" title="Remove Vivino link" style="color:var(--danger); border-color:rgba(198,40,40,0.3);">
+                              ✕ Unlink
+                            </button>`
+                          : ""
+                      }
+                    </div>
+                  </div>
+                </div>
+
+                <div class="detail-hero-vivino-row">
+                  <input class="input" id="mobile-vivino-url-input" type="url" placeholder="Paste Vivino URL (…/w/1234)" />
+                  <button type="button" class="btn" id="btn-mobile-link-vivino">
+                    ${this.state.linkingVivinoId === w.id ? "Linking…" : "Link Vivino"}
+                  </button>
+                </div>
+                ${this.state.vivinoLinkError ? `<div style="color:var(--danger); font-size:12px;">${esc(this.state.vivinoLinkError)}</div>` : ""}
+
+                <div class="detail-hero-actions">
+                  <div class="detail-stepper-group">
+                    <span class="detail-stepper-label">🍾 Stock</span>
+                    <div class="stepper-capsule stepper-compact">
+                      <button type="button" class="step-btn" id="btn-detail-minus" aria-label="Remove bottle">−</button>
+                      <span class="step-qty">${Number(w.quantity || 0)}</span>
+                      <button type="button" class="step-btn" id="btn-detail-plus" aria-label="Add bottle">+</button>
+                    </div>
+                  </div>
+                  <button type="button" class="btn btn-soft detail-research-btn" id="btn-detail-research" ${this.state.researchingWineId === w.id ? "disabled" : ""}>
+                    ✨ ${this.state.researchingWineId === w.id ? "Researching…" : "Research Wine"}
+                  </button>
+                </div>
+              </div>
 
               <form id="mobile-detail-form" class="form-stack">
                 <div class="form-row-2">
@@ -1932,23 +1975,88 @@ class LekkersappieMobileApp {
                     </div>
                   </div>
                 </div>
-                <div class="form-row-2">
-                  <div class="field">
-                    <label>Drink Window (From – Until)</label>
-                    <div class="form-row-2">
-                      <input class="input" type="number" inputmode="numeric" pattern="[0-9]*" name="drink_from_year" value="${esc(df.drink_from_year)}" placeholder="From" />
-                      <input class="input" type="number" inputmode="numeric" pattern="[0-9]*" name="drink_until_year" value="${esc(df.drink_until_year)}" placeholder="Until" />
-                    </div>
+                <div class="field">
+                  <label>Drink Window (From – Until)</label>
+                  <div class="form-row-2">
+                    <input class="input" type="number" inputmode="numeric" pattern="[0-9]*" name="drink_from_year" value="${esc(df.drink_from_year)}" placeholder="From" />
+                    <input class="input" type="number" inputmode="numeric" pattern="[0-9]*" name="drink_until_year" value="${esc(df.drink_until_year)}" placeholder="Until" />
                   </div>
-                  <div class="field">
-                    <label>My Personal Rating (1–5 ★)</label>
-                    <input class="input" type="number" inputmode="decimal" step="0.5" min="1" max="5" name="personal_rating" value="${esc(df.personal_rating)}" />
-                  </div>
+                </div>
+                <div class="field">
+                  ${renderPersonalRatingSlider("detail", df.personal_rating)}
                 </div>
                 <div class="field">
                   <label>Master Wine Notes</label>
                   <textarea class="textarea" id="detail-master-notes" name="general_notes" rows="2">${esc(df.general_notes)}</textarea>
                 </div>
+
+                ${
+                  this.state.researchError
+                    ? `<div style="padding:10px 12px; border-radius:10px; background:rgba(198,40,40,0.1); color:var(--danger); font-size:12.5px;">
+                        <strong>Research Error:</strong> ${esc(this.state.researchError)}
+                      </div>`
+                    : ""
+                }
+
+                ${
+                  research
+                    ? `<div class="panel-card detail-research-card" style="background:var(--surface-alt);">
+                        <h3>
+                          <span>✨ Sommelier &amp; Producer AI Research</span>
+                          <button type="button" class="btn btn-icon" id="btn-detail-reresearch" aria-label="Refresh AI research" title="Refresh AI Research">🔄</button>
+                        </h3>
+                        ${research.summary ? `<p style="font-size:13.5px; font-style:italic; margin:0 0 10px; line-height:1.45;">${esc(research.summary)}</p>` : ""}
+                        ${
+                          research.taste_profile
+                            ? `<div class="taste-card">
+                                <div style="font-size:11.5px; font-weight:800; text-transform:uppercase; color:var(--brand); margin-bottom:10px;">
+                                  Structural Taste Profile
+                                </div>
+                                <div class="taste-row">
+                                  <div class="taste-labels">
+                                    <span>Soft / Round</span>
+                                    <span style="color:var(--brand);">${esc(research.taste_profile.soft_vs_acidic_label || "Balanced")} (${Math.round(Number(research.taste_profile.soft_vs_acidic || 50))}%)</span>
+                                    <span>Acidic / Crisp</span>
+                                  </div>
+                                  <div class="taste-bar">
+                                    <div class="taste-bar-fill" style="width:${Math.max(4, Math.min(100, Number(research.taste_profile.soft_vs_acidic || 50)))}%; background:linear-gradient(90deg, #c084fc, #a61a2e);"></div>
+                                    <div class="taste-bar-dot" style="left:${Math.max(2, Math.min(98, Number(research.taste_profile.soft_vs_acidic || 50)))}%;"></div>
+                                  </div>
+                                </div>
+                                <div class="taste-row">
+                                  <div class="taste-labels">
+                                    <span>Light-Bodied</span>
+                                    <span style="color:var(--brand);">${esc(research.taste_profile.light_vs_bold_label || "Medium")} (${Math.round(Number(research.taste_profile.light_vs_bold || 50))}%)</span>
+                                    <span>Bold / Full</span>
+                                  </div>
+                                  <div class="taste-bar">
+                                    <div class="taste-bar-fill" style="width:${Math.max(4, Math.min(100, Number(research.taste_profile.light_vs_bold || 50)))}%; background:linear-gradient(90deg, #fcd34d, #831843);"></div>
+                                    <div class="taste-bar-dot" style="left:${Math.max(2, Math.min(98, Number(research.taste_profile.light_vs_bold || 50)))}%;"></div>
+                                  </div>
+                                </div>
+                                <div class="taste-row">
+                                  <div class="taste-labels">
+                                    <span>Bone Dry</span>
+                                    <span style="color:var(--brand);">${esc(research.taste_profile.dry_vs_sweet_label || "Dry")} (${Math.round(Number(research.taste_profile.dry_vs_sweet || 10))}%)</span>
+                                    <span>Sweet / Luscious</span>
+                                  </div>
+                                  <div class="taste-bar">
+                                    <div class="taste-bar-fill" style="width:${Math.max(4, Math.min(100, Number(research.taste_profile.dry_vs_sweet || 10)))}%; background:linear-gradient(90deg, #93c5fd, #f59e0b);"></div>
+                                    <div class="taste-bar-dot" style="left:${Math.max(2, Math.min(98, Number(research.taste_profile.dry_vs_sweet || 10)))}%;"></div>
+                                  </div>
+                                </div>
+                              </div>`
+                            : ""
+                        }
+                        <div class="form-stack" style="font-size:12.5px; line-height:1.5;">
+                          ${research.producer_history ? `<div><strong style="color:var(--brand);">🏰 Producer Heritage:</strong> ${esc(research.producer_history)}</div>` : ""}
+                          ${research.wine_and_terroir ? `<div><strong style="color:var(--brand);">🍇 Terroir &amp; Vineyards:</strong> ${esc(research.wine_and_terroir)}</div>` : ""}
+                          ${research.tasting_profile ? `<div><strong style="color:var(--brand);">🍷 Tasting Profile:</strong> ${esc(research.tasting_profile)}</div>` : ""}
+                          ${research.serving_and_pairing ? `<div><strong style="color:var(--brand);">🍽️ Pairings:</strong> ${esc(research.serving_and_pairing)}</div>` : ""}
+                        </div>
+                      </div>`
+                    : ""
+                }
 
                 <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
                   <button type="button" class="btn btn-danger" id="btn-mobile-delete-wine" style="flex:1;">
@@ -2124,17 +2232,14 @@ class LekkersappieMobileApp {
                 </div>
                 ${
                   isTastedDest
-                    ? `<div class="form-row-2">
-                        <div class="field">
-                          <label>My Personal Rating (1–5 ★)</label>
-                          <input class="input" type="number" inputmode="decimal" step="0.5" min="1" max="5" name="personal_rating" value="${esc(f.personal_rating ?? "")}" placeholder="e.g. 4.5" />
-                        </div>
-                        <div class="field">
-                          <label>Where Tasted / Bought &amp; Price (${esc(this.state.currency)})</label>
-                          <div class="form-row-2">
-                            <input class="input" name="purchase_location" value="${esc(f.purchase_location)}" placeholder="Restaurant / Store" />
-                            <input class="input" type="number" inputmode="decimal" step="0.01" name="purchase_price" value="${esc(f.purchase_price)}" placeholder="Price" />
-                          </div>
+                    ? `<div class="field">
+                        ${renderPersonalRatingSlider("scan", f.personal_rating)}
+                      </div>
+                      <div class="field">
+                        <label>Where Tasted / Bought &amp; Price (${esc(this.state.currency)})</label>
+                        <div class="form-row-2">
+                          <input class="input" name="purchase_location" value="${esc(f.purchase_location)}" placeholder="Restaurant / Store" />
+                          <input class="input" type="number" inputmode="decimal" step="0.01" name="purchase_price" value="${esc(f.purchase_price)}" placeholder="Price" />
                         </div>
                       </div>
                       <div class="field">
@@ -2310,11 +2415,6 @@ class LekkersappieMobileApp {
       <div class="app-shell ${isTastedPage ? "tasted-page-theme" : ""}">
 
         <main class="scaled-zone">
-          <div class="status-strip" aria-label="Cellar summary">
-            <span><strong>${stats.total_bottles || 0}</strong> bottles · ${stats.unique_wines || 0} wines · <strong>${tastedCount}</strong> tasted</span>
-            ${this.state.tempDisplay ? `<span class="climate-chip">🌡️ ${esc(this.state.tempDisplay)}</span>` : ""}
-            ${this.state.humidityDisplay ? `<span class="climate-chip">💧 ${esc(this.state.humidityDisplay)}</span>` : ""}
-          </div>
           ${
             this.state.authRequired
               ? `<div class="panel-card" style="margin:12px; border:1px solid var(--brand); background:var(--surface);">
@@ -2418,6 +2518,59 @@ class LekkersappieMobileApp {
     });
   }
 
+  _bindRatingSlider(prefix, targetStateObj) {
+    const r = this.root;
+    if (!r) return;
+    const range = r.querySelector(`#${prefix}-rating-range`);
+    const hidden = r.querySelector(`#${prefix}-rating-hidden`);
+    const badge = r.querySelector(`#${prefix}-rating-badge`);
+    const clearBtn = r.querySelector(`#${prefix}-rating-clear`);
+    if (!range || !hidden || !badge) return;
+
+    const applyVal = (raw) => {
+      const meta = personalRatingMeta(raw);
+      hidden.value = meta.valueStr;
+      badge.textContent = meta.badgeText;
+      badge.classList.toggle("active", meta.rated);
+      if (clearBtn) clearBtn.style.display = meta.rated ? "" : "none";
+      if (targetStateObj) targetStateObj.personal_rating = meta.valueStr;
+    };
+
+    range.addEventListener("input", () => applyVal(range.value));
+    range.addEventListener("change", () => applyVal(range.value));
+    clearBtn?.addEventListener("click", () => {
+      applyVal("");
+      range.value = "4.0";
+    });
+  }
+
+  async _downloadBackupArchive(filename) {
+    if (!filename) return;
+    try {
+      this.showToast(`Downloading ${filename}…`);
+      let token = await this._getValidAccessToken(false);
+      const headers = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const res = await fetch(`/api/wine_inventory/download/backup/${encodeURIComponent(filename)}`, {
+        credentials: "same-origin",
+        headers,
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+      this.showToast(`Downloaded ${filename}`);
+    } catch (err) {
+      this.showError("Backup download failed", err);
+    }
+  }
+
   _bindEvents() {
     const r = this.root;
     r.querySelector("#btn-ha-login")?.addEventListener("click", () => this.redirectToHomeAssistantLogin());
@@ -2430,6 +2583,8 @@ class LekkersappieMobileApp {
     this._bindFormState(r.querySelector("#mobile-detail-form"), this.state.detailForm);
     this._bindFormState(r.querySelector("#mobile-scan-save-form"), this.state.scanForm);
     this._bindFormState(r.querySelector("#mobile-manual-add-form"), this.state.scanForm);
+    this._bindRatingSlider("detail", this.state.detailForm);
+    this._bindRatingSlider("scan", this.state.scanForm);
     r.querySelectorAll("textarea.textarea").forEach((el) => {
       el.addEventListener("input", () => this._autoResizeTextarea(el));
     });
@@ -2557,6 +2712,47 @@ class LekkersappieMobileApp {
       } catch (err) {
         this.showError("Vivino refresh failed", err);
       }
+    });
+    r.querySelector("#btn-settings-create-backup")?.addEventListener("click", async () => {
+      try {
+        this.showToast("Creating full cellar backup…");
+        const res = await this.apiPost("backup_create", {});
+        const createdName = res?.backup?.filename;
+        await this.fetchState();
+        if (createdName) {
+          await this._downloadBackupArchive(createdName);
+        } else {
+          this.showToast("Backup created!");
+        }
+      } catch (err) {
+        this.showError("Backup creation failed", err);
+      }
+    });
+    r.querySelector("#btn-settings-download-backup")?.addEventListener("click", async () => {
+      const sel = r.querySelector("#select-settings-backup");
+      const filename = sel?.value;
+      if (filename) await this._downloadBackupArchive(filename);
+    });
+    r.querySelector("#mobile-vivino-csv-file")?.addEventListener("change", (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          this.showToast("Importing Vivino history…");
+          const res = await this.apiPost("import", {
+            format: "csv",
+            content: String(reader.result || ""),
+          });
+          await this.fetchState();
+          this.showToast(`Imported ${res?.imported_count ?? 0} wine(s) from Vivino history!`);
+        } catch (err) {
+          this.showError("Vivino import failed", err);
+        } finally {
+          e.target.value = "";
+        }
+      };
+      reader.readAsText(file);
     });
 
     // Manual add form

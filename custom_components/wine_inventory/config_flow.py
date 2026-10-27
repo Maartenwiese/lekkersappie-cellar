@@ -228,7 +228,14 @@ class WineInventoryOptionsFlowHandler(config_entries.OptionsFlow):
         """Manage the Wine Inventory options menu."""
         return self.async_show_menu(
             step_id="init",
-            menu_options=["settings", "backup", "restore", "import_wines"],
+            menu_options=[
+                "settings",
+                "backup",
+                "download_backup",
+                "restore",
+                "import_wines",
+                "upload_vivino",
+            ],
         )
 
     async def async_step_settings(
@@ -279,6 +286,114 @@ class WineInventoryOptionsFlowHandler(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="backup",
             data_schema=vol.Schema({}),
+            errors=errors,
+        )
+
+    async def async_step_download_backup(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Download an existing cellar backup .zip archive."""
+        errors: dict[str, str] = {}
+        entry = self._entry
+        entry_id = getattr(entry, "entry_id", "") if entry is not None else ""
+        coordinator = _get_coordinator_for_entry(self.hass, entry_id)
+        available_backups = (
+            await coordinator.async_list_backups() if coordinator else []
+        )
+        backup_filenames = [b["filename"] for b in available_backups]
+
+        if not backup_filenames:
+            return self.async_show_form(
+                step_id="download_backup",
+                data_schema=vol.Schema({}),
+                errors={"base": "no_backups_available"},
+            )
+
+        if user_input is not None:
+            chosen = user_input.get("backup_file")
+            if chosen and coordinator:
+                try:
+                    download_url = await coordinator.async_stage_backup_for_download(chosen)
+                    return self.async_show_form(
+                        step_id="download_backup",
+                        data_schema=vol.Schema(
+                            {
+                                vol.Optional("backup_file", default=chosen): vol.In(
+                                    backup_filenames
+                                )
+                            }
+                        ),
+                        description_placeholders={
+                            "filename": chosen,
+                            "download_url": download_url,
+                        },
+                    )
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.exception("Staging backup for download failed: %s", err)
+                    errors["base"] = "download_staging_failed"
+
+        schema_fields = {
+            vol.Required("backup_file", default=backup_filenames[0]): vol.In(
+                backup_filenames
+            )
+        }
+        return self.async_show_form(
+            step_id="download_backup",
+            data_schema=vol.Schema(schema_fields),
+            errors=errors,
+        )
+
+    async def async_step_upload_vivino(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Upload and import a Vivino History CSV export."""
+        errors: dict[str, str] = {}
+        entry = self._entry
+        entry_id = getattr(entry, "entry_id", "") if entry is not None else ""
+        coordinator = _get_coordinator_for_entry(self.hass, entry_id)
+
+        if user_input is not None:
+            if not coordinator:
+                errors["base"] = "import_failed"
+            else:
+                csv_content = (user_input.get("csv_content") or "").strip()
+                csv_path = (user_input.get("csv_file_path") or "").strip()
+                if csv_path:
+                    try:
+                        safe_path = (
+                            Path(getattr(self.hass.config, "config_dir", ".")) / csv_path
+                        )
+                        if safe_path.is_file():
+                            csv_content = safe_path.read_text(encoding="utf-8")
+                    except Exception as err:  # noqa: BLE001
+                        _LOGGER.warning("Could not read csv_file_path %s: %s", csv_path, err)
+                if csv_content:
+                    try:
+                        res = await coordinator.async_import_vivino_csv(csv_content)
+                        _LOGGER.info(
+                            "Imported %s wines from Vivino CSV (%s cellar, %s tasted)",
+                            res.get("imported_count"),
+                            res.get("cellar_count"),
+                            res.get("tasted_count"),
+                        )
+                        return self.async_create_entry(
+                            title="", data=self._entry_options_dict()
+                        )
+                    except Exception as err:  # noqa: BLE001
+                        _LOGGER.exception("Vivino import failed: %s", err)
+                        errors["base"] = "vivino_import_failed"
+                else:
+                    errors["base"] = "no_csv_provided"
+
+        schema = vol.Schema(
+            {
+                vol.Optional("csv_content", default=""): str,
+                vol.Optional("csv_file_path", default=""): str,
+            }
+        )
+        return self.async_show_form(
+            step_id="upload_vivino",
+            data_schema=schema,
             errors=errors,
         )
 

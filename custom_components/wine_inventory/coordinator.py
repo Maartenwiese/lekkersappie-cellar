@@ -701,11 +701,18 @@ class WineInventoryCoordinator:
         from .backup import create_backup_archive
 
         config_dir = Path(getattr(self.hass.config, "config_dir", "."))
-        return await self.hass.async_add_executor_job(
+        res = await self.hass.async_add_executor_job(
             create_backup_archive,
             config_dir,
             self.db,
         )
+        filename = res.get("filename")
+        if filename:
+            try:
+                res["download_url"] = await self.async_stage_backup_for_download(filename)
+            except Exception:
+                pass
+        return res
 
     async def async_restore_backup(self, zip_source: Path | bytes | str) -> dict[str, Any]:
         """Restore database and cover images from a .zip backup archive."""
@@ -736,6 +743,29 @@ class WineInventoryCoordinator:
             self.db,
             payload,
             format_type,
+        )
+        await self.async_refresh()
+        return res
+
+    async def async_stage_backup_for_download(self, filename: str) -> str:
+        """Stage a backup archive for public HTTP download under /local/wine_inventory/backups/."""
+        from .backup import stage_backup_for_download
+
+        config_dir = Path(getattr(self.hass.config, "config_dir", "."))
+        return await self.hass.async_add_executor_job(
+            stage_backup_for_download,
+            config_dir,
+            filename,
+        )
+
+    async def async_import_vivino_csv(self, csv_text: str) -> dict[str, Any]:
+        """Import wines and tasted history from a Vivino CSV export."""
+        from .backup import import_vivino_history_csv
+
+        res = await self.hass.async_add_executor_job(
+            import_vivino_history_csv,
+            self.db,
+            csv_text,
         )
         await self.async_refresh()
         return res
