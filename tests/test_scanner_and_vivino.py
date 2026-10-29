@@ -752,15 +752,81 @@ class TestScannerVivinoAndCoordinator(unittest.TestCase):
             self.assertEqual(prog["current_bottle"], 10)
             self.assertEqual(prog["status_message"], "Downloading bottle covers...")
 
-            # 3. Test sommelier chat doesn't raise TypeError: WineDatabase.list_wines() takes 1 positional argument but 2 were given
+            # 3. Test sommelier chat doesn't raise TypeError and returns unpacked top-level keys
             async def _run_somm() -> None:
                 chat_res = await coord.async_sommelier_chat(query_text="What wine pairs with bistecca?")
                 self.assertEqual(chat_res["status"], "ok")
-                pairing = chat_res.get("pairing") or chat_res
+                # Top-level keys unpacked alongside nested pairing
+                self.assertEqual(chat_res["dish_name"], "Tuscan Bistecca")
+                self.assertEqual(chat_res["conversational_response"], "I recommend opening your bottle of 2020 Antinori Tignanello.")
+                self.assertEqual(chat_res["recommended_wines"][0]["wine_id"], w1["id"])
+                pairing = chat_res.get("pairing") or {}
                 self.assertEqual(pairing["dish_name"], "Tuscan Bistecca")
                 self.assertEqual(pairing["recommended_wines"][0]["wine_id"], w1["id"])
 
             asyncio.run(_run_somm())
+
+    def test_v052_cover_image_retry_and_vivino_wines_link(self) -> None:
+        """v0.5.2: Verify 3s and 5s retry backoff for cover downloads, and https://www.vivino.com/wines/<id> preservation."""
+        from unittest.mock import patch, MagicMock
+        from custom_components.wine_inventory.database import WineDatabase
+        from custom_components.wine_inventory.backup import (
+            download_and_save_cover_image,
+            import_vivino_full_wine_list_csv,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_dir = Path(tmp_dir)
+            db_path = config_dir / "wine_inventory.db"
+            db = WineDatabase(db_path)
+            db.initialize()
+
+            # 1. Test image retry sequence: attempt 1 fails, attempt 2 fails (after 3s), attempt 3 succeeds (after 5s)
+            valid_jpeg = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01COVER_TEST"
+            attempts = 0
+
+            def _fake_urlopen(req: Any, timeout: float = 6.0) -> Any:
+                nonlocal attempts
+                attempts += 1
+                if attempts < 3:
+                    raise urllib.error.URLError("temporary network timeout")
+                resp = MagicMock()
+                resp.read.return_value = valid_jpeg
+                resp.__enter__.return_value = resp
+                return resp
+
+            with patch("urllib.request.urlopen", side_effect=_fake_urlopen), patch("time.sleep") as mock_sleep:
+                saved_url = download_and_save_cover_image(
+                    config_dir,
+                    "https://images.vivino.com/labels/retry_wine.jpg",
+                )
+                self.assertEqual(attempts, 3)
+                self.assertEqual(mock_sleep.call_count, 2)
+                mock_sleep.assert_any_call(3)
+                mock_sleep.assert_any_call(5)
+                self.assertTrue(saved_url.startswith("/local/wine_inventory/covers/"))
+                cover_file = config_dir / "www" / "wine_inventory" / "covers" / "vivino_retry_wine.jpg"
+                self.assertTrue(cover_file.exists())
+                self.assertEqual(cover_file.read_bytes(), valid_jpeg)
+
+            # 2. Test Vivino URL format preservation (https://www.vivino.com/wines/<id>) without rewriting to /w/
+            csv_content = (
+                "Winery,Wine name,Vintage,Region,Country,Regional wine style,Average rating,Wine ratings count,Your rating,Your review,Personal Note,Wine type,Drinking Window,Link to wine,Label image\n"
+                'Marchesi Antinori,Tignanello,2019,Tuscany,Italy,Tuscan Red,4.6,8400,4.8,"Masterpiece","Cellar gem",Red,2024-2040,https://www.vivino.com/wines/160128212,https://images.vivino.com/labels/tig.jpg\n'
+            )
+            res = import_vivino_full_wine_list_csv(config_dir, db, csv_content, download_images=False)
+            self.assertEqual(res["tasted_imported"], 1)
+
+            wines = db.list_wines()
+            tig = [w for w in wines if "Tignanello" in w["name"]][0]
+            self.assertEqual(tig["vivino_url"], "https://www.vivino.com/wines/160128212")
+            self.assertEqual(tig["vivino_wine_id"], 160128212)
+
+            # 3. Verify db.initialize() migration does NOT wipe https://www.vivino.com/wines/<id>
+            db.initialize()
+            tig_after_init = [w for w in db.list_wines() if "Tignanello" in w["name"]][0]
+            self.assertEqual(tig_after_init["vivino_url"], "https://www.vivino.com/wines/160128212")
+            self.assertEqual(tig_after_init["vivino_wine_id"], 160128212)
 
 
 if __name__ == "__main__":

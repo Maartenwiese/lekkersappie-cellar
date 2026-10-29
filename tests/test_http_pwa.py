@@ -610,12 +610,14 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
             or '"version": "0.4.0"' in manifest_json
             or '"version": "0.5.0"' in manifest_json
             or '"version": "0.5.1"' in manifest_json
+            or '"version": "0.5.2"' in manifest_json
         )
         self.assertTrue(
             "v0.3.9" in app_js
             or "v0.4.0" in app_js
             or "v0.5.0" in app_js
             or "v0.5.1" in app_js
+            or "v0.5.2" in app_js
         )
 
         # 2. Font scale defaults to 1.15 (Large)

@@ -15,6 +15,7 @@ import re
 import shutil
 import sqlite3
 import tempfile
+import time
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 import urllib.request
@@ -581,23 +582,39 @@ def download_and_save_cover_image(
         if target_path.exists() and target_path.stat().st_size > 0:
             return local_url
 
-        req = urllib.request.Request(
-            clean_url,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-            data = resp.read()
-            if data and is_valid_image_bytes(data):
-                target_path.write_bytes(data)
-                return local_url
-            if data and len(data) <= MAX_IMAGE_UPLOAD_BYTES:
-                target_path.write_bytes(data)
-                return local_url
+        delays = [0, 3, 5]
+        last_err: Exception | None = None
+        for attempt_idx, delay in enumerate(delays, 1):
+            if delay > 0:
+                time.sleep(delay)
+            try:
+                req = urllib.request.Request(
+                    clean_url,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+                    },
+                )
+                with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+                    data = resp.read()
+                    if data and is_valid_image_bytes(data):
+                        target_path.write_bytes(data)
+                        return local_url
+                    if data and len(data) <= MAX_IMAGE_UPLOAD_BYTES:
+                        target_path.write_bytes(data)
+                        return local_url
+            except Exception as err:
+                last_err = err
+                _LOGGER.debug(
+                    "Cover image download attempt %d/3 failed for %s: %s",
+                    attempt_idx,
+                    clean_url,
+                    err,
+                )
+        if last_err:
+            _LOGGER.debug("Could not download label image %s after 3 attempts: %s", clean_url, last_err)
     except Exception as err:
-        _LOGGER.debug("Could not download label image %s: %s", clean_url, err)
+        _LOGGER.debug("Could not process label image %s: %s", clean_url, err)
 
     return clean_url
 
@@ -714,14 +731,18 @@ def import_vivino_full_wine_list_csv(
         location = _val("scan/review location", "purchase location", "location")
         link = _val("link to wine", "vivino url", "link", "url")
         wine_id = _extract_vivino_wine_id(link)
-        if wine_id:
-            link = f"https://www.vivino.com/w/{wine_id}"
-            if vintage:
-                link += f"?year={vintage}"
-        if wine_id:
-            link = f"https://www.vivino.com/w/{wine_id}"
-            if vintage:
-                link += f"?year={vintage}"
+        if link and link.strip().startswith(("https://", "http://")):
+            clean_link = link.strip()
+            if "vivino.com/wines/" in clean_link:
+                link = clean_link
+            elif wine_id:
+                link = f"https://www.vivino.com/wines/{wine_id}"
+            else:
+                link = clean_link
+        elif wine_id:
+            link = f"https://www.vivino.com/wines/{wine_id}"
+        else:
+            link = ""
         img_url = _val("label image", "image url", "label", "image")
 
         group_key = f"{winery.lower()}:::{name.lower()}:::{vintage or 0}"
@@ -941,10 +962,18 @@ def import_vivino_cellar_csv(
 
         link = _val("link to wine", "vivino url", "link", "url")
         wine_id = _extract_vivino_wine_id(link)
-        if wine_id:
-            link = f"https://www.vivino.com/w/{wine_id}"
-            if vintage:
-                link += f"?year={vintage}"
+        if link and link.strip().startswith(("https://", "http://")):
+            clean_link = link.strip()
+            if "vivino.com/wines/" in clean_link:
+                link = clean_link
+            elif wine_id:
+                link = f"https://www.vivino.com/wines/{wine_id}"
+            else:
+                link = clean_link
+        elif wine_id:
+            link = f"https://www.vivino.com/wines/{wine_id}"
+        else:
+            link = ""
 
         db.add_or_increment_wine(
             winery=winery,
@@ -1204,10 +1233,18 @@ def import_vivino_history_csv(db: WineDatabase, csv_text: str) -> dict[str, Any]
 
         link = _val("link to wine", "vivino url", "link", "url")
         wine_id = _extract_vivino_wine_id(link)
-        if wine_id:
-            link = f"https://www.vivino.com/w/{wine_id}"
-            if vintage:
-                link += f"?year={vintage}"
+        if link and link.strip().startswith(("https://", "http://")):
+            clean_link = link.strip()
+            if "vivino.com/wines/" in clean_link:
+                link = clean_link
+            elif wine_id:
+                link = f"https://www.vivino.com/wines/{wine_id}"
+            else:
+                link = clean_link
+        elif wine_id:
+            link = f"https://www.vivino.com/wines/{wine_id}"
+        else:
+            link = ""
 
         is_as_tasted = qty <= 0
         db.add_or_increment_wine(

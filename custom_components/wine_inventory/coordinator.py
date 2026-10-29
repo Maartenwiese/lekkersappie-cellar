@@ -814,7 +814,13 @@ class WineInventoryCoordinator:
             conversation_history=conversation_history,
             model=self.gemini_model,
         )
-        return result
+        pairing = result.get("pairing") or {}
+        return {
+            "status": "ok",
+            "pairing": pairing,
+            **pairing,
+            "model_used": result.get("model_used"),
+        }
 
     async def async_enrich_bottle(
         self,

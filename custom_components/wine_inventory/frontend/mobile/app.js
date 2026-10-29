@@ -1,5 +1,5 @@
 /**
- * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.5.1)
+ * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.5.2)
  * Runs parallel to the native Home Assistant UI, inherits Home Assistant OAuth2
  * authentication, defaults to Large (L) text scale, and supports Home Screen installation.
  */
@@ -2094,7 +2094,7 @@ class LekkersappieMobileApp {
       <div class="sheet-backdrop" id="sheet-backdrop">
         <div class="sheet sheet-fullscreen">
           <div class="sheet-header">
-            ${isDone ? `<button type="button" class="btn btn-icon btn-back" id="btn-close-import-progress" aria-label="Done"><span aria-hidden="true">‹</span></button>` : `<div></div>`}
+            <button type="button" class="btn btn-icon btn-back" id="${isDone ? "btn-close-import-progress" : "btn-return-cellar-progress"}" aria-label="${isDone ? "Done" : "Return to Cellar"}"><span aria-hidden="true">‹</span></button>
             <h2>${isDone ? "✅ Import Complete" : "🍇 Importing Vivino Data"}</h2>
           </div>
           <div class="sheet-body">
@@ -2103,7 +2103,7 @@ class LekkersappieMobileApp {
                 <span style="font-size:48px;" class="${isDone ? "" : "sommai-spin"}">${isDone ? "🎉" : "🍇"}</span>
                 <h3 style="font-size:19px; margin:8px 0 4px;">${isDone ? "Import Finished Successfully!" : "Processing Your Wine Archive"}</h3>
                 <p style="font-size:13px; color:var(--text-muted); margin:0;">
-                  ${isDone ? "All wines, tasted records, and bottle photos have been processed." : "Please keep this screen open while we process your export."}
+                  ${isDone ? "All wines, tasted records, and bottle photos have been processed." : "Import is running in the background. You can safely return to your cellar."}
                 </p>
               </div>
 
@@ -2126,8 +2126,11 @@ class LekkersappieMobileApp {
                   🍾 View Cellar &amp; Tasted Wines
                 </button>
               ` : `
-                <div style="text-align:center; font-size:12.5px; color:var(--text-muted);">
-                  ⏳ Running in background…
+                <button type="button" class="btn btn-secondary btn-lg" id="btn-return-cellar-import" style="width:100%; margin-top:8px;">
+                  ‹ Return to Cellar (runs in background)
+                </button>
+                <div style="text-align:center; font-size:12.5px; color:var(--text-muted); margin-top:10px;">
+                  ⏳ Import will continue processing in the background.
                 </div>
               `}
             </div>
@@ -3118,6 +3121,9 @@ class LekkersappieMobileApp {
           };
           this._updateProgressUi(this.state.importProgressData);
           await this.fetchState();
+          if (!this.state.importProgressModal) {
+            this.showToast("🍾 Vivino import complete! Cellar updated.");
+          }
           this.render();
         } catch (err) {
           clearInterval(pollTimer);
@@ -3145,6 +3151,18 @@ class LekkersappieMobileApp {
       this.state.importPendingFile = null;
       this.state.importProgressData = null;
       this.render();
+    });
+    r.querySelector("#btn-return-cellar-progress")?.addEventListener("click", () => {
+      this.state.importProgressModal = false;
+      this.state.activeNav = "cellar";
+      this.render();
+      this.showToast("Vivino import running in background…");
+    });
+    r.querySelector("#btn-return-cellar-import")?.addEventListener("click", () => {
+      this.state.importProgressModal = false;
+      this.state.activeNav = "cellar";
+      this.render();
+      this.showToast("Vivino import running in background…");
     });
     r.querySelector("#btn-finish-import-progress")?.addEventListener("click", () => {
       this.state.importProgressModal = false;
@@ -3418,14 +3436,15 @@ class LekkersappieMobileApp {
         image_data: image,
         history: historyPayload,
       });
+      const p = (res && (res.pairing || res)) || {};
       this.state.sommAiMessages.push({
         role: "assistant",
-        text: res.conversational_response || "Here are my pairing recommendations.",
-        dish_name: res.dish_name,
-        dish_analysis: res.dish_analysis,
-        pairing_reasoning: res.pairing_reasoning,
-        recommended_wines: res.recommended_wines || [],
-        conversational_response: res.conversational_response,
+        text: p.conversational_response || p.text || "Here are my pairing recommendations.",
+        dish_name: p.dish_name,
+        dish_analysis: p.dish_analysis,
+        pairing_reasoning: p.pairing_reasoning,
+        recommended_wines: p.recommended_wines || [],
+        conversational_response: p.conversational_response,
         timestamp: new Date().toISOString(),
       });
     } catch (err) {

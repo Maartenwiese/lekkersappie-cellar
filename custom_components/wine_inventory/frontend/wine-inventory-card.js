@@ -5521,14 +5521,15 @@ class WineSommAICard extends HTMLElement {
         image_data: image,
         history: historyPayload,
       });
+      const p = (res && (res.pairing || res)) || {};
       this._messages.push({
         role: "assistant",
-        text: res.conversational_response || "Here are my pairing recommendations.",
-        dish_name: res.dish_name,
-        dish_analysis: res.dish_analysis,
-        pairing_reasoning: res.pairing_reasoning,
-        recommended_wines: res.recommended_wines || [],
-        conversational_response: res.conversational_response,
+        text: p.conversational_response || p.text || "Here are my pairing recommendations.",
+        dish_name: p.dish_name,
+        dish_analysis: p.dish_analysis,
+        pairing_reasoning: p.pairing_reasoning,
+        recommended_wines: p.recommended_wines || [],
+        conversational_response: p.conversational_response,
       });
     } catch (err) {
       this._error = err?.message || "Failed to get sommelier recommendation.";

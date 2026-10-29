@@ -275,8 +275,7 @@ class WineDatabase:
             SET vivino_url = '', vivino_rating = NULL, vivino_ratings_count = NULL,
                 vivino_price_estimate = NULL, rating_source = '', vivino_wine_id = NULL,
                 vivino_match_confidence = 'none'
-            WHERE vivino_url LIKE '%vivino.com/wines/%'
-               OR vivino_url LIKE '%vivino.com/search/%'
+            WHERE vivino_url LIKE '%vivino.com/search/%'
             """
         )
 

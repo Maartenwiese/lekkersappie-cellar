@@ -263,7 +263,7 @@ class TestWineDatabase(unittest.TestCase):
             self.assertEqual(detail_unlinked["vivino_url"], "")
 
     def test_vivino_grounding_migration_clears_untrusted_links(self) -> None:
-        """Gemini-estimated ratings and legacy /wines/<id> links are cleared on startup."""
+        """Gemini-estimated ratings and legacy search links are cleared on startup."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db = WineDatabase(Path(tmpdir) / "wine_inventory.db")
             db.initialize()
@@ -272,12 +272,12 @@ class TestWineDatabase(unittest.TestCase):
             )
             legacy = db.add_or_increment_wine(
                 winery="Antinori", name="Tignanello", vintage=2019, vivino_rating=4.6,
-                vivino_url="https://www.vivino.com/wines/1652?year=2019", rating_source="vivino",
+                vivino_url="https://www.vivino.com/search/wines?q=tignanello", rating_source="vivino",
             )
             good = db.add_or_increment_wine(
                 winery="Penfolds", name="Grange", vintage=2018, vivino_rating=4.7,
-                vivino_url="https://www.vivino.com/w/1136930?year=2018", rating_source="vivino",
-                vivino_wine_id=1136930, vivino_match_confidence="high",
+                vivino_url="https://www.vivino.com/wines/160128212", rating_source="vivino",
+                vivino_wine_id=160128212, vivino_match_confidence="high",
             )
             db.initialize()  # simulate restart after upgrade
 
@@ -287,9 +287,9 @@ class TestWineDatabase(unittest.TestCase):
             self.assertEqual(e["rating_source"], "")
             self.assertEqual(l["vivino_url"], "")
             self.assertIsNone(l["vivino_rating"])
-            self.assertEqual(g["vivino_url"], "https://www.vivino.com/w/1136930?year=2018")
+            self.assertEqual(g["vivino_url"], "https://www.vivino.com/wines/160128212")
             self.assertEqual(g["vivino_rating"], 4.7)
-            self.assertEqual(g["vivino_wine_id"], 1136930)
+            self.assertEqual(g["vivino_wine_id"], 160128212)
             self.assertEqual(g["vivino_match_confidence"], "high")
 
     def test_empty_string_numeric_fields_and_legacy_db_self_healing(self) -> None:
