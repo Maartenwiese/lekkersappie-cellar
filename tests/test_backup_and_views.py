@@ -543,10 +543,20 @@ class TestBackupRestoreAndViews(unittest.TestCase):
             self.assertIn("Incredible structure", sassicaia["general_notes"])
             self.assertEqual(sassicaia["drink_from_year"], 2025)
             self.assertEqual(sassicaia["drink_until_year"], 2045)
+            self.assertEqual(sassicaia["vivino_url"], "https://www.vivino.com/w/12345?year=2018")
+            self.assertEqual(sassicaia["vivino_wine_id"], 12345)
+            self.assertEqual(sassicaia["vivino_match_confidence"], "confirmed")
+
+            # Verify that database initialize / restart does not wipe canonical Vivino links
+            db.initialize()
+            sassicaia_reloaded = [w for w in db.list_wines() if "Sassicaia" in w["name"]][0]
+            self.assertEqual(sassicaia_reloaded["vivino_url"], "https://www.vivino.com/w/12345?year=2018")
+            self.assertEqual(sassicaia_reloaded["vivino_wine_id"], 12345)
 
             margaux = [w for w in wines if "Margaux" in w["name"]][0]
             self.assertEqual(margaux["quantity"], 0)
             self.assertEqual(margaux["personal_rating"], 4.9)
+            self.assertEqual(margaux["vivino_url"], "https://www.vivino.com/w/67890?year=2015")
 
             stats = db.get_statistics()
             self.assertEqual(stats["total_bottles"], 2)

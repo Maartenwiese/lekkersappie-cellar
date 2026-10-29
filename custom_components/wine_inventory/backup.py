@@ -652,6 +652,7 @@ def import_vivino_full_wine_list_csv(
     db: WineDatabase,
     csv_text: str,
     download_images: bool = True,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Parse Vivino full_wine_list.csv and import all wines as Tasted."""
     reader = csv.DictReader(io.StringIO(csv_text))
@@ -713,6 +714,14 @@ def import_vivino_full_wine_list_csv(
         location = _val("scan/review location", "purchase location", "location")
         link = _val("link to wine", "vivino url", "link", "url")
         wine_id = _extract_vivino_wine_id(link)
+        if wine_id:
+            link = f"https://www.vivino.com/w/{wine_id}"
+            if vintage:
+                link += f"?year={vintage}"
+        if wine_id:
+            link = f"https://www.vivino.com/w/{wine_id}"
+            if vintage:
+                link += f"?year={vintage}"
         img_url = _val("label image", "image url", "label", "image")
 
         group_key = f"{winery.lower()}:::{name.lower()}:::{vintage or 0}"
@@ -785,6 +794,8 @@ def import_vivino_full_wine_list_csv(
         }
         if urls_to_download:
             url_map = {}
+            total_dl = len(urls_to_download)
+            done_dl = 0
             with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
                 future_to_url = {
                     executor.submit(download_and_save_cover_image, config_dir, u): u
@@ -792,6 +803,7 @@ def import_vivino_full_wine_list_csv(
                 }
                 for future in concurrent.futures.as_completed(future_to_url):
                     u = future_to_url[future]
+                    done_dl += 1
                     try:
                         res_url = future.result()
                         url_map[u] = res_url
@@ -800,11 +812,32 @@ def import_vivino_full_wine_list_csv(
                     except Exception as err:
                         _LOGGER.debug("Cover download error for %s: %s", u, err)
                         url_map[u] = u
+                    if progress_callback and (done_dl % 15 == 0 or done_dl == total_dl):
+                        pct = 15 + int((done_dl / max(1, total_dl)) * 20)
+                        progress_callback({
+                            "status": "running",
+                            "phase": "downloading_covers",
+                            "percent": pct,
+                            "current": done_dl,
+                            "total": total_dl,
+                            "message": f"Downloading bottle label photos ({done_dl}/{total_dl})...",
+                        })
             for w in grouped_wines.values():
                 if w.get("image_url") in url_map:
                     w["image_url"] = url_map[w["image_url"]]
 
-    for w in grouped_wines.values():
+    total_wines = len(grouped_wines)
+    for idx, w in enumerate(grouped_wines.values(), 1):
+        if progress_callback and (idx % 25 == 0 or idx == total_wines):
+            pct = 35 + int((idx / max(1, total_wines)) * 10)
+            progress_callback({
+                "status": "running",
+                "phase": "saving_tasted",
+                "percent": pct,
+                "current": idx,
+                "total": total_wines,
+                "message": f"Saving tasted records to database ({idx}/{total_wines})...",
+            })
         db.add_or_increment_wine(
             winery=w["winery"],
             name=w["name"],
@@ -845,6 +878,7 @@ def import_vivino_cellar_csv(
     config_dir: Path,
     db: WineDatabase,
     csv_text: str,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Parse Vivino cellar.csv and populate wines into active cellar inventory."""
     reader = csv.DictReader(io.StringIO(csv_text))
@@ -907,6 +941,10 @@ def import_vivino_cellar_csv(
 
         link = _val("link to wine", "vivino url", "link", "url")
         wine_id = _extract_vivino_wine_id(link)
+        if wine_id:
+            link = f"https://www.vivino.com/w/{wine_id}"
+            if vintage:
+                link += f"?year={vintage}"
 
         db.add_or_increment_wine(
             winery=winery,
@@ -1023,23 +1061,34 @@ def import_vivino_export_zip(
             if full_wine_text:
                 if progress_callback:
                     progress_callback({
+                        "status": "running",
                         "phase": "parsing_tasted",
                         "percent": 15,
                         "message": "Parsing tasted wines catalog and downloading bottle covers...",
                     })
                 tasted_res = import_vivino_full_wine_list_csv(
-                    config_dir, db, full_wine_text, download_images=download_images
+                    config_dir,
+                    db,
+                    full_wine_text,
+                    download_images=download_images,
+                    progress_callback=progress_callback,
                 )
 
             cellar_res = {}
             if cellar_text:
                 if progress_callback:
                     progress_callback({
+                        "status": "running",
                         "phase": "parsing_cellar",
                         "percent": 40,
                         "message": "Populating active cellar stock batches...",
                     })
-                cellar_res = import_vivino_cellar_csv(config_dir, db, cellar_text)
+                cellar_res = import_vivino_cellar_csv(
+                    config_dir,
+                    db,
+                    cellar_text,
+                    progress_callback=progress_callback,
+                )
 
             tasted_count = tasted_res.get("tasted_imported", 0)
             cellar_count = cellar_res.get("cellar_imported", 0)
@@ -1145,6 +1194,21 @@ def import_vivino_history_csv(db: WineDatabase, csv_text: str) -> dict[str, Any]
         wine_type = _val("wine type", "type", "style") or infer_wine_type_from_text(text_corpus)
         varietal = _val("varietal", "grape", "grape variety") or infer_varietal_from_text(text_corpus)
 
+        raw_avg = _val("average rating", "rating")
+        avg_rating: float | None = None
+        if raw_avg:
+            try:
+                avg_rating = round(float(raw_avg), 1)
+            except (ValueError, TypeError):
+                avg_rating = None
+
+        link = _val("link to wine", "vivino url", "link", "url")
+        wine_id = _extract_vivino_wine_id(link)
+        if wine_id:
+            link = f"https://www.vivino.com/w/{wine_id}"
+            if vintage:
+                link += f"?year={vintage}"
+
         is_as_tasted = qty <= 0
         db.add_or_increment_wine(
             winery=winery,
@@ -1155,6 +1219,11 @@ def import_vivino_history_csv(db: WineDatabase, csv_text: str) -> dict[str, Any]
             region=region,
             country=country,
             drink_window_note="",
+            vivino_rating=avg_rating,
+            vivino_url=link,
+            vivino_wine_id=wine_id,
+            vivino_match_confidence="confirmed" if link else "",
+            rating_source="vivino" if link else "",
             general_notes=notes,
             batch_notes=notes,
             personal_rating=personal_rating,

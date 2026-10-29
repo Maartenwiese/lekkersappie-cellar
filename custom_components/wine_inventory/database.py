@@ -1045,7 +1045,6 @@ class WineDatabase:
 
     def list_wines(
         self,
-        *,
         include_out_of_stock: bool = True,
         wine_type: str | None = None,
         search: str | None = None,

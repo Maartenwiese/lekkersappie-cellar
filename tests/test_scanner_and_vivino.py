@@ -663,6 +663,105 @@ class TestScannerVivinoAndCoordinator(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_v050_sommai_list_wines_positional_and_progress_reporting(self) -> None:
+        """v0.5.0 regression: verify WineDatabase.list_wines accepts positional args, sommelier chat executes, and progress reports running."""
+        import tempfile
+        from pathlib import Path
+        from custom_components.wine_inventory.database import WineDatabase
+        from custom_components.wine_inventory.coordinator import WineInventoryCoordinator
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            db_path = Path(tmp_dir) / "test.db"
+            db = WineDatabase(db_path)
+            db.initialize()
+
+            # Add one in-stock wine and one out-of-stock tasted wine
+            w1 = db.add_or_increment_wine(winery="Antinori", name="Tignanello", vintage=2020, quantity=3)
+            w2 = db.add_or_increment_wine(winery="Gaja", name="Barbaresco", vintage=2019, quantity=0, as_tasted=True)
+
+            # 1. Positional calls to list_wines must not raise TypeError
+            in_stock = db.list_wines(False)
+            self.assertEqual(len(in_stock), 1)
+            self.assertEqual(in_stock[0]["id"], w1["id"])
+
+            all_wines = db.list_wines(True)
+            self.assertEqual(len(all_wines), 2)
+
+            # 2. Mock session and Coordinator setup
+            pairing_payload = {
+                "dish_name": "Tuscan Bistecca",
+                "dish_analysis": {"richness": "High", "acidity": "Medium", "sweetness": "Low", "spice": "Low", "flavor_notes": ["grilled beef"]},
+                "pairing_reasoning": "Tignanello has bold tannins and acidity to cut through rich beef.",
+                "recommended_wines": [
+                    {
+                        "wine_id": w1["id"],
+                        "match_type": "best",
+                        "vintage": 2020,
+                        "wine_name": "Tignanello",
+                        "producer": "Antinori",
+                        "serving_temp": "16-18°C",
+                        "decant_minutes": 60,
+                        "pairing_notes": "Perfect match",
+                    }
+                ],
+                "conversational_response": "I recommend opening your bottle of 2020 Antinori Tignanello.",
+            }
+            gemini_resp = {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [{"text": json.dumps(pairing_payload)}],
+                        }
+                    }
+                ]
+            }
+
+            class _SommSession:
+                def post(self, url: str, **kwargs: Any) -> Any:
+                    class _Resp:
+                        status = 200
+                        async def text(self) -> str:
+                            return json.dumps(gemini_resp)
+                        async def __aenter__(self) -> Any:
+                            return self
+                        async def __aexit__(self, *args: Any) -> None:
+                            pass
+                    return _Resp()
+
+            coord = WineInventoryCoordinator(
+                hass=_StubHass(Path(tmp_dir)),
+                entry_id="test_entry",
+                config={"gemini_api_key": "test-key"},
+                session_getter=lambda h: _SommSession(),
+            )
+            coord.db = db
+
+            # Progress tracking must report running=True when status is 'running'
+            coord._import_progress = {
+                "status": "running",
+                "percent": 30,
+                "current": 10,
+                "total": 50,
+                "message": "Downloading bottle covers...",
+                "wine_name": "",
+            }
+            prog = coord.get_import_progress()
+            self.assertTrue(prog["running"])
+            self.assertEqual(prog["progress_pct"], 30)
+            self.assertEqual(prog["total_bottles"], 50)
+            self.assertEqual(prog["current_bottle"], 10)
+            self.assertEqual(prog["status_message"], "Downloading bottle covers...")
+
+            # 3. Test sommelier chat doesn't raise TypeError: WineDatabase.list_wines() takes 1 positional argument but 2 were given
+            async def _run_somm() -> None:
+                chat_res = await coord.async_sommelier_chat(query_text="What wine pairs with bistecca?")
+                self.assertEqual(chat_res["status"], "ok")
+                pairing = chat_res.get("pairing") or chat_res
+                self.assertEqual(pairing["dish_name"], "Tuscan Bistecca")
+                self.assertEqual(pairing["recommended_wines"][0]["wine_id"], w1["id"])
+
+            asyncio.run(_run_somm())
+
 
 if __name__ == "__main__":
     unittest.main()

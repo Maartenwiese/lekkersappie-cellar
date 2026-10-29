@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 import csv
+import functools
 import json
 import logging
 from pathlib import Path
@@ -771,9 +773,15 @@ class WineInventoryCoordinator:
     def get_import_progress(self) -> dict[str, Any]:
         """Return the current import and enrichment progress."""
         res = dict(self._import_progress)
-        res["running"] = self._import_progress.get("status") in ("importing", "enriching")
+        status = str(self._import_progress.get("status", "")).lower()
+        res["running"] = status in ("running", "importing", "enriching", "parsing", "downloading")
         res["progress_pct"] = self._import_progress.get("percent", 0)
+        res["percent"] = self._import_progress.get("percent", 0)
         res["status_message"] = self._import_progress.get("message", "")
+        res["message"] = self._import_progress.get("message", "")
+        res["stage"] = status or "running"
+        res["total_bottles"] = self._import_progress.get("total", 0)
+        res["current_bottle"] = self._import_progress.get("current", 0)
         return res
 
     async def async_sommelier_chat(
@@ -792,7 +800,7 @@ class WineInventoryCoordinator:
             mime_type, image_bytes = parse_image_data_uri(image_data)
 
         cellar_wines = await self.hass.async_add_executor_job(
-            self.db.list_wines, False
+            functools.partial(self.db.list_wines, include_out_of_stock=False)
         )
 
         session = self._get_http_session()
@@ -808,9 +816,15 @@ class WineInventoryCoordinator:
         )
         return result
 
-    async def async_enrich_bottle(self, wine_id: int) -> dict[str, Any]:
+    async def async_enrich_bottle(
+        self,
+        wine_id: int,
+        refresh: bool = True,
+        bypass_rate_limit: bool = False,
+    ) -> dict[str, Any]:
         """Call Gemini to enrich missing cataloguing and sommelier details for a wine."""
-        self._check_gemini_rate_limit()
+        if not bypass_rate_limit:
+            self._check_gemini_rate_limit()
         wine = await self.hass.async_add_executor_job(
             self.db.get_wine_detail, int(wine_id)
         )
@@ -852,7 +866,8 @@ class WineInventoryCoordinator:
         updated_wine = await self.hass.async_add_executor_job(
             self.db.update_wine, int(wine_id), updates
         )
-        await self.async_refresh()
+        if refresh:
+            await self.async_refresh()
         return {
             "status": "ok",
             "wine": updated_wine,
@@ -901,7 +916,7 @@ class WineInventoryCoordinator:
         enriched_count = 0
         if enrich_ai and self.gemini_api_key:
             all_wines = await self.hass.async_add_executor_job(
-                self.db.list_wines, True
+                functools.partial(self.db.list_wines, include_out_of_stock=True)
             )
             targets = [w for w in all_wines if not w.get("research_notes")]
             total_targets = len(targets)
@@ -926,8 +941,11 @@ class WineInventoryCoordinator:
                         "message": f"Enriching bottle {idx}/{total_targets} ({wine_name})...",
                     }
                     try:
-                        await self.async_enrich_bottle(int(w["id"]))
+                        await self.async_enrich_bottle(
+                            int(w["id"]), refresh=False, bypass_rate_limit=True
+                        )
                         enriched_count += 1
+                        await asyncio.sleep(0.3)
                     except Exception as err:
                         _LOGGER.warning("Enrichment skipped for %s: %s", wine_name, err)
 
@@ -979,7 +997,7 @@ class WineInventoryCoordinator:
         if enrich_ai and self.gemini_api_key:
             # Target in-stock cellar wines first, then wines missing research
             all_wines = await self.hass.async_add_executor_job(
-                self.db.list_wines, True
+                functools.partial(self.db.list_wines, include_out_of_stock=True)
             )
             cellar_targets = [
                 w for w in all_wines
@@ -1013,8 +1031,11 @@ class WineInventoryCoordinator:
                         "message": f"Enriching bottle {idx}/{total_targets} with Sommelier AI ({wine_name})...",
                     }
                     try:
-                        await self.async_enrich_bottle(int(w["id"]))
+                        await self.async_enrich_bottle(
+                            int(w["id"]), refresh=False, bypass_rate_limit=True
+                        )
                         enriched_count += 1
+                        await asyncio.sleep(0.3)
                     except Exception as err:
                         _LOGGER.warning("Enrichment skipped for bottle %s: %s", wine_name, err)
 

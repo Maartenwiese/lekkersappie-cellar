@@ -1,5 +1,5 @@
 /**
- * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.5.0)
+ * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.5.1)
  * Runs parallel to the native Home Assistant UI, inherits Home Assistant OAuth2
  * authentication, defaults to Large (L) text scale, and supports Home Screen installation.
  */
@@ -3083,15 +3083,15 @@ class LekkersappieMobileApp {
       pollTimer = setInterval(async () => {
         try {
           const prog = await this.apiGet("import_progress");
-          if (prog && prog.stage) {
+          if (prog) {
             this.state.importProgressData = prog;
             this._updateProgressUi(prog);
-            if (!prog.running && prog.progress_pct >= 100) {
+            if (!prog.running && (prog.progress_pct >= 100 || prog.percent >= 100 || prog.status === "completed")) {
               clearInterval(pollTimer);
             }
           }
         } catch (_) {}
-      }, 1000);
+      }, 800);
 
       const reader = new FileReader();
       reader.onload = async () => {
@@ -3103,16 +3103,20 @@ class LekkersappieMobileApp {
           };
           const res = await this.apiPost("import", payload);
           clearInterval(pollTimer);
+          const totalImported = (res?.cellar_imported ?? 0) + (res?.tasted_imported ?? res?.imported_count ?? 0);
           this.state.importProgressData = {
             running: false,
             progress_pct: 100,
+            percent: 100,
+            status: "completed",
             stage: "complete",
             status_message: isZip
-              ? `Imported ${res?.cellar_imported ?? 0} cellar (${res?.cellar_bottles ?? 0} bottles), ${res?.tasted_imported ?? 0} tasted, ${res?.images_downloaded ?? 0} covers.`
-              : `Imported ${res?.imported_count ?? 0} wines.`,
-            total_bottles: (res?.cellar_imported ?? 0) + (res?.tasted_imported ?? 0),
-            current_bottle: (res?.cellar_imported ?? 0) + (res?.tasted_imported ?? 0),
+              ? `Imported ${res?.cellar_imported ?? 0} cellar (${res?.cellar_bottles ?? 0} bottles), ${res?.tasted_imported ?? 0} tasted, ${res?.images_downloaded ?? 0} covers, ${res?.enriched_count ?? 0} AI enriched.`
+              : `Imported ${res?.imported_count ?? 0} wines (${res?.enriched_count ?? 0} AI enriched).`,
+            total_bottles: totalImported,
+            current_bottle: totalImported,
           };
+          this._updateProgressUi(this.state.importProgressData);
           await this.fetchState();
           this.render();
         } catch (err) {
@@ -3120,6 +3124,8 @@ class LekkersappieMobileApp {
           this.state.importProgressData = {
             running: false,
             progress_pct: 100,
+            percent: 100,
+            status: "error",
             stage: "error",
             status_message: `Import failed: ${err?.message || "Unknown error"}`,
           };
@@ -3368,12 +3374,15 @@ class LekkersappieMobileApp {
     const fill = r.querySelector(".import-progress-fill");
     const pctSpan = r.querySelector(".import-progress-pct");
     const statusDiv = r.querySelector(".import-progress-status-text");
-    const pct = Math.max(0, Math.min(100, Math.round(prog.progress_pct || 0)));
+    const pct = Math.max(0, Math.min(100, Math.round(prog.progress_pct ?? prog.percent ?? 0)));
     if (fill) fill.style.width = `${pct}%`;
     if (pctSpan) pctSpan.textContent = `${pct}%`;
     if (statusDiv) {
-      statusDiv.innerHTML = `<strong>Status:</strong> ${esc(prog.status_message || "Working…")}${
-        prog.total_bottles ? `<div style="margin-top:2px;">Bottles: ${prog.current_bottle || 0} / ${prog.total_bottles}</div>` : ""
+      const msg = prog.status_message || prog.message || "Working…";
+      const total = prog.total_bottles || prog.total || 0;
+      const current = prog.current_bottle || prog.current || 0;
+      statusDiv.innerHTML = `<strong>Status:</strong> ${esc(msg)}${
+        total ? `<div style="margin-top:4px; font-weight:600; color:var(--text);">Bottle ${current} / ${total}</div>` : ""
       }`;
     }
   }
