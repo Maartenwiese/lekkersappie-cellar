@@ -117,6 +117,15 @@ views:
               columns: full
               rows: auto
           - type: heading
+            heading: SommAI Food & Wine Pairing
+            heading_style: subtitle
+            icon: mdi:robot-excited-outline
+          - type: custom:wine-sommai-card
+            title: SommAI Sommelier
+            grid_options:
+              columns: full
+              rows: auto
+          - type: heading
             heading: Stock by Wine Style
             heading_style: subtitle
             icon: mdi:chart-pie
@@ -238,6 +247,31 @@ views:
             title: Lekkersappie Tasted
             default_view: list
             default_tab: tasted
+            grid_options:
+              columns: full
+              rows: auto
+
+  - title: SommAI
+    path: sommai
+    type: sections
+    icon: mdi:robot
+    max_columns: 2
+    badges:
+      - type: entity
+        entity: sensor.lekkersappie_total_bottles
+        show_name: true
+        show_state: true
+        color: red
+    sections:
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: SommAI AI Sommelier & Cellar Pairing
+            heading_style: title
+            icon: mdi:robot-excited-outline
+          - type: custom:wine-sommai-card
+            title: Lekkersappie SommAI
             grid_options:
               columns: full
               rows: auto

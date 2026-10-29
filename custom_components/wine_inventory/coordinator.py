@@ -39,10 +39,12 @@ from .const import (
 from .database import WineDatabase, utc_now_iso
 from .scanner import (
     GeminiScannerError,
+    async_enrich_vivino_bottle,
     async_judge_vivino_candidates,
     async_research_wine_with_gemini,
-    grounded_search_fields,
     async_scan_bottle_label,
+    async_sommelier_dish_pairing,
+    grounded_search_fields,
     parse_image_data_uri,
     save_bottle_cover_image,
 )
@@ -76,6 +78,14 @@ class WineInventoryCoordinator:
         self._listeners: list[Callable[[], None]] = []
         self._event_callbacks: list[Callable[[str, dict[str, Any]], None]] = []
         self._gemini_call_timestamps: list[float] = []
+        self._import_progress: dict[str, Any] = {
+            "status": "idle",
+            "percent": 0,
+            "current": 0,
+            "total": 0,
+            "message": "",
+            "wine_name": "",
+        }
 
     def _check_gemini_rate_limit(self) -> None:
         """Enforce a per-coordinator sliding-window rate limit on paid Gemini API calls."""
@@ -758,11 +768,116 @@ class WineInventoryCoordinator:
             filename,
         )
 
-    async def async_import_vivino_csv(self, csv_text: str) -> dict[str, Any]:
-        """Import wines and tasted history from a Vivino CSV export."""
+    def get_import_progress(self) -> dict[str, Any]:
+        """Return the current import and enrichment progress."""
+        res = dict(self._import_progress)
+        res["running"] = self._import_progress.get("status") in ("importing", "enriching")
+        res["progress_pct"] = self._import_progress.get("percent", 0)
+        res["status_message"] = self._import_progress.get("message", "")
+        return res
+
+    async def async_sommelier_chat(
+        self,
+        *,
+        query_text: str | None = None,
+        image_data: str | None = None,
+        conversation_history: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
+        """Ask SommAI for food and wine pairing advice grounded in active cellar inventory."""
+        self._check_gemini_rate_limit()
+
+        image_bytes: bytes | None = None
+        mime_type: str | None = None
+        if image_data:
+            mime_type, image_bytes = parse_image_data_uri(image_data)
+
+        cellar_wines = await self.hass.async_add_executor_job(
+            self.db.list_wines, False
+        )
+
+        session = self._get_http_session()
+        result = await async_sommelier_dish_pairing(
+            session,
+            api_key=self.gemini_api_key,
+            cellar_wines=cellar_wines,
+            dish_description=query_text,
+            image_bytes=image_bytes,
+            mime_type=mime_type,
+            conversation_history=conversation_history,
+            model=self.gemini_model,
+        )
+        return result
+
+    async def async_enrich_bottle(self, wine_id: int) -> dict[str, Any]:
+        """Call Gemini to enrich missing cataloguing and sommelier details for a wine."""
+        self._check_gemini_rate_limit()
+        wine = await self.hass.async_add_executor_job(
+            self.db.get_wine_detail, int(wine_id)
+        )
+        if not wine:
+            raise ValueError(f"Wine ID {wine_id} not found")
+
+        session = self._get_http_session()
+        result = await async_enrich_vivino_bottle(
+            session,
+            api_key=self.gemini_api_key,
+            wine_data=wine,
+            model=self.gemini_model,
+        )
+        enr = result.get("enrichment") or {}
+        updates: dict[str, Any] = {}
+        if enr.get("varietal") and (not wine.get("varietal") or wine.get("varietal") in ("unspecified", "traditional varieties")):
+            updates["varietal"] = enr["varietal"]
+        if enr.get("wine_type") and not wine.get("wine_type"):
+            updates["wine_type"] = enr["wine_type"]
+        if enr.get("alcohol_pct") and wine.get("alcohol_pct") is None:
+            updates["alcohol_pct"] = enr["alcohol_pct"]
+        if enr.get("drink_from_year") and wine.get("drink_from_year") is None:
+            updates["drink_from_year"] = enr["drink_from_year"]
+        if enr.get("drink_until_year") and wine.get("drink_until_year") is None:
+            updates["drink_until_year"] = enr["drink_until_year"]
+        if enr.get("drink_window_note") and not wine.get("drink_window_note"):
+            updates["drink_window_note"] = enr["drink_window_note"]
+
+        research_payload = {
+            "summary": enr.get("summary", ""),
+            "producer_history": enr.get("producer_history", ""),
+            "tasting_profile": enr.get("tasting_profile", ""),
+            "taste_profile": enr.get("taste_profile", {}),
+            "serving_and_pairing": ", ".join(enr.get("food_pairings", [])),
+            "food_pairings": enr.get("food_pairings", []),
+            "model_used": result.get("model_used"),
+        }
+        updates["research_notes"] = json.dumps(research_payload)
+        updated_wine = await self.hass.async_add_executor_job(
+            self.db.update_wine, int(wine_id), updates
+        )
+        await self.async_refresh()
+        return {
+            "status": "ok",
+            "wine": updated_wine,
+            "enrichment": enr,
+            "model_used": result.get("model_used"),
+        }
+
+    async def async_import_vivino_csv(
+        self,
+        csv_text: str,
+        enrich_ai: bool = True,
+    ) -> dict[str, Any]:
+        """Import wines and tasted history from a Vivino CSV export with optional LLM enrichment."""
         from .backup import _import_wines_from_csv, import_vivino_history_csv
 
         config_dir = Path(getattr(self.hass.config, "config_dir", "."))
+        self._import_progress = {
+            "status": "running",
+            "percent": 10,
+            "current": 0,
+            "total": 0,
+            "message": "Parsing Vivino CSV records...",
+            "wine_name": "",
+        }
+
         first_line = csv_text.splitlines()[0].lower() if csv_text.strip() else ""
         if "label image" in first_line or "user cellar count" in first_line:
             res_count = await self.hass.async_add_executor_job(
@@ -782,6 +897,50 @@ class WineInventoryCoordinator:
                 self.db,
                 csv_text,
             )
+
+        enriched_count = 0
+        if enrich_ai and self.gemini_api_key:
+            all_wines = await self.hass.async_add_executor_job(
+                self.db.list_wines, True
+            )
+            targets = [w for w in all_wines if not w.get("research_notes")]
+            total_targets = len(targets)
+            if total_targets > 0:
+                self._import_progress = {
+                    "status": "enriching",
+                    "percent": 50,
+                    "current": 0,
+                    "total": total_targets,
+                    "message": f"Starting Sommelier AI enrichment on {total_targets} bottles...",
+                    "wine_name": "",
+                }
+                for idx, w in enumerate(targets, 1):
+                    wine_name = f"{w.get('winery', '')} {w.get('name', '')}".strip()
+                    pct = 50 + int((idx / total_targets) * 48)
+                    self._import_progress = {
+                        "status": "enriching",
+                        "percent": pct,
+                        "current": idx,
+                        "total": total_targets,
+                        "wine_name": wine_name,
+                        "message": f"Enriching bottle {idx}/{total_targets} ({wine_name})...",
+                    }
+                    try:
+                        await self.async_enrich_bottle(int(w["id"]))
+                        enriched_count += 1
+                    except Exception as err:
+                        _LOGGER.warning("Enrichment skipped for %s: %s", wine_name, err)
+
+        res["enriched_count"] = enriched_count
+        self._import_progress = {
+            "status": "completed",
+            "percent": 100,
+            "current": res.get("imported_count", 0),
+            "total": res.get("imported_count", 0),
+            "wine_name": "",
+            "message": f"Import complete! {res.get('imported_count', 0)} wines processed, {enriched_count} enriched with AI.",
+            "result": res,
+        }
         await self.async_refresh()
         return res
 
@@ -789,18 +948,86 @@ class WineInventoryCoordinator:
         self,
         zip_source: Path | bytes | str,
         download_images: bool = True,
+        enrich_ai: bool = True,
     ) -> dict[str, Any]:
-        """Import wines, cellar inventory, and cover images from a Vivino ZIP export archive."""
+        """Import wines, cellar inventory, and cover images from a Vivino ZIP export archive with LLM enrichment."""
         from .backup import import_vivino_export_zip
 
         config_dir = Path(getattr(self.hass.config, "config_dir", "."))
+        self._import_progress = {
+            "status": "running",
+            "percent": 5,
+            "current": 0,
+            "total": 0,
+            "message": "Extracting Vivino export archive...",
+            "wine_name": "",
+        }
+
+        def _on_progress(p: dict[str, Any]) -> None:
+            self._import_progress.update(p)
+
         res = await self.hass.async_add_executor_job(
             import_vivino_export_zip,
             config_dir,
             self.db,
             zip_source,
             download_images,
+            _on_progress,
         )
+
+        enriched_count = 0
+        if enrich_ai and self.gemini_api_key:
+            # Target in-stock cellar wines first, then wines missing research
+            all_wines = await self.hass.async_add_executor_job(
+                self.db.list_wines, True
+            )
+            cellar_targets = [
+                w for w in all_wines
+                if (w.get("quantity") or 0) > 0 and (not w.get("research_notes") or not w.get("varietal"))
+            ]
+            tasted_targets = [
+                w for w in all_wines
+                if (w.get("quantity") or 0) <= 0 and (not w.get("research_notes") or not w.get("varietal"))
+            ][:50]  # Cap tasted wines batch to preserve quota
+            targets = cellar_targets + tasted_targets
+            total_targets = len(targets)
+
+            if total_targets > 0:
+                self._import_progress = {
+                    "status": "enriching",
+                    "percent": 50,
+                    "current": 0,
+                    "total": total_targets,
+                    "message": f"Starting Sommelier AI enrichment on {total_targets} bottles...",
+                    "wine_name": "",
+                }
+                for idx, w in enumerate(targets, 1):
+                    wine_name = f"{w.get('winery', '')} {w.get('name', '')} {w.get('vintage') or ''}".strip()
+                    pct = 50 + int((idx / total_targets) * 48)
+                    self._import_progress = {
+                        "status": "enriching",
+                        "percent": pct,
+                        "current": idx,
+                        "total": total_targets,
+                        "wine_name": wine_name,
+                        "message": f"Enriching bottle {idx}/{total_targets} with Sommelier AI ({wine_name})...",
+                    }
+                    try:
+                        await self.async_enrich_bottle(int(w["id"]))
+                        enriched_count += 1
+                    except Exception as err:
+                        _LOGGER.warning("Enrichment skipped for bottle %s: %s", wine_name, err)
+
+        res["enriched_count"] = enriched_count
+        self._import_progress = {
+            "status": "completed",
+            "percent": 100,
+            "current": res.get("imported_count", 0),
+            "total": res.get("imported_count", 0),
+            "wine_name": "",
+            "message": f"Import complete! {res.get('cellar_imported', 0)} cellar ({res.get('cellar_bottles', 0)} bottles), {res.get('tasted_imported', 0)} tasted, {enriched_count} enriched with AI.",
+            "result": res,
+        }
         await self.async_refresh()
         return res
 

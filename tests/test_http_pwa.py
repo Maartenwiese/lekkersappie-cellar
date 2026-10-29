@@ -314,10 +314,10 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
         app_js = (MOBILE_DIR / "app.js").read_text(encoding="utf-8")
         css = (MOBILE_DIR / "styles.css").read_text(encoding="utf-8")
 
-        # Navigation renamed
-        self.assertIn('data-nav="stats"', app_js)
+        # Navigation renamed (v0.5.0 replaced stats tab with sommai tab)
+        self.assertTrue('data-nav="sommai"' in app_js or 'data-nav="stats"' in app_js)
         self.assertIn('data-nav="config"', app_js)
-        self.assertIn("<span>Stats</span>", app_js)
+        self.assertTrue("<span>SommAI</span>" in app_js or "<span>Stats</span>" in app_js)
         self.assertIn("<span>Config</span>", app_js)
         self.assertNotIn("<span>Areas</span>", app_js)
         self.assertNotIn("<span>App</span>", app_js)
@@ -605,8 +605,12 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
         hacs_json = (REPO_ROOT / "hacs.json").read_text(encoding="utf-8")
 
         # 1. Version bumps
-        self.assertTrue('"version": "0.3.9"' in manifest_json or '"version": "0.4.0"' in manifest_json)
-        self.assertTrue("v0.3.9" in app_js or "v0.4.0" in app_js)
+        self.assertTrue(
+            '"version": "0.3.9"' in manifest_json
+            or '"version": "0.4.0"' in manifest_json
+            or '"version": "0.5.0"' in manifest_json
+        )
+        self.assertTrue("v0.3.9" in app_js or "v0.4.0" in app_js or "v0.5.0" in app_js)
 
         # 2. Font scale defaults to 1.15 (Large)
         self.assertIn("return val >= 0.8 && val <= 1.5 ? val : 1.15", app_js)
@@ -673,6 +677,89 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(latour["vintage"], 2010)
         self.assertEqual(latour["quantity"], 3)
         self.assertEqual(latour["personal_rating"], 4.9)
+
+    async def test_v050_sommai_mobile_and_import_progress(self) -> None:
+        """v0.5.0: Verify SommAI food-wine pairing endpoint, import progress polling, and UI elements."""
+        from custom_components.wine_inventory.http_api import async_handle_pwa_get, async_handle_pwa_post
+
+        # 1. GET /api/wine_inventory/pwa/import_progress
+        status_prog, res_prog = await async_handle_pwa_get(self.hass, "import_progress", {})
+        self.assertEqual(status_prog, 200)
+        self.assertIn("running", res_prog)
+        self.assertIn("progress_pct", res_prog)
+
+        # 2. POST /api/wine_inventory/pwa/sommai (mocking coordinator async_sommelier_chat)
+        async def _mock_somm_chat(query_text: str = "", image_data: Any = None, conversation_history: Any = None) -> dict[str, Any]:
+            return {
+                "ok": True,
+                "dish_name": "Dry-Aged T-Bone Steak",
+                "dish_analysis": "Rich umami, charred exterior, intense beef marbling.",
+                "pairing_reasoning": "High-tannin Cabernet Sauvignon pairs harmoniously.",
+                "recommended_wines": [
+                    {
+                        "wine_id": 1,
+                        "wine_title": "Tenuta San Guido Sassicaia 2018",
+                        "match_type": "best",
+                        "sommelier_notes": "Firm tannins cut fat cleanly.",
+                        "serving_temp_c": "16-18°C",
+                        "decant_minutes": 60,
+                    }
+                ],
+                "conversational_response": "Open your Sassicaia 2018 for this steak.",
+                "cellar_bottles_considered": 1,
+            }
+
+        self.coordinator.async_sommelier_chat = _mock_somm_chat  # type: ignore[assignment]
+        status_somm, res_somm = await async_handle_pwa_post(
+            self.hass,
+            "sommai",
+            {"message": "What goes with T-Bone?", "history": []},
+        )
+        self.assertEqual(status_somm, 200)
+        self.assertEqual(res_somm["dish_name"], "Dry-Aged T-Bone Steak")
+        self.assertEqual(len(res_somm["recommended_wines"]), 1)
+
+        # 3. Mobile App JS and CSS checks
+        app_js = (MOBILE_DIR / "app.js").read_text(encoding="utf-8")
+        css = (MOBILE_DIR / "styles.css").read_text(encoding="utf-8")
+        card_js = (INTEGRATION_DIR / "frontend" / "wine-inventory-card.js").read_text(encoding="utf-8")
+        dashboard_yaml = (REPO_ROOT / "dashboards" / "wine-cellar-dashboard.yaml").read_text(encoding="utf-8")
+
+        # SommAI bottom navigation and view
+        self.assertIn('data-nav="sommai"', app_js)
+        self.assertIn("<span>SommAI</span>", app_js)
+        self.assertIn("_renderSommAIView", app_js)
+        self.assertIn(".sommai-view", css)
+        self.assertIn(".sommai-chip", css)
+
+        # Tasted view: Scan Tasted button removed from banner
+        tasted_banner_code = app_js[app_js.find("_renderTastedView("):app_js.find("search-filter-dock")]
+        self.assertNotIn('data-open-scan="tasted"', tasted_banner_code)
+
+        # Statistics embedded in Config view
+        config_view_code = app_js[app_js.find("_renderConfigView("):app_js.find("_renderSommAIView(")]
+        self.assertIn("_renderStatsSection", config_view_code)
+
+        # Wine thumbnail click navigates to Detailed view
+        self.assertIn('data-detail-id="${w.id}"', app_js)
+        self.assertNotIn('data-preview-id="${w.id}"', app_js)
+
+        # Sommelier & Producer AI Research font size bumped by +1
+        self.assertIn("font-size:14.5px; font-style:italic;", app_js)
+        self.assertIn("font-size:13.5px; line-height:1.5;", app_js)
+
+        # Vivino import warning modal & progress bar
+        self.assertIn("_renderImportWarningSheet", app_js)
+        self.assertIn("_renderImportProgressSheet", app_js)
+        self.assertIn(".import-progress-track", css)
+        self.assertIn(".import-progress-fill", css)
+
+        # Home Assistant Card & Dashboard
+        self.assertIn("wine-sommai-card", card_js)
+        self.assertIn("WineSommAICard", card_js)
+        self.assertIn("custom:wine-sommai-card", dashboard_yaml)
+        self.assertIn("path: sommai", dashboard_yaml)
+
 
 
 if __name__ == "__main__":

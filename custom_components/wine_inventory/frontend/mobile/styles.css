@@ -1594,3 +1594,331 @@ body.tasted-page-theme,
   color: #ffffff;
 }
 
+/* ================= SommAI Food & Wine Pairing View ================= */
+.sommai-view {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 24px;
+}
+
+.sommai-header-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px;
+  margin-bottom: 14px;
+  box-shadow: var(--shadow-sm);
+}
+
+.sommai-header-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.sommai-avatar {
+  font-size: 32px;
+  line-height: 1;
+  background: var(--surface-alt);
+  padding: 8px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+}
+
+.sommai-title-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.sommai-title {
+  font-size: 19px;
+  font-weight: 800;
+  margin: 0 0 2px 0;
+  color: var(--brand);
+}
+
+.sommai-subtitle {
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.sommai-description {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text);
+  margin: 0 0 12px 0;
+}
+
+.sommai-chips-scroll {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.sommai-chips-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.sommai-chip {
+  flex-shrink: 0;
+  padding: 7px 12px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: var(--surface-alt);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+
+.sommai-chip:hover, .sommai-chip:active {
+  background: var(--brand);
+  color: #ffffff;
+  border-color: var(--brand);
+}
+
+.sommai-chat-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 110px; /* Space for sticky bottom dock */
+}
+
+.sommai-msg {
+  display: flex;
+  flex-direction: column;
+  max-width: 90%;
+}
+
+.sommai-msg-user {
+  align-self: flex-end;
+}
+
+.sommai-msg-user .sommai-msg-bubble {
+  background: var(--brand);
+  color: #ffffff;
+  border-radius: 16px 16px 4px 16px;
+  padding: 12px 14px;
+  font-size: 14px;
+  line-height: 1.45;
+  box-shadow: var(--shadow-sm);
+}
+
+.sommai-user-img {
+  max-width: 140px;
+  max-height: 140px;
+  border-radius: 10px;
+  object-fit: cover;
+  margin-bottom: 8px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+}
+
+.sommai-msg-bot {
+  align-self: flex-start;
+  width: 100%;
+  max-width: 100%;
+}
+
+.sommai-msg-bot .sommai-msg-bubble {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px 16px 16px 4px;
+  padding: 14px;
+  font-size: 14px;
+  line-height: 1.5;
+  box-shadow: var(--shadow-sm);
+  color: var(--text);
+}
+
+.sommai-thinking {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 13.5px;
+  font-style: italic;
+}
+
+.sommai-spin {
+  display: inline-block;
+  animation: sommai-spin 1.8s infinite linear;
+}
+
+@keyframes sommai-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.sommai-dish-title {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--brand);
+  margin-bottom: 8px;
+}
+
+.sommai-analysis-box {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-alt);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.sommai-recs-wrap {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sommai-recs-header {
+  font-size: 12.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--brand);
+  margin-bottom: 2px;
+}
+
+.sommai-rec-card {
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: transform 0.1s ease, border-color 0.15s ease;
+}
+
+.sommai-rec-card:active {
+  transform: scale(0.985);
+  border-color: var(--brand);
+}
+
+.sommai-rec-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.sommai-rec-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+
+.sommai-rec-notes {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+/* SommAI Fixed Bottom Input Dock */
+.sommai-input-dock {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  z-index: 35;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding: 8px 12px;
+  box-shadow: 0 -4px 14px rgba(0, 0, 0, 0.06);
+}
+
+.sommai-pending-img-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: var(--surface-alt);
+  border-radius: 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+
+.sommai-pending-thumb {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+
+.sommai-pending-label {
+  flex: 1;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.sommai-input-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.sommai-photo-btn {
+  width: 44px;
+  height: 44px;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.sommai-input-field {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  padding: 8px 14px;
+  border-radius: 22px;
+  border: 1px solid var(--border);
+  background: var(--surface-alt);
+  color: var(--text);
+  font-size: 16px; /* 16px avoids iOS zoom on focus */
+  font-family: inherit;
+}
+
+.sommai-input-field:focus {
+  outline: none;
+  border-color: var(--brand);
+}
+
+.sommai-send-btn {
+  height: 44px;
+  padding: 0 16px;
+  border-radius: 22px;
+  font-weight: 700;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+/* Progress bar for Vivino import */
+.import-progress-track {
+  width: 100%;
+  height: 12px;
+  background: var(--surface-alt);
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.import-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #831843, #a61a2e);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+

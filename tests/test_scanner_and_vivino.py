@@ -511,6 +511,158 @@ class TestScannerVivinoAndCoordinator(unittest.TestCase):
 
         asyncio.run(_run_rate_limit())
 
+    def test_v050_sommelier_dish_pairing(self) -> None:
+        """v0.5.0: Verify SommAI food-wine pairing grounded in cellar inventory."""
+        from custom_components.wine_inventory.scanner import async_sommelier_dish_pairing
+
+        async def _run() -> None:
+            pairing_payload = {
+                "dish_name": "Pan-Seared Ribeye with Rosemary Butter",
+                "dish_analysis": "Rich, fatty beef with savory umami and herbal rosemary.",
+                "pairing_reasoning": "High-tannin structured reds cut through the beef fat.",
+                "recommended_wines": [
+                    {
+                        "wine_id": 1,
+                        "wine_title": "Tenuta San Guido Sassicaia 2018",
+                        "match_type": "best",
+                        "sommelier_notes": "Bold Cabernet tannins beautifully slice through the ribeye's marbling.",
+                        "serving_temp_c": "16-18°C",
+                        "decant_minutes": 60,
+                    }
+                ],
+                "conversational_response": "I recommend opening your Sassicaia 2018 for this magnificent ribeye.",
+            }
+            gemini_resp = {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [{"text": json.dumps(pairing_payload)}],
+                        }
+                    }
+                ]
+            }
+
+            class _SommSession:
+                def post(self, url: str, **kwargs: Any) -> Any:
+                    class _Resp:
+                        status = 200
+
+                        async def text(self) -> str:
+                            return json.dumps(gemini_resp)
+
+                        async def __aenter__(self) -> Any:
+                            return self
+
+                        async def __aexit__(self, *args: Any) -> None:
+                            pass
+
+                    return _Resp()
+
+            cellar_wines = [
+                {
+                    "id": 1,
+                    "winery": "Tenuta San Guido",
+                    "name": "Sassicaia",
+                    "vintage": 2018,
+                    "wine_type": "red",
+                    "varietal": "Cabernet Sauvignon, Cabernet Franc",
+                    "quantity": 2,
+                    "drink_status": "ready",
+                }
+            ]
+
+            res = await async_sommelier_dish_pairing(
+                _SommSession(),  # type: ignore[arg-type]
+                api_key="test-key",
+                cellar_wines=cellar_wines,
+                dish_description="What should I drink with a medium-rare ribeye?",
+                image_bytes=b"\xff\xd8\xff\xe0test",
+                mime_type="image/jpeg",
+                conversation_history=[{"role": "user", "text": "Hi"}],
+            )
+            pairing = res["pairing"]
+            self.assertEqual(pairing["dish_name"], "Pan-Seared Ribeye with Rosemary Butter")
+            self.assertEqual(len(pairing["recommended_wines"]), 1)
+            self.assertEqual(pairing["recommended_wines"][0]["wine_id"], 1)
+            self.assertEqual(pairing["recommended_wines"][0]["match_type"], "best")
+            self.assertEqual(pairing["recommended_wines"][0]["decant_minutes"], 60)
+            self.assertIn("Sassicaia", pairing["conversational_response"])
+
+        asyncio.run(_run())
+
+    def test_v050_enrich_vivino_bottle(self) -> None:
+        """v0.5.0: Verify Gemini AI enrichment for missing Vivino bottle details."""
+        from custom_components.wine_inventory.scanner import async_enrich_vivino_bottle
+
+        async def _run() -> None:
+            enrichment_payload = {
+                "varietal": "Chardonnay",
+                "drink_from_year": 2024,
+                "drink_until_year": 2030,
+                "abv": 13.5,
+                "taste_profile": {
+                    "soft_vs_acidic": 55,
+                    "light_vs_bold": 65,
+                    "dry_vs_sweet": 10,
+                    "soft_vs_acidic_label": "Crisp & Mineral",
+                    "light_vs_bold_label": "Medium-Full",
+                    "dry_vs_sweet_label": "Bone Dry",
+                },
+                "summary": "Classic Premier Cru Chablis displaying crisp minerality and flinty lemon aromas.",
+                "producer_history": "Domaine William Fèvre was established in 1959.",
+                "wine_and_terroir": "Kimmeridgian limestone clay soils rich in fossilized oysters.",
+                "tasting_profile": "White flowers, citrus zest, and stony mineral core.",
+                "serving_and_pairing": "Chill to 10-12°C. Excellent with fresh oysters and grilled sea bass.",
+            }
+            gemini_resp = {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [{"text": json.dumps(enrichment_payload)}],
+                        }
+                    }
+                ]
+            }
+
+            class _EnrichSession:
+                def post(self, url: str, **kwargs: Any) -> Any:
+                    class _Resp:
+                        status = 200
+
+                        async def text(self) -> str:
+                            return json.dumps(gemini_resp)
+
+                        async def __aenter__(self) -> Any:
+                            return self
+
+                        async def __aexit__(self, *args: Any) -> None:
+                            pass
+
+                    return _Resp()
+
+            bottle = {
+                "winery": "William Fèvre",
+                "name": "Chablis Premier Cru Montmains",
+                "vintage": 2020,
+                "wine_type": "white",
+                "country": "France",
+                "region": "Burgundy",
+            }
+
+            res = await async_enrich_vivino_bottle(
+                _EnrichSession(),  # type: ignore[arg-type]
+                api_key="test-key",
+                wine_data=bottle,
+            )
+            enrichment = res["enrichment"]
+            self.assertEqual(enrichment["varietal"], "Chardonnay")
+            self.assertEqual(enrichment["drink_from_year"], 2024)
+            self.assertEqual(enrichment["drink_until_year"], 2030)
+            self.assertEqual(enrichment["taste_profile"]["soft_vs_acidic"], 55)
+            self.assertIn("William Fèvre", enrichment["producer_history"])
+
+        asyncio.run(_run())
+
 
 if __name__ == "__main__":
     unittest.main()

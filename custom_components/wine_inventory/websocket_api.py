@@ -106,6 +106,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_restore_backup)
     websocket_api.async_register_command(hass, ws_import_wines)
     websocket_api.async_register_command(hass, ws_list_backups)
+    websocket_api.async_register_command(hass, ws_sommelier_chat)
 
 
 @websocket_api.websocket_command(
@@ -589,3 +590,35 @@ async def ws_list_backups(
         connection.send_result(msg["id"], {"backups": res})
     except Exception as err:  # noqa: BLE001
         connection.send_error(msg["id"], "list_backups_failed", str(err))
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "wine_inventory/sommelier_chat",
+        vol.Optional("entry_id"): str,
+        vol.Optional("message"): str,
+        vol.Optional("query"): str,
+        vol.Optional("image_data"): str,
+        vol.Optional("history"): list,
+    }
+)
+@websocket_api.async_response
+async def ws_sommelier_chat(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Ask SommAI for food-wine pairing advice."""
+    try:
+        coordinator = _get_coordinator(hass, msg.get("entry_id"))
+        query_text = msg.get("message") or msg.get("query") or ""
+        image_data = msg.get("image_data")
+        history = msg.get("history") or []
+        res = await coordinator.async_sommelier_chat(
+            query_text=query_text,
+            image_data=image_data,
+            conversation_history=history,
+        )
+        connection.send_result(msg["id"], res)
+    except Exception as err:  # noqa: BLE001
+        connection.send_error(msg["id"], "sommelier_chat_failed", str(err))

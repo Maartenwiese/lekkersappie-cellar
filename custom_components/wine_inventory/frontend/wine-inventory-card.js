@@ -5045,3 +5045,563 @@ if (!window.customCards.some((c) => c.type === "wine-cellar-summary-card")) {
     documentationURL: "https://github.com/Maartenwiese/lekkersappie-cellar",
   });
 }
+
+class WineSommAICard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._config = {};
+    this._hass = null;
+    this._messages = [];
+    this._pendingImage = null;
+    this._loading = false;
+    this._error = "";
+  }
+
+  static getConfigElement() {
+    return document.createElement("wine-sommai-card-editor");
+  }
+
+  static getStubConfig() {
+    return {
+      title: "SommAI Sommelier",
+    };
+  }
+
+  setConfig(config) {
+    this._config = {
+      title: "SommAI Sommelier",
+      ...(config || {}),
+    };
+    this._render();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+  }
+
+  getCardSize() {
+    return 6;
+  }
+
+  _render() {
+    if (!this.shadowRoot) return;
+    const c = this._config;
+    const title = c.title || "SommAI Sommelier";
+
+    this.shadowRoot.innerHTML = `
+      <style>
+        :host {
+          display: block;
+          --somm-brand: var(--primary-color, #7a2858);
+          --somm-surface: var(--card-background-color, #ffffff);
+          --somm-border: var(--divider-color, rgba(0, 0, 0, 0.12));
+          --somm-text: var(--primary-text-color, #202124);
+          --somm-muted: var(--secondary-text-color, #5f6368);
+        }
+        ha-card {
+          padding: 16px;
+          border-radius: var(--ha-card-border-radius, 12px);
+          box-shadow: var(--ha-card-box-shadow, none);
+          border: 1px solid var(--somm-border);
+          background: var(--somm-surface);
+          color: var(--somm-text);
+          font-family: var(--paper-font-body1_-_font-family, Roboto, sans-serif);
+        }
+        .header {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin-bottom: 12px;
+          padding-bottom: 10px;
+          border-bottom: 1px solid var(--somm-border);
+        }
+        .avatar {
+          font-size: 28px;
+          line-height: 1;
+        }
+        .title-block {
+          flex: 1;
+        }
+        .title {
+          font-size: 18px;
+          font-weight: 700;
+          color: var(--somm-brand);
+          margin: 0;
+        }
+        .subtitle {
+          font-size: 12.5px;
+          color: var(--somm-muted);
+        }
+        .chips {
+          display: flex;
+          gap: 6px;
+          overflow-x: auto;
+          padding: 4px 0 10px;
+          scrollbar-width: none;
+        }
+        .chips::-webkit-scrollbar { display: none; }
+        .chip {
+          padding: 6px 12px;
+          border-radius: 16px;
+          border: 1px solid var(--somm-border);
+          background: var(--card-background-color, rgba(0,0,0,0.03));
+          color: var(--somm-text);
+          font-size: 12px;
+          font-weight: 600;
+          cursor: pointer;
+          white-space: nowrap;
+          transition: all 0.15s ease;
+        }
+        .chip:hover {
+          background: var(--somm-brand);
+          color: #ffffff;
+          border-color: var(--somm-brand);
+        }
+        .chat-stream {
+          max-height: 420px;
+          overflow-y: auto;
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+          padding: 8px 0;
+          margin-bottom: 12px;
+        }
+        .msg {
+          display: flex;
+          flex-direction: column;
+          max-width: 92%;
+        }
+        .msg-user {
+          align-self: flex-end;
+        }
+        .msg-user .bubble {
+          background: var(--somm-brand);
+          color: #ffffff;
+          border-radius: 14px 14px 2px 14px;
+          padding: 10px 14px;
+          font-size: 13.5px;
+          line-height: 1.4;
+        }
+        .user-img {
+          max-width: 120px;
+          max-height: 120px;
+          border-radius: 8px;
+          object-fit: cover;
+          margin-bottom: 6px;
+        }
+        .msg-bot {
+          align-self: flex-start;
+          width: 100%;
+        }
+        .msg-bot .bubble {
+          background: var(--card-background-color, rgba(0,0,0,0.02));
+          border: 1px solid var(--somm-border);
+          border-radius: 14px 14px 14px 2px;
+          padding: 12px 14px;
+          font-size: 13.5px;
+          line-height: 1.45;
+        }
+        .dish-title {
+          font-size: 15px;
+          font-weight: 700;
+          color: var(--somm-brand);
+          margin-bottom: 6px;
+        }
+        .analysis-box {
+          margin: 8px 0;
+          padding: 8px 10px;
+          border-radius: 8px;
+          background: rgba(0,0,0,0.03);
+          font-size: 12.5px;
+          line-height: 1.4;
+        }
+        .recs-header {
+          font-size: 12px;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          color: var(--somm-brand);
+          margin: 10px 0 4px;
+        }
+        .rec-card {
+          padding: 10px;
+          border-radius: 10px;
+          border: 1px solid var(--somm-border);
+          background: var(--somm-surface);
+          margin-top: 6px;
+        }
+        .rec-top {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          flex-wrap: wrap;
+          margin-bottom: 4px;
+        }
+        .pill {
+          display: inline-block;
+          padding: 2px 8px;
+          border-radius: 10px;
+          font-size: 11px;
+          font-weight: 700;
+        }
+        .pill-best { background: #e6f4ea; color: #137333; }
+        .pill-alt { background: #e8f0fe; color: #1a73e8; }
+        .pill-meta { background: rgba(0,0,0,0.06); color: var(--somm-text); }
+        .rec-name {
+          font-size: 14px;
+          font-weight: 700;
+          margin-bottom: 4px;
+        }
+        .rec-notes {
+          font-size: 12.5px;
+          color: var(--somm-muted);
+        }
+        .input-dock {
+          border-top: 1px solid var(--somm-border);
+          padding-top: 10px;
+        }
+        .pending-bar {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 4px 8px;
+          background: rgba(0,0,0,0.04);
+          border-radius: 8px;
+          margin-bottom: 8px;
+          font-size: 12px;
+        }
+        .pending-thumb {
+          width: 28px;
+          height: 28px;
+          border-radius: 4px;
+          object-fit: cover;
+        }
+        .input-row {
+          display: flex;
+          gap: 8px;
+          align-items: center;
+        }
+        .photo-btn {
+          width: 40px;
+          height: 40px;
+          border-radius: 50%;
+          border: 1px solid var(--somm-border);
+          background: transparent;
+          font-size: 18px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .text-input {
+          flex: 1;
+          height: 40px;
+          padding: 8px 12px;
+          border-radius: 20px;
+          border: 1px solid var(--somm-border);
+          background: var(--somm-surface);
+          color: var(--somm-text);
+          font-size: 14px;
+          outline: none;
+        }
+        .text-input:focus {
+          border-color: var(--somm-brand);
+        }
+        .send-btn {
+          height: 40px;
+          padding: 0 16px;
+          border-radius: 20px;
+          border: none;
+          background: var(--somm-brand);
+          color: #ffffff;
+          font-weight: 700;
+          font-size: 13px;
+          cursor: pointer;
+        }
+        .send-btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+        }
+        .thinking {
+          font-style: italic;
+          color: var(--somm-muted);
+          font-size: 13px;
+        }
+      </style>
+
+      <ha-card>
+        <div class="header">
+          <span class="avatar">🍷🤖</span>
+          <div class="title-block">
+            <h2 class="title">${escapeHtml(title)}</h2>
+            <div class="subtitle">AI Food &amp; Wine Pairing from your Cellar</div>
+          </div>
+        </div>
+
+        <div class="chips">
+          <button class="chip" data-dish="Grilled Ribeye with Herb Butter">🥩 Ribeye Steak</button>
+          <button class="chip" data-dish="Truffle &amp; Porcini Tagliatelle">🍝 Truffle Pasta</button>
+          <button class="chip" data-dish="Salmon &amp; Tuna Sashimi">🍣 Salmon Sashimi</button>
+          <button class="chip" data-dish="Roast Duck Breast with Cherries">🍗 Duck Breast</button>
+          <button class="chip" data-dish="Artisanal Aged Cheese Board">🧀 Artisanal Cheeses</button>
+          <button class="chip" data-dish="Spicy Thai Green Curry">🌶️ Thai Green Curry</button>
+        </div>
+
+        <div class="chat-stream" id="chat-stream">
+          ${
+            this._messages.length === 0
+              ? `<div style="text-align:center; padding:20px; color:var(--somm-muted); font-size:13px;">
+                  Tell me what you are eating, paste a recipe, or take a picture of your dish to find the best matching bottle from your cellar!
+                </div>`
+              : this._messages.map((m) => this._renderMessage(m)).join("")
+          }
+          ${
+            this._loading
+              ? `<div class="msg msg-bot">
+                  <div class="bubble thinking">🍷 Sommelier is analyzing cellar inventory &amp; flavor pairing…</div>
+                </div>`
+              : ""
+          }
+          ${
+            this._error
+              ? `<div style="padding:8px 12px; border-radius:8px; background:rgba(211,47,47,0.1); color:#d32f2f; font-size:12.5px;">
+                  ${escapeHtml(this._error)}
+                </div>`
+              : ""
+          }
+        </div>
+
+        <div class="input-dock">
+          ${
+            this._pendingImage
+              ? `<div class="pending-bar">
+                  <img src="${this._pendingImage}" class="pending-thumb" />
+                  <span style="flex:1;">Dish photo attached</span>
+                  <button id="clear-img-btn" style="background:none; border:none; cursor:pointer; font-weight:700;">✕</button>
+                </div>`
+              : ""
+          }
+          <div class="input-row">
+            <input type="file" id="dish-file-inp" accept="image/*" style="display:none;" />
+            <button class="photo-btn" id="pick-photo-btn" title="Take photo or pick image">📷</button>
+            <input class="text-input" id="msg-inp" placeholder="Describe your dish or ingredients…" autocomplete="off" />
+            <button class="send-btn" id="send-btn" ${this._loading ? "disabled" : ""}>Pair 🍷</button>
+          </div>
+        </div>
+      </ha-card>
+    `;
+
+    this._bindEvents();
+  }
+
+  _renderMessage(m) {
+    if (m.role === "user") {
+      return `
+        <div class="msg msg-user">
+          <div class="bubble">
+            ${m.image_data ? `<img src="${m.image_data}" class="user-img" />` : ""}
+            <div>${escapeHtml(m.text || "Pair this dish")}</div>
+          </div>
+        </div>
+      `;
+    }
+    const recs = m.recommended_wines || [];
+    return `
+      <div class="msg msg-bot">
+        <div class="bubble">
+          ${m.dish_name ? `<div class="dish-title">🍽️ ${escapeHtml(m.dish_name)}</div>` : ""}
+          <div style="line-height:1.45; margin-bottom:6px;">${escapeHtml(m.conversational_response || m.text || "")}</div>
+          ${
+            m.dish_analysis
+              ? `<div class="analysis-box"><strong>Dish Analysis:</strong> ${escapeHtml(m.dish_analysis)}</div>`
+              : ""
+          }
+          ${
+            m.pairing_reasoning
+              ? `<div class="analysis-box" style="border-left:3px solid var(--somm-brand);"><strong>Pairing Strategy:</strong> ${escapeHtml(m.pairing_reasoning)}</div>`
+              : ""
+          }
+          ${
+            recs.length > 0
+              ? `<div class="recs-header">🍾 Recommended from Cellar</div>
+                 ${recs
+                   .map((rec) => {
+                     const isBest = rec.match_type === "best";
+                     return `
+                       <div class="rec-card">
+                         <div class="rec-top">
+                           <span class="pill ${isBest ? "pill-best" : "pill-alt"}">${isBest ? "★ Best Match" : "Alternative Match"}</span>
+                           ${rec.serving_temp_c ? `<span class="pill pill-meta">🌡️ ${escapeHtml(rec.serving_temp_c)}</span>` : ""}
+                           ${rec.decant_minutes ? `<span class="pill pill-meta">⏳ Decant ${rec.decant_minutes}m</span>` : ""}
+                         </div>
+                         <div class="rec-name">${escapeHtml(rec.wine_title)}</div>
+                         <div class="rec-notes">${escapeHtml(rec.sommelier_notes)}</div>
+                       </div>
+                     `;
+                   })
+                   .join("")}`
+              : ""
+          }
+        </div>
+      </div>
+    `;
+  }
+
+  _bindEvents() {
+    const s = this.shadowRoot;
+    if (!s) return;
+
+    s.querySelectorAll(".chip[data-dish]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        this._sendMessage(btn.dataset.dish);
+      });
+    });
+
+    s.querySelector("#pick-photo-btn")?.addEventListener("click", () => {
+      s.querySelector("#dish-file-inp")?.click();
+    });
+
+    s.querySelector("#dish-file-inp")?.addEventListener("change", (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        this._pendingImage = String(reader.result || "");
+        this._render();
+      };
+      reader.readAsDataURL(file);
+      e.target.value = "";
+    });
+
+    s.querySelector("#clear-img-btn")?.addEventListener("click", () => {
+      this._pendingImage = null;
+      this._render();
+    });
+
+    const sendAction = () => {
+      const inp = s.querySelector("#msg-inp");
+      const text = (inp?.value || "").trim();
+      this._sendMessage(text);
+    };
+
+    s.querySelector("#send-btn")?.addEventListener("click", sendAction);
+    s.querySelector("#msg-inp")?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") sendAction();
+    });
+  }
+
+  async _sendMessage(textPrompt) {
+    const text = (textPrompt || "").trim();
+    const image = this._pendingImage;
+    if (!text && !image) return;
+    if (!this._hass) return;
+
+    this._messages.push({
+      role: "user",
+      text: text || "What wine from my cellar pairs best with this dish?",
+      image_data: image,
+    });
+    this._pendingImage = null;
+    this._loading = true;
+    this._error = "";
+    this._render();
+
+    const stream = this.shadowRoot?.querySelector("#chat-stream");
+    if (stream) stream.scrollTop = stream.scrollHeight;
+
+    try {
+      const historyPayload = this._messages.slice(-6).map((m) => ({
+        role: m.role,
+        text: m.conversational_response || m.text,
+      }));
+      const res = await this._hass.callWS({
+        type: "wine_inventory/sommelier_chat",
+        message: text,
+        image_data: image,
+        history: historyPayload,
+      });
+      this._messages.push({
+        role: "assistant",
+        text: res.conversational_response || "Here are my pairing recommendations.",
+        dish_name: res.dish_name,
+        dish_analysis: res.dish_analysis,
+        pairing_reasoning: res.pairing_reasoning,
+        recommended_wines: res.recommended_wines || [],
+        conversational_response: res.conversational_response,
+      });
+    } catch (err) {
+      this._error = err?.message || "Failed to get sommelier recommendation.";
+    } finally {
+      this._loading = false;
+      this._render();
+      const streamEnd = this.shadowRoot?.querySelector("#chat-stream");
+      if (streamEnd) streamEnd.scrollTop = streamEnd.scrollHeight;
+    }
+  }
+}
+
+class WineSommAICardEditor extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._config = {};
+  }
+
+  setConfig(config) {
+    this._config = {
+      title: "SommAI Sommelier",
+      ...(config || {}),
+    };
+    this._render();
+  }
+
+  _emit() {
+    this.dispatchEvent(
+      new CustomEvent("config-changed", {
+        detail: { config: { ...this._config } },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
+  _render() {
+    if (!this.shadowRoot) return;
+    this.shadowRoot.innerHTML = `
+      <style>
+        .ed-wrap { display: flex; flex-direction: column; gap: 10px; padding: 8px 4px; font-family: Roboto, sans-serif; }
+        .ed-row { display: flex; flex-direction: column; gap: 4px; }
+        .ed-row label { font-size: 13px; font-weight: 600; color: var(--secondary-text-color); }
+        .ed-input { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--divider-color, #ccc); font-size: 14px; }
+      </style>
+      <div class="ed-wrap">
+        <div class="ed-row">
+          <label>Card Title</label>
+          <input id="somm-title" class="ed-input" type="text" value="${escapeHtml(this._config.title || "SommAI Sommelier")}" />
+        </div>
+      </div>
+    `;
+    this.shadowRoot.querySelector("#somm-title")?.addEventListener("input", (e) => {
+      this._config = { ...this._config, title: e.target.value };
+      this._emit();
+    });
+  }
+}
+
+if (!customElements.get("wine-sommai-card-editor")) {
+  customElements.define("wine-sommai-card-editor", WineSommAICardEditor);
+}
+if (!customElements.get("wine-sommai-card")) {
+  customElements.define("wine-sommai-card", WineSommAICard);
+}
+
+if (!window.customCards.some((c) => c.type === "wine-sommai-card")) {
+  window.customCards.push({
+    type: "wine-sommai-card",
+    name: "Lekkersappie SommAI Card",
+    description: "Interactive AI Sommelier chat pairing meals & dishes with your active wine cellar inventory.",
+    preview: true,
+    documentationURL: "https://github.com/Maartenwiese/lekkersappie-cellar",
+  });
+}

@@ -1,5 +1,5 @@
 /**
- * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.4.0)
+ * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.5.0)
  * Runs parallel to the native Home Assistant UI, inherits Home Assistant OAuth2
  * authentication, defaults to Large (L) text scale, and supports Home Screen installation.
  */
@@ -169,12 +169,26 @@ class LekkersappieMobileApp {
       authenticatedUser: null,
       isOnline: navigator.onLine,
 
-      // Navigation: "cellar" | "stats" | "tasted" | "config"
+      // Navigation: "cellar" | "sommai" | "tasted" | "config"
       activeNav: "cellar",
       filterTab: "all",
       areaFilter: "",
       searchQuery: "",
       sortBy: "recent",
+
+      // SommAI Sommelier state
+      sommAiMessages: [],
+      sommAiInputText: "",
+      sommAiPendingImage: null,
+      sommAiLoading: false,
+      sommAiError: "",
+
+      // Vivino import progress & warning modal state
+      importWarningModal: false,
+      importPendingFile: null,
+      importProgressModal: false,
+      importProgressData: null,
+      importEnrichAi: true,
 
       // Tasted page filter/search/sort state
       tastedFilterTab: "all",
@@ -1183,7 +1197,7 @@ class LekkersappieMobileApp {
 
         return `
           <div class="bottle-card ${tastedMode ? "bottle-card-tasted" : ""}" data-wine-id="${w.id}">
-            <div class="bottle-thumb-wrap" data-preview-id="${w.id}" title="Tap to view label photo">
+            <div class="bottle-thumb-wrap" data-detail-id="${w.id}" title="Tap to view wine details">
               ${
                 safeImageUrl(w.image_url)
                   ? `<img src="${safeImageUrl(w.image_url)}" alt="${esc(w.name)}" />`
@@ -1367,9 +1381,6 @@ class LekkersappieMobileApp {
           <strong>🥂 Tasted &amp; Consumed Wines</strong>
           <span>Wines you scanned as Tasted or drank from your cellar (${allTasted.length} total)</span>
         </div>
-        <button type="button" class="btn btn-primary" data-open-scan="tasted" style="padding:8px 14px; min-height:42px; font-size:13.5px;">
-          📷 Scan Tasted
-        </button>
       </div>
 
       <div class="search-filter-dock">
@@ -1463,6 +1474,11 @@ class LekkersappieMobileApp {
   }
 
   _renderStatsView() {
+    this.state.activeNav = "config";
+    return this._renderConfigView();
+  }
+
+  _renderStatsSection() {
     const stats = this.state.statistics || {};
     const cur = esc(this.state.currency);
     const inStock = this.state.wines.filter((w) => Number(w.quantity || 0) > 0);
@@ -1546,7 +1562,6 @@ class LekkersappieMobileApp {
         : `<div class="stat-empty">—</div>`;
 
     return `
-      <div class="section-wrap">
         <div class="kpi-grid">
           ${kpi(stats.total_bottles ?? totalBottles, "Bottles in Cellar")}
           ${kpi(stats.unique_wines ?? inStock.length, "Unique Wines")}
@@ -1652,7 +1667,6 @@ class LekkersappieMobileApp {
                 </div>`
           }
         </div>
-      </div>
     `;
   }
 
@@ -1827,11 +1841,301 @@ class LekkersappieMobileApp {
             </a>
           </div>
         </div>
+
+        <div class="panel-card" style="margin-top:20px; border-left:4px solid var(--brand);">
+          <h3 style="font-size:17px; margin:0 0 6px;">📊 Cellar Statistics &amp; Analytics</h3>
+          <p style="font-size:13px; color:var(--text-muted); margin:0;">
+            Comprehensive analytics of your active cellar stock, drinking windows, styles, and geography.
+          </p>
+        </div>
+        ${this._renderStatsSection()}
+      </div>
+    `;
+  }
+
+  _renderSommAIView() {
+    const inStock = this.state.wines.filter((w) => Number(w.quantity || 0) > 0);
+    const inStockCount = inStock.reduce((s, w) => s + Number(w.quantity || 0), 0);
+    const messages = this.state.sommAiMessages || [];
+
+    return `
+      <div class="section-wrap sommai-view">
+        <div class="sommai-header-card">
+          <div class="sommai-header-top">
+            <div class="sommai-avatar">🍷🤖</div>
+            <div class="sommai-title-wrap">
+              <h2 class="sommai-title">SommAI Sommelier</h2>
+              <div class="sommai-subtitle">AI Food &amp; Wine Pairing • Grounded in Your Cellar</div>
+            </div>
+          </div>
+          <p class="sommai-description">
+            Describe your meal or snap a photo of your plate. I will analyze the dish's flavor profile, sauces, and cooking method, and recommend the best pairings directly from your <strong>${inStockCount} cellar bottles in stock</strong>.
+          </p>
+          <div class="sommai-chips-scroll">
+            <span style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-right:4px; align-self:center;">Pair with:</span>
+            <button type="button" class="sommai-chip" data-sommai-prompt="Grilled Ribeye Steak with Garlic Herb Butter">🥩 Ribeye Steak</button>
+            <button type="button" class="sommai-chip" data-sommai-prompt="Truffle and Porcini Mushroom Tagliatelle">🍝 Truffle Pasta</button>
+            <button type="button" class="sommai-chip" data-sommai-prompt="Fresh Salmon and Tuna Sashimi">🍣 Salmon Sashimi</button>
+            <button type="button" class="sommai-chip" data-sommai-prompt="Pan-Seared Duck Breast with Cherry Glaze">🍗 Duck Breast</button>
+            <button type="button" class="sommai-chip" data-sommai-prompt="Artisanal Aged Hard &amp; Soft Cheese Board">🧀 Aged Cheeses</button>
+            <button type="button" class="sommai-chip" data-sommai-prompt="Spicy Thai Green Curry with Coconut Milk">🌶️ Thai Green Curry</button>
+          </div>
+        </div>
+
+        <div class="sommai-chat-thread" id="sommai-chat-thread">
+          ${
+            messages.length === 0
+              ? `<div class="panel-card" style="text-align:center; padding:24px 16px; background:var(--surface-alt);">
+                  <span style="font-size:36px; display:block; margin-bottom:8px;">🍽️🍷</span>
+                  <strong style="font-size:15px; display:block; margin-bottom:4px;">No pairings requested yet</strong>
+                  <span style="font-size:13px; color:var(--text-muted); line-height:1.45;">
+                    Tap one of the quick dishes above, type a recipe or ingredients below, or take a picture of what you are eating!
+                  </span>
+                </div>`
+              : messages.map((m) => this._renderSommAiMessage(m)).join("")
+          }
+          ${
+            this.state.sommAiLoading
+              ? `<div class="sommai-msg sommai-msg-bot">
+                  <div class="sommai-msg-bubble sommai-thinking">
+                    <span class="sommai-spin">🍷</span>
+                    <span>Sommelier is analyzing cellar inventory &amp; flavor pairing…</span>
+                  </div>
+                </div>`
+              : ""
+          }
+          ${
+            this.state.sommAiError
+              ? `<div style="padding:10px 12px; border-radius:10px; background:rgba(198,40,40,0.1); color:var(--danger); font-size:13px;">
+                  <strong>Sommelier Error:</strong> ${esc(this.state.sommAiError)}
+                </div>`
+              : ""
+          }
+        </div>
+
+        <div class="sommai-input-dock">
+          ${
+            this.state.sommAiPendingImage
+              ? `<div class="sommai-pending-img-bar">
+                  <img src="${this.state.sommAiPendingImage}" class="sommai-pending-thumb" alt="Dish photo" />
+                  <span class="sommai-pending-label">Dish photo attached</span>
+                  <button type="button" class="btn btn-icon btn-sm" id="btn-clear-sommai-img" title="Remove photo">✕</button>
+                </div>`
+              : ""
+          }
+          <form id="sommai-chat-form" class="sommai-input-form">
+            <input type="file" id="sommai-dish-file" accept="image/*" style="display:none;" />
+            <button type="button" class="btn btn-icon sommai-photo-btn" id="btn-sommai-pick-photo" title="Attach dish photo">
+              📷
+            </button>
+            <input
+              type="text"
+              id="sommai-text-input"
+              class="sommai-input-field"
+              placeholder="Describe your dish or ingredients..."
+              value="${esc(this.state.sommAiInputText)}"
+              autocomplete="off"
+            />
+            <button type="submit" class="btn btn-primary sommai-send-btn" id="btn-sommai-send" ${this.state.sommAiLoading ? "disabled" : ""}>
+              Pair 🍷
+            </button>
+          </form>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderSommAiMessage(m) {
+    if (m.role === "user") {
+      return `
+        <div class="sommai-msg sommai-msg-user">
+          <div class="sommai-msg-bubble">
+            ${m.image_data ? `<img src="${m.image_data}" class="sommai-user-img" alt="Dish photo" />` : ""}
+            <div>${esc(m.text || "Pair this dish with wine")}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    const recs = m.recommended_wines || [];
+    return `
+      <div class="sommai-msg sommai-msg-bot">
+        <div class="sommai-msg-bubble">
+          ${m.dish_name ? `<div class="sommai-dish-title">🍽️ ${esc(m.dish_name)}</div>` : ""}
+          <div style="margin-bottom:8px; line-height:1.5;">${esc(m.conversational_response || m.text || "")}</div>
+          ${
+            m.dish_analysis
+              ? `<div class="sommai-analysis-box">
+                  <strong style="color:var(--brand); display:block; margin-bottom:2px;">Dish Analysis:</strong>
+                  ${esc(m.dish_analysis)}
+                </div>`
+              : ""
+          }
+          ${
+            m.pairing_reasoning
+              ? `<div class="sommai-analysis-box" style="background:rgba(122,40,88,0.06); border-left:3px solid var(--brand);">
+                  <strong style="color:var(--brand); display:block; margin-bottom:2px;">Pairing Strategy:</strong>
+                  ${esc(m.pairing_reasoning)}
+                </div>`
+              : ""
+          }
+          ${
+            recs.length > 0
+              ? `<div class="sommai-recs-wrap">
+                  <div class="sommai-recs-header">🍾 Recommended from Your Cellar</div>
+                  ${recs
+                    .map((rec) => {
+                      const matchLabel =
+                        rec.match_type === "best"
+                          ? "★ Best Cellar Match"
+                          : rec.match_type === "alternative"
+                            ? "Alternative Match"
+                            : "Cellar Compromise";
+                      const matchClass =
+                        rec.match_type === "best"
+                          ? "ready"
+                          : rec.match_type === "alternative"
+                            ? "vintage"
+                            : "hold";
+                      return `
+                        <div class="sommai-rec-card" ${rec.wine_id ? `data-detail-id="${rec.wine_id}"` : ""}>
+                          <div class="sommai-rec-top">
+                            <span class="pill pill-${matchClass}">${matchLabel}</span>
+                            ${rec.serving_temp_c ? `<span class="pill pill-vintage">🌡️ ${esc(rec.serving_temp_c)}</span>` : ""}
+                            ${rec.decant_minutes ? `<span class="pill pill-vintage">⏳ Decant ${rec.decant_minutes}m</span>` : ""}
+                          </div>
+                          <div class="sommai-rec-title">
+                            <strong>${esc(rec.wine_title)}</strong>
+                            <span class="highlight-chevron">›</span>
+                          </div>
+                          <div class="sommai-rec-notes">${esc(rec.sommelier_notes)}</div>
+                        </div>
+                      `;
+                    })
+                    .join("")}
+                </div>`
+              : ""
+          }
+        </div>
       </div>
     `;
   }
 
   /* ================= Slide-Up Sheets ================= */
+
+  _renderImportWarningSheet() {
+    const file = this.state.importPendingFile;
+    if (!file) return "";
+
+    return `
+      <div class="sheet-backdrop" id="sheet-backdrop">
+        <div class="sheet sheet-fullscreen">
+          <div class="sheet-header">
+            <button type="button" class="btn btn-icon btn-back" id="btn-close-import-warning" aria-label="Cancel"><span aria-hidden="true">‹</span></button>
+            <h2>🍇 Import Vivino History</h2>
+          </div>
+          <div class="sheet-body">
+            <div class="scaled-zone">
+              <div style="text-align:center; padding:16px 0 12px;">
+                <span style="font-size:48px;">🍇⏳</span>
+                <h3 style="font-size:18px; margin:8px 0 4px;">Ready to Import Vivino Archive</h3>
+                <p style="font-size:13px; color:var(--text-muted); margin:0;">
+                  File: <strong>${esc(file.name)}</strong> (${(file.size / 1024 / 1024).toFixed(2)} MB)
+                </p>
+              </div>
+
+              <div class="panel-card" style="background:rgba(245,158,11,0.08); border-left:4px solid #f59e0b; margin-bottom:14px;">
+                <div style="font-weight:700; color:#b45309; font-size:13.5px; margin-bottom:4px;">
+                  ⚠️ Please Note: Import Duration &amp; AI Analysis
+                </div>
+                <p style="font-size:13px; color:var(--text); margin:0; line-height:1.5;">
+                  Depending on the number of bottles in your export, parsing records, downloading label photos, and retrieving missing sommelier details can take anywhere from <strong>30 seconds to a few minutes</strong>.
+                </p>
+              </div>
+
+              <div class="panel-card" style="margin-bottom:16px;">
+                <label style="display:flex; align-items:flex-start; gap:12px; cursor:pointer;">
+                  <input type="checkbox" id="import-enrich-ai-check" ${this.state.importEnrichAi ? "checked" : ""} style="width:20px; height:20px; margin-top:2px; accent-color:var(--brand);" />
+                  <div>
+                    <strong style="font-size:14px; display:block; margin-bottom:2px;">✨ Enrich with Gemini AI</strong>
+                    <span style="font-size:12.5px; color:var(--text-muted); line-height:1.4; display:block;">
+                      Automatically fills missing grape varietal blends, drinking windows (from/until), and structural taste profile sliders (Soft vs Acidic, Light vs Bold, Dry vs Sweet) for each bottle.
+                    </span>
+                  </div>
+                </label>
+              </div>
+
+              <div class="form-stack">
+                <button type="button" class="btn btn-primary btn-lg" id="btn-start-vivino-import" style="width:100%;">
+                  🚀 Start Import
+                </button>
+                <button type="button" class="btn btn-lg" id="btn-cancel-vivino-import" style="width:100%;">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderImportProgressSheet() {
+    const p = this.state.importProgressData || {
+      running: true,
+      progress_pct: 0,
+      stage: "parsing",
+      status_message: "Preparing import…",
+    };
+    const pct = Math.max(0, Math.min(100, Math.round(p.progress_pct || 0)));
+    const isDone = !p.running && pct >= 100;
+
+    return `
+      <div class="sheet-backdrop" id="sheet-backdrop">
+        <div class="sheet sheet-fullscreen">
+          <div class="sheet-header">
+            ${isDone ? `<button type="button" class="btn btn-icon btn-back" id="btn-close-import-progress" aria-label="Done"><span aria-hidden="true">‹</span></button>` : `<div></div>`}
+            <h2>${isDone ? "✅ Import Complete" : "🍇 Importing Vivino Data"}</h2>
+          </div>
+          <div class="sheet-body">
+            <div class="scaled-zone">
+              <div style="text-align:center; padding:20px 0 16px;">
+                <span style="font-size:48px;" class="${isDone ? "" : "sommai-spin"}">${isDone ? "🎉" : "🍇"}</span>
+                <h3 style="font-size:19px; margin:8px 0 4px;">${isDone ? "Import Finished Successfully!" : "Processing Your Wine Archive"}</h3>
+                <p style="font-size:13px; color:var(--text-muted); margin:0;">
+                  ${isDone ? "All wines, tasted records, and bottle photos have been processed." : "Please keep this screen open while we process your export."}
+                </p>
+              </div>
+
+              <div class="panel-card" style="margin-bottom:16px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; font-weight:700; font-size:14px;">
+                  <span>${isDone ? "Completed" : "Progress"}</span>
+                  <span class="import-progress-pct" style="color:var(--brand);">${pct}%</span>
+                </div>
+                <div class="import-progress-track">
+                  <div class="import-progress-fill" style="width:${pct}%;"></div>
+                </div>
+                <div class="import-progress-status-text" style="font-size:12.5px; color:var(--text-muted); margin-top:10px; line-height:1.45;">
+                  <strong>Status:</strong> ${esc(p.status_message || (isDone ? "Done!" : "Working…"))}
+                  ${p.total_bottles ? `<div style="margin-top:2px;">Bottles: ${p.current_bottle || 0} / ${p.total_bottles}</div>` : ""}
+                </div>
+              </div>
+
+              ${isDone ? `
+                <button type="button" class="btn btn-primary btn-lg" id="btn-finish-import-progress" style="width:100%;">
+                  🍾 View Cellar &amp; Tasted Wines
+                </button>
+              ` : `
+                <div style="text-align:center; font-size:12.5px; color:var(--text-muted);">
+                  ⏳ Running in background…
+                </div>
+              `}
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
 
   _renderDetailSheet() {
     const w = this.state.detailWine;
@@ -2005,7 +2309,7 @@ class LekkersappieMobileApp {
                           <span>✨ Sommelier &amp; Producer AI Research</span>
                           <button type="button" class="btn btn-icon" id="btn-detail-reresearch" aria-label="Refresh AI research" title="Refresh AI Research">🔄</button>
                         </h3>
-                        ${research.summary ? `<p style="font-size:13.5px; font-style:italic; margin:0 0 10px; line-height:1.45;">${esc(research.summary)}</p>` : ""}
+                        ${research.summary ? `<p style="font-size:14.5px; font-style:italic; margin:0 0 10px; line-height:1.45;">${esc(research.summary)}</p>` : ""}
                         ${
                           research.taste_profile
                             ? `<div class="taste-card">
@@ -2048,7 +2352,7 @@ class LekkersappieMobileApp {
                               </div>`
                             : ""
                         }
-                        <div class="form-stack" style="font-size:12.5px; line-height:1.5;">
+                        <div class="form-stack" style="font-size:13.5px; line-height:1.5;">
                           ${research.producer_history ? `<div><strong style="color:var(--brand);">🏰 Producer Heritage:</strong> ${esc(research.producer_history)}</div>` : ""}
                           ${research.wine_and_terroir ? `<div><strong style="color:var(--brand);">🍇 Terroir &amp; Vineyards:</strong> ${esc(research.wine_and_terroir)}</div>` : ""}
                           ${research.tasting_profile ? `<div><strong style="color:var(--brand);">🍷 Tasting Profile:</strong> ${esc(research.tasting_profile)}</div>` : ""}
@@ -2394,10 +2698,10 @@ class LekkersappieMobileApp {
     const scaleLabel = this._fontScaleLabel();
 
     let activeViewHtml = "";
-    if (this.state.activeNav === "stats") activeViewHtml = this._renderStatsView();
+    if (this.state.activeNav === "sommai") activeViewHtml = this._renderSommAIView();
     else if (this.state.activeNav === "tasted") activeViewHtml = this._renderTastedView();
     else if (this.state.activeNav === "add") activeViewHtml = this._renderManualAddView();
-    else if (this.state.activeNav === "config") activeViewHtml = this._renderConfigView();
+    else if (this.state.activeNav === "config" || this.state.activeNav === "stats") activeViewHtml = this._renderConfigView();
     else activeViewHtml = this._renderCellarView();
 
     const isTastedPage = this.state.activeNav === "tasted";
@@ -2442,9 +2746,9 @@ class LekkersappieMobileApp {
             <span class="nav-ico">🍷</span>
             <span>Cellar</span>
           </button>
-          <button class="nav-tab ${this.state.activeNav === "stats" ? "active" : ""}" data-nav="stats" aria-label="Stats">
-            <span class="nav-ico">📊</span>
-            <span>Stats</span>
+          <button class="nav-tab ${this.state.activeNav === "sommai" ? "active" : ""}" data-nav="sommai" aria-label="SommAI Sommelier">
+            <span class="nav-ico">🤖</span>
+            <span>SommAI</span>
           </button>
           <button class="nav-fab-scan" id="btn-nav-scan" aria-label="Scan Bottle">
             <span class="nav-ico">📷</span>
@@ -2466,6 +2770,8 @@ class LekkersappieMobileApp {
       ${this.state.activeSheet === "crop" ? this._renderCropSheet() : ""}
       ${this.state.activeSheet === "preview" ? this._renderPreviewSheet() : ""}
       ${this.state.activeSheet === "install_guide" ? this._renderInstallGuideSheet() : ""}
+      ${this.state.importWarningModal ? this._renderImportWarningSheet() : ""}
+      ${this.state.importProgressModal ? this._renderImportProgressSheet() : ""}
     `;
 
     this._bindEvents();
@@ -2736,27 +3042,89 @@ class LekkersappieMobileApp {
     r.querySelector("#mobile-vivino-csv-file")?.addEventListener("change", (e) => {
       const file = e.target.files?.[0];
       if (!file) return;
+      this.state.importPendingFile = file;
+      this.state.importWarningModal = true;
+      this.state.importProgressModal = false;
+      this.render();
+      e.target.value = "";
+    });
+
+    r.querySelector("#btn-close-import-warning")?.addEventListener("click", () => {
+      this.state.importWarningModal = false;
+      this.state.importPendingFile = null;
+      this.render();
+    });
+    r.querySelector("#btn-cancel-vivino-import")?.addEventListener("click", () => {
+      this.state.importWarningModal = false;
+      this.state.importPendingFile = null;
+      this.render();
+    });
+    r.querySelector("#import-enrich-ai-check")?.addEventListener("change", (e) => {
+      this.state.importEnrichAi = Boolean(e.target.checked);
+    });
+
+    r.querySelector("#btn-start-vivino-import")?.addEventListener("click", async () => {
+      const file = this.state.importPendingFile;
+      if (!file) return;
       const isZip = file.name.toLowerCase().endsWith(".zip");
+      const enrichAi = Boolean(this.state.importEnrichAi);
+
+      this.state.importWarningModal = false;
+      this.state.importProgressModal = true;
+      this.state.importProgressData = {
+        running: true,
+        progress_pct: 5,
+        stage: "parsing",
+        status_message: "Reading and uploading archive…",
+      };
+      this.render();
+
+      let pollTimer = null;
+      pollTimer = setInterval(async () => {
+        try {
+          const prog = await this.apiGet("import_progress");
+          if (prog && prog.stage) {
+            this.state.importProgressData = prog;
+            this._updateProgressUi(prog);
+            if (!prog.running && prog.progress_pct >= 100) {
+              clearInterval(pollTimer);
+            }
+          }
+        } catch (_) {}
+      }, 1000);
+
       const reader = new FileReader();
       reader.onload = async () => {
         try {
-          this.showToast(isZip ? "Importing Vivino ZIP (cellar, tasted & covers)…" : "Importing Vivino history…");
-          const payload = isZip
-            ? { format: "zip", content: String(reader.result || "") }
-            : { format: "csv", content: String(reader.result || "") };
+          const payload = {
+            format: isZip ? "zip" : "csv",
+            content: String(reader.result || ""),
+            enrich_ai: enrichAi,
+          };
           const res = await this.apiPost("import", payload);
+          clearInterval(pollTimer);
+          this.state.importProgressData = {
+            running: false,
+            progress_pct: 100,
+            stage: "complete",
+            status_message: isZip
+              ? `Imported ${res?.cellar_imported ?? 0} cellar (${res?.cellar_bottles ?? 0} bottles), ${res?.tasted_imported ?? 0} tasted, ${res?.images_downloaded ?? 0} covers.`
+              : `Imported ${res?.imported_count ?? 0} wines.`,
+            total_bottles: (res?.cellar_imported ?? 0) + (res?.tasted_imported ?? 0),
+            current_bottle: (res?.cellar_imported ?? 0) + (res?.tasted_imported ?? 0),
+          };
           await this.fetchState();
-          if (isZip) {
-            this.showToast(
-              `Vivino ZIP imported! ${res?.cellar_imported ?? 0} cellar (${res?.cellar_bottles ?? 0} bottles), ${res?.tasted_imported ?? 0} tasted, ${res?.images_downloaded ?? 0} covers.`
-            );
-          } else {
-            this.showToast(`Imported ${res?.imported_count ?? 0} wine(s) from Vivino history!`);
-          }
+          this.render();
         } catch (err) {
+          clearInterval(pollTimer);
+          this.state.importProgressData = {
+            running: false,
+            progress_pct: 100,
+            stage: "error",
+            status_message: `Import failed: ${err?.message || "Unknown error"}`,
+          };
+          this.render();
           this.showError("Vivino import failed", err);
-        } finally {
-          e.target.value = "";
         }
       };
       if (isZip) {
@@ -2765,6 +3133,56 @@ class LekkersappieMobileApp {
         reader.readAsText(file);
       }
     });
+
+    r.querySelector("#btn-close-import-progress")?.addEventListener("click", () => {
+      this.state.importProgressModal = false;
+      this.state.importPendingFile = null;
+      this.state.importProgressData = null;
+      this.render();
+    });
+    r.querySelector("#btn-finish-import-progress")?.addEventListener("click", () => {
+      this.state.importProgressModal = false;
+      this.state.importPendingFile = null;
+      this.state.importProgressData = null;
+      this.state.activeNav = "cellar";
+      this.render();
+    });
+
+    // SommAI Sommelier event listeners
+    r.querySelectorAll(".sommai-chip[data-sommai-prompt]").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        const prompt = chip.dataset.sommaiPrompt;
+        this._sendSommAiMessage(prompt);
+      });
+    });
+
+    r.querySelector("#btn-sommai-pick-photo")?.addEventListener("click", () => {
+      r.querySelector("#sommai-dish-file")?.click();
+    });
+    r.querySelector("#sommai-dish-file")?.addEventListener("change", (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        this.state.sommAiPendingImage = String(reader.result || "");
+        this.render();
+      };
+      reader.readAsDataURL(file);
+      e.target.value = "";
+    });
+    r.querySelector("#btn-clear-sommai-img")?.addEventListener("click", () => {
+      this.state.sommAiPendingImage = null;
+      this.render();
+    });
+    const sommForm = r.querySelector("#sommai-chat-form");
+    if (sommForm) {
+      sommForm.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const inp = r.querySelector("#sommai-text-input");
+        const val = (inp?.value || "").trim();
+        this._sendSommAiMessage(val);
+      });
+    }
 
     // Manual add form
     const manualForm = r.querySelector("#mobile-manual-add-form");
@@ -2941,6 +3359,74 @@ class LekkersappieMobileApp {
         }
       });
       r.querySelector("#btn-crop-confirm")?.addEventListener("click", () => this._confirmCropAndRunScan());
+    }
+  }
+
+  _updateProgressUi(prog) {
+    const r = this.root;
+    if (!r) return;
+    const fill = r.querySelector(".import-progress-fill");
+    const pctSpan = r.querySelector(".import-progress-pct");
+    const statusDiv = r.querySelector(".import-progress-status-text");
+    const pct = Math.max(0, Math.min(100, Math.round(prog.progress_pct || 0)));
+    if (fill) fill.style.width = `${pct}%`;
+    if (pctSpan) pctSpan.textContent = `${pct}%`;
+    if (statusDiv) {
+      statusDiv.innerHTML = `<strong>Status:</strong> ${esc(prog.status_message || "Working…")}${
+        prog.total_bottles ? `<div style="margin-top:2px;">Bottles: ${prog.current_bottle || 0} / ${prog.total_bottles}</div>` : ""
+      }`;
+    }
+  }
+
+  async _sendSommAiMessage(textPrompt) {
+    const text = (textPrompt !== undefined ? textPrompt : this.state.sommAiInputText || "").trim();
+    const image = this.state.sommAiPendingImage;
+    if (!text && !image) return;
+
+    const userMsg = {
+      role: "user",
+      text: text || "What wine from my cellar pairs best with this dish?",
+      image_data: image,
+      timestamp: new Date().toISOString(),
+    };
+    this.state.sommAiMessages.push(userMsg);
+    this.state.sommAiInputText = "";
+    this.state.sommAiPendingImage = null;
+    this.state.sommAiLoading = true;
+    this.state.sommAiError = "";
+    this.render();
+
+    const thread = this.root?.querySelector("#sommai-chat-thread");
+    if (thread) thread.scrollTop = thread.scrollHeight;
+
+    try {
+      const historyPayload = this.state.sommAiMessages.slice(-6).map((m) => ({
+        role: m.role,
+        text: m.conversational_response || m.text,
+      }));
+      const res = await this.apiPost("sommai", {
+        message: text,
+        image_data: image,
+        history: historyPayload,
+      });
+      this.state.sommAiMessages.push({
+        role: "assistant",
+        text: res.conversational_response || "Here are my pairing recommendations.",
+        dish_name: res.dish_name,
+        dish_analysis: res.dish_analysis,
+        pairing_reasoning: res.pairing_reasoning,
+        recommended_wines: res.recommended_wines || [],
+        conversational_response: res.conversational_response,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (err) {
+      this.state.sommAiError = err?.message || "Failed to get sommelier recommendation.";
+      this.showError("SommAI pairing failed", err);
+    } finally {
+      this.state.sommAiLoading = false;
+      this.render();
+      const threadEnd = this.root?.querySelector("#sommai-chat-thread");
+      if (threadEnd) threadEnd.scrollTop = threadEnd.scrollHeight;
     }
   }
 

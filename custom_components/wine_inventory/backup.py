@@ -971,6 +971,7 @@ def import_vivino_export_zip(
     db: WineDatabase,
     zip_source: Path | bytes | str,
     download_images: bool = True,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Parse official Vivino data export ZIP.
 
@@ -978,6 +979,13 @@ def import_vivino_export_zip(
     2. vivino_data/cellar.csv -> populated into active cellar inventory with stock batches.
     3. Label image -> downloaded and saved to <config>/www/wine_inventory/covers/.
     """
+    if progress_callback:
+        progress_callback({
+            "phase": "opening_archive",
+            "percent": 5,
+            "message": "Opening Vivino export archive...",
+        })
+
     if isinstance(zip_source, bytes):
         zip_file: Any = io.BytesIO(zip_source)
     elif isinstance(zip_source, Path) and zip_source.is_file():
@@ -1013,12 +1021,24 @@ def import_vivino_export_zip(
 
             tasted_res = {}
             if full_wine_text:
+                if progress_callback:
+                    progress_callback({
+                        "phase": "parsing_tasted",
+                        "percent": 15,
+                        "message": "Parsing tasted wines catalog and downloading bottle covers...",
+                    })
                 tasted_res = import_vivino_full_wine_list_csv(
                     config_dir, db, full_wine_text, download_images=download_images
                 )
 
             cellar_res = {}
             if cellar_text:
+                if progress_callback:
+                    progress_callback({
+                        "phase": "parsing_cellar",
+                        "percent": 40,
+                        "message": "Populating active cellar stock batches...",
+                    })
                 cellar_res = import_vivino_cellar_csv(config_dir, db, cellar_text)
 
             tasted_count = tasted_res.get("tasted_imported", 0)
@@ -1026,6 +1046,13 @@ def import_vivino_export_zip(
             cellar_bottles = cellar_res.get("cellar_bottles", 0)
             images_downloaded = tasted_res.get("images_downloaded", 0)
             total_imported = max(tasted_count, cellar_count)
+
+            if progress_callback:
+                progress_callback({
+                    "phase": "records_imported",
+                    "percent": 50,
+                    "message": f"Successfully parsed {total_imported} wines. Ready for AI Sommelier enrichment.",
+                })
 
             return {
                 "success": True,

@@ -652,3 +652,387 @@ async def async_research_wine_with_gemini(
         "research": research_json,
         "model_used": model_id,
     }
+
+
+# =========================================================================
+# SommAI Sommelier Food & Dish Pairing Engine
+# =========================================================================
+
+SOMMELIER_PAIRING_PROMPT = """You are SommAI, a charming, world-class Master Sommelier and culinary wine pairing intelligence system dedicated to the Lekkersappie Wine Cellar.
+Your mission is to provide expert wine pairing advice for a meal, dish, or culinary recipe, selecting the best matching bottles SPECIFICALLY from the user's personal wine cellar inventory.
+
+Current Active Cellar Inventory (In-Stock Bottles):
+{cellar_inventory}
+
+User Query / Dish Description:
+{query_text}
+
+Instructions:
+1. Dish Recognition & Flavor Profile Analysis:
+   - If a photo of the dish is provided, recognize the dish, main ingredients, cooking method, sauces, fat/richness, acidity, sweetness, spice heat, umami, and herbs.
+   - If text is provided, analyze the flavor architecture and pairing dynamics.
+   - Summarize this in `dish_name` and `dish_analysis`.
+2. Pairing Philosophy (`pairing_reasoning`):
+   - Explain the classic sommelier principles: why certain wine structures (tannins, acidity, body, sweetness, oak) harmonize with or cut through the dish's flavors.
+3. Wine Selection from the Cellar:
+   - Select 1 to 3 bottles STRICTLY from the provided `Cellar Inventory`.
+   - Each recommendation must specify:
+     - `wine_id`: integer ID matching a wine in the cellar inventory (or null if none available).
+     - `wine_title`: string of the recommended wine (winery, cuvée name, vintage).
+     - `match_type`: "Best Match", "Alternative Match", or "Adventurous Match".
+     - `sommelier_notes`: specific explanation of why this bottle from their cellar matches this dish.
+     - `serving_temp_c`: recommended serving temperature (e.g. "16-18°C" or "8-10°C").
+     - `decant_minutes`: recommended decanting time in minutes (0 if none needed).
+   - If the cellar inventory does not contain an ideal match, pick the closest compatible bottle from the cellar, acknowledge the compromise politely, and explain what would theoretically be ideal.
+4. Conversational Response (`conversational_response`):
+   - Write a warm, engaging, and professional response directly to the user. Present your recommendations conversationally, naming the chosen bottles, vintages, and why they will elevate dinner.
+"""
+
+SOMMELIER_PAIRING_SCHEMA: dict[str, Any] = {
+    "type": "OBJECT",
+    "properties": {
+        "dish_name": {"type": "STRING"},
+        "dish_analysis": {"type": "STRING"},
+        "pairing_reasoning": {"type": "STRING"},
+        "recommended_wines": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "wine_id": {"type": "INTEGER", "nullable": True},
+                    "wine_title": {"type": "STRING"},
+                    "match_type": {"type": "STRING"},
+                    "sommelier_notes": {"type": "STRING"},
+                    "serving_temp_c": {"type": "STRING"},
+                    "decant_minutes": {"type": "INTEGER"},
+                },
+                "required": [
+                    "wine_title",
+                    "match_type",
+                    "sommelier_notes",
+                ],
+            },
+        },
+        "conversational_response": {"type": "STRING"},
+    },
+    "required": [
+        "dish_name",
+        "dish_analysis",
+        "pairing_reasoning",
+        "recommended_wines",
+        "conversational_response",
+    ],
+}
+
+
+async def async_sommelier_dish_pairing(
+    session: aiohttp.ClientSession,
+    *,
+    api_key: str,
+    cellar_wines: list[dict[str, Any]],
+    dish_description: str | None = None,
+    image_bytes: bytes | None = None,
+    mime_type: str | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
+    model: str = DEFAULT_GEMINI_MODEL,
+    timeout_seconds: float = 40.0,
+) -> dict[str, Any]:
+    """Execute Gemini Flash-Lite multimodal sommelier pairing against cellar stock."""
+    clean_key = (api_key or "").strip()
+    if not clean_key:
+        raise GeminiScannerError(
+            "Gemini API key is not configured. Add it in Lekkersappie options."
+        )
+
+    model_id = (model or DEFAULT_GEMINI_MODEL).strip()
+    if model_id.startswith("models/"):
+        model_id = model_id[len("models/") :]
+
+    url = f"{GEMINI_API_BASE_URL}/{model_id}:generateContent"
+
+    # Format cellar inventory compactly for the prompt
+    inventory_items = []
+    for w in cellar_wines:
+        qty = w.get("quantity") or 0
+        if int(qty) <= 0:
+            continue
+        v_rating = f", Vivino: {w.get('vivino_rating')}" if w.get("vivino_rating") else ""
+        p_rating = f", My Rating: {w.get('personal_rating')}" if w.get("personal_rating") else ""
+        drink = (
+            f", Drink: {w.get('drink_from_year', '')}-{w.get('drink_until_year', '')}"
+            if w.get("drink_from_year") or w.get("drink_until_year")
+            else ""
+        )
+        t_note = (
+            f", Window note: {w.get('drink_window_note')}"
+            if w.get("drink_window_note")
+            else ""
+        )
+        notes = f", Notes: {str(w.get('general_notes') or '')[:100]}" if w.get("general_notes") else ""
+        inventory_items.append(
+            f"- [ID {w.get('id')}] {w.get('winery', 'Unknown')} — {w.get('name', 'Wine')} ({w.get('vintage') or 'NV'}), "
+            f"Type: {w.get('wine_type', 'red')}, Grape: {w.get('varietal', 'unspecified')}, "
+            f"Region: {w.get('region', '')}, Country: {w.get('country', '')}, In Stock: {qty} bottles{v_rating}{p_rating}{drink}{t_note}{notes}"
+        )
+    cellar_text = (
+        "\n".join(inventory_items)
+        if inventory_items
+        else "No bottles currently in cellar stock (inventory is empty)."
+    )
+
+    query_str = (dish_description or "").strip() or "What wine from my cellar would pair best with this meal?"
+    prompt = SOMMELIER_PAIRING_PROMPT.format(
+        cellar_inventory=cellar_text,
+        query_text=query_str,
+    )
+
+    contents: list[dict[str, Any]] = []
+    if conversation_history:
+        for turn in conversation_history[-6:]:
+            role = "user" if turn.get("role") in ("user", "human") else "model"
+            msg = str(turn.get("content") or turn.get("text") or "").strip()
+            if msg:
+                contents.append({"role": role, "parts": [{"text": msg}]})
+
+    current_parts: list[dict[str, Any]] = []
+    if image_bytes:
+        current_parts.append(
+            {
+                "inlineData": {
+                    "mimeType": mime_type or "image/jpeg",
+                    "data": base64.b64encode(image_bytes).decode("ascii"),
+                }
+            }
+        )
+    current_parts.append({"text": prompt})
+    contents.append({"role": "user", "parts": current_parts})
+
+    request_body = {
+        "contents": contents,
+        "generationConfig": {
+            "temperature": 0.3,
+            "responseMimeType": "application/json",
+            "responseSchema": SOMMELIER_PAIRING_SCHEMA,
+        },
+    }
+
+    timeout = (
+        aiohttp.ClientTimeout(total=timeout_seconds)
+        if aiohttp is not None
+        else timeout_seconds
+    )
+    client_error_cls = aiohttp.ClientError if aiohttp is not None else OSError
+
+    try:
+        async with session.post(
+            url,
+            headers={"x-goog-api-key": clean_key},
+            json=request_body,
+            timeout=timeout,
+        ) as resp:
+            resp_text = await resp.text()
+            if resp.status != 200:
+                raise GeminiScannerError(
+                    f"Gemini API returned HTTP {resp.status} during sommelier pairing: {resp_text[:250]}"
+                )
+            payload = json.loads(resp_text)
+    except client_error_cls as err:
+        raise GeminiScannerError(f"Network error contacting Gemini API: {err}") from err
+    except json.JSONDecodeError as err:
+        raise GeminiScannerError(f"Invalid JSON returned by Gemini API: {err}") from err
+
+    candidates = payload.get("candidates") or []
+    if not candidates:
+        raise GeminiScannerError("Gemini returned no sommelier pairing advice.")
+
+    parts = candidates[0].get("content", {}).get("parts") or []
+    text_output = "".join(str(p.get("text") or "") for p in parts).strip()
+    if not text_output:
+        raise GeminiScannerError("Gemini returned empty sommelier pairing text.")
+
+    try:
+        somm_json = json.loads(text_output)
+    except json.JSONDecodeError as err:
+        raise GeminiScannerError(
+            f"Failed to parse Gemini sommelier JSON: {text_output[:200]}"
+        ) from err
+
+    return {
+        "status": "ok",
+        "pairing": somm_json,
+        "model_used": model_id,
+    }
+
+
+# =========================================================================
+# Vivino Bottle LLM Enrichment Engine
+# =========================================================================
+
+VIVINO_ENRICHMENT_PROMPT = """You are a master sommelier and cataloguing intelligence expert.
+Given this wine record from a Vivino import, deduce and supply the missing cataloguing and sommelier details with high precision.
+
+Wine Details:
+- Winery / Producer: {winery}
+- Wine / Cuvée Name: {name}
+- Vintage: {vintage}
+- Region / Appellation: {region}
+- Country: {country}
+- Known Style / Type: {wine_type} {style}
+- Existing Notes: {notes}
+
+Required Enrichments:
+1. `varietal`: Specific grape variety or traditional blend (e.g., "Sangiovese", "Cabernet Sauvignon, Merlot", "Nebbiolo", "Chardonnay", "Riesling", "Tempranillo"). Never leave generic like "Red Blend" if the regional appellation defines the grape composition (e.g. Chianti = Sangiovese, Barolo = Nebbiolo, Chablis = Chardonnay, Brunello = Sangiovese Grosso).
+2. `wine_type`: "red", "white", "rose", "sparkling", "dessert", "fortified".
+3. `alcohol_pct`: Typical ABV percentage (e.g. 13.5, 14.0).
+4. `drink_from_year` & `drink_until_year`: Optimal peak drinking window years.
+5. `drink_window_note`: Concise decanting and serving guidance.
+6. `food_pairings`: 2 to 4 concise dish pairings.
+7. `taste_profile`: Structural sliders 0-100:
+   - `soft_vs_acidic`: 0 = Soft/Round, 100 = Acidic/Crisp
+   - `light_vs_bold`: 0 = Light-bodied, 100 = Bold/Full
+   - `dry_vs_sweet`: 0 = Bone Dry, 100 = Sweet/Luscious
+   - `soft_vs_acidic_label`, `light_vs_bold_label`, `dry_vs_sweet_label`
+8. `producer_history`: 1-2 sentences on winery heritage.
+9. `tasting_profile`: 1-2 sentences on flavor and aroma profile.
+10. `summary`: 1-sentence sommelier summary.
+"""
+
+VIVINO_ENRICHMENT_SCHEMA: dict[str, Any] = {
+    "type": "OBJECT",
+    "properties": {
+        "varietal": {"type": "STRING"},
+        "wine_type": {
+            "type": "STRING",
+            "enum": ["red", "white", "rose", "sparkling", "dessert", "fortified"],
+        },
+        "alcohol_pct": {"type": "NUMBER", "nullable": True},
+        "drink_from_year": {"type": "INTEGER", "nullable": True},
+        "drink_until_year": {"type": "INTEGER", "nullable": True},
+        "drink_window_note": {"type": "STRING"},
+        "food_pairings": {
+            "type": "ARRAY",
+            "items": {"type": "STRING"},
+        },
+        "taste_profile": {
+            "type": "OBJECT",
+            "properties": {
+                "soft_vs_acidic": {"type": "INTEGER"},
+                "light_vs_bold": {"type": "INTEGER"},
+                "dry_vs_sweet": {"type": "INTEGER"},
+                "soft_vs_acidic_label": {"type": "STRING"},
+                "light_vs_bold_label": {"type": "STRING"},
+                "dry_vs_sweet_label": {"type": "STRING"},
+            },
+            "required": ["soft_vs_acidic", "light_vs_bold", "dry_vs_sweet"],
+        },
+        "producer_history": {"type": "STRING"},
+        "tasting_profile": {"type": "STRING"},
+        "summary": {"type": "STRING"},
+    },
+    "required": [
+        "varietal",
+        "wine_type",
+        "drink_window_note",
+        "food_pairings",
+        "taste_profile",
+        "summary",
+    ],
+}
+
+
+async def async_enrich_vivino_bottle(
+    session: aiohttp.ClientSession,
+    *,
+    api_key: str,
+    wine_data: dict[str, Any],
+    model: str = DEFAULT_GEMINI_MODEL,
+    timeout_seconds: float = 30.0,
+) -> dict[str, Any]:
+    """Call Gemini to enrich missing cataloguing and sommelier details for an imported Vivino bottle."""
+    clean_key = (api_key or "").strip()
+    if not clean_key:
+        raise GeminiScannerError(
+            "Gemini API key is not configured. Add it in Lekkersappie options."
+        )
+
+    model_id = (model or DEFAULT_GEMINI_MODEL).strip()
+    if model_id.startswith("models/"):
+        model_id = model_id[len("models/") :]
+
+    url = f"{GEMINI_API_BASE_URL}/{model_id}:generateContent"
+
+    winery = _sanitize_prompt_field(wine_data.get("winery") or "Unknown Producer", 160)
+    name = _sanitize_prompt_field(wine_data.get("name") or "Estate Wine", 160)
+    vintage_str = _sanitize_prompt_field(wine_data.get("vintage") or "Non-Vintage", 20)
+    region = _sanitize_prompt_field(wine_data.get("region") or "", 120)
+    country = _sanitize_prompt_field(wine_data.get("country") or "", 80)
+    wine_type = _sanitize_prompt_field(wine_data.get("wine_type") or "red", 30)
+    style = _sanitize_prompt_field(wine_data.get("style") or wine_data.get("regional_wine_style") or "", 80)
+    notes = _sanitize_prompt_field(wine_data.get("general_notes") or wine_data.get("review") or "", 300)
+
+    prompt = VIVINO_ENRICHMENT_PROMPT.format(
+        winery=winery,
+        name=name,
+        vintage=vintage_str,
+        region=region,
+        country=country,
+        wine_type=wine_type,
+        style=style,
+        notes=notes,
+    )
+
+    request_body = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.2,
+            "responseMimeType": "application/json",
+            "responseSchema": VIVINO_ENRICHMENT_SCHEMA,
+        },
+    }
+
+    timeout = (
+        aiohttp.ClientTimeout(total=timeout_seconds)
+        if aiohttp is not None
+        else timeout_seconds
+    )
+    client_error_cls = aiohttp.ClientError if aiohttp is not None else OSError
+
+    try:
+        async with session.post(
+            url,
+            headers={"x-goog-api-key": clean_key},
+            json=request_body,
+            timeout=timeout,
+        ) as resp:
+            resp_text = await resp.text()
+            if resp.status != 200:
+                raise GeminiScannerError(
+                    f"Gemini API returned HTTP {resp.status} during bottle enrichment: {resp_text[:250]}"
+                )
+            payload = json.loads(resp_text)
+    except client_error_cls as err:
+        raise GeminiScannerError(f"Network error contacting Gemini API: {err}") from err
+    except json.JSONDecodeError as err:
+        raise GeminiScannerError(f"Invalid JSON returned by Gemini API: {err}") from err
+
+    candidates = payload.get("candidates") or []
+    if not candidates:
+        raise GeminiScannerError("Gemini returned no enrichment output for this wine.")
+
+    parts = candidates[0].get("content", {}).get("parts") or []
+    text_output = "".join(str(p.get("text") or "") for p in parts).strip()
+    if not text_output:
+        raise GeminiScannerError("Gemini returned an empty enrichment response.")
+
+    try:
+        enrichment_json = json.loads(text_output)
+    except json.JSONDecodeError as err:
+        raise GeminiScannerError(
+            f"Failed to parse Gemini enrichment JSON: {text_output[:200]}"
+        ) from err
+
+    return {
+        "status": "ok",
+        "enrichment": enrichment_json,
+        "model_used": model_id,
+    }

@@ -185,6 +185,9 @@ async def async_handle_pwa_get(
             return 404, {"error": "Wine not found"}
         return 200, {"wine": detail}
 
+    if action == "import_progress":
+        return 200, coordinator.get_import_progress()
+
     return 404, {"error": f"Unknown GET action: {action}"}
 
 
@@ -253,9 +256,26 @@ async def async_handle_pwa_post(
             "statistics": coordinator.statistics,
         }
 
+    if action == "sommai":
+        query_text = (
+            payload.get("message")
+            or payload.get("query")
+            or payload.get("dish_description")
+            or ""
+        )
+        image_data = payload.get("image_data")
+        history = payload.get("history") or []
+        res = await coordinator.async_sommelier_chat(
+            query_text=query_text,
+            image_data=image_data,
+            conversation_history=history,
+        )
+        return 200, res
+
     if action == "import":
         fmt = str(payload.get("format") or payload.get("format_type") or "auto").lower()
         content = payload.get("content") or payload.get("payload") or payload.get("source") or ""
+        enrich_ai = bool(payload.get("enrich_ai", True))
         if isinstance(content, str):
             if content.startswith("data:") and ";base64," in content:
                 import base64
@@ -268,6 +288,23 @@ async def async_handle_pwa_post(
                     content = base64.b64decode(content)
                 except Exception:
                     pass
+
+        if (isinstance(content, bytes) and content.startswith(b"PK")) or (
+            isinstance(content, str) and content.endswith(".zip")
+        ):
+            from .backup import is_vivino_export_zip
+
+            config_dir = Path(getattr(hass.config, "config_dir", "."))
+            if is_vivino_export_zip(content, config_dir=config_dir):
+                res = await coordinator.async_import_vivino_zip(
+                    content, download_images=True, enrich_ai=enrich_ai
+                )
+                return 200, {**res, "statistics": coordinator.statistics}
+
+        if fmt == "csv" and isinstance(content, str):
+            res = await coordinator.async_import_vivino_csv(content, enrich_ai=enrich_ai)
+            return 200, {**res, "statistics": coordinator.statistics}
+
         res = await coordinator.async_import_wines(content, format_type=fmt)
         return 200, {**res, "statistics": coordinator.statistics}
 
