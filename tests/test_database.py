@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import tempfile
@@ -463,6 +464,69 @@ class TestWineDatabase(unittest.TestCase):
             self.assertEqual(stats["unique_wines"], 1)
             self.assertEqual(stats["tasted_wines"], 2)
             self.assertEqual(stats["tasted_bottles"], 2)
+
+    def test_v053_compute_drink_status_soon_and_keep(self) -> None:
+        """v0.5.3: Verify Soon label strictly includes close Until dates, and Keep for future wines."""
+        # 1. Keep / Hold: drink_from_year is in the future (> current_year)
+        self.assertEqual(
+            compute_drink_status(2028, 2035, reference_year=2026),
+            DRINK_STATUS_HOLD,
+        )
+        self.assertEqual(
+            compute_drink_status(2027, None, reference_year=2026),
+            DRINK_STATUS_HOLD,
+        )
+
+        # 2. Soon: drink_until_year is close (0 or 1 years away)
+        self.assertEqual(
+            compute_drink_status(2020, 2026, reference_year=2026),
+            DRINK_STATUS_DRINK_SOON,
+        )
+        self.assertEqual(
+            compute_drink_status(2020, 2027, reference_year=2026),
+            DRINK_STATUS_DRINK_SOON,
+        )
+
+        # 3. Ready: within window, until_year is comfortably in the future (> 1 year away)
+        self.assertEqual(
+            compute_drink_status(2020, 2030, reference_year=2026),
+            DRINK_STATUS_READY,
+        )
+
+        # 4. Past Peak: until_year is in the past (< current_year)
+        self.assertEqual(
+            compute_drink_status(2015, 2024, reference_year=2026),
+            DRINK_STATUS_PAST_PEAK,
+        )
+
+        # 5. Cellar statistics include keep_bottles
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = WineDatabase(Path(tmpdir) / "wine_inventory.db")
+            db.initialize()
+            # Keep wine
+            db.add_or_increment_wine(
+                winery="Tenuta San Guido",
+                name="Sassicaia",
+                vintage=2022,
+                wine_type="red",
+                drink_from_year=2030,
+                drink_until_year=2045,
+                quantity=3,
+            )
+            # Soon wine (e.g. current year 2026, until 2027)
+            db.add_or_increment_wine(
+                winery="Louis Jadot",
+                name="Chablis",
+                vintage=2021,
+                wine_type="white",
+                drink_from_year=2022,
+                drink_until_year=datetime.now(timezone.utc).year,
+                quantity=2,
+            )
+            stats = db.get_statistics()
+            self.assertEqual(stats["hold_bottles"], 3)
+            self.assertEqual(stats["keep_bottles"], 3)
+            self.assertEqual(stats["drink_soon_bottles"], 2)
 
 
 if __name__ == "__main__":

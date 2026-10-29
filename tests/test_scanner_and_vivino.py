@@ -16,6 +16,7 @@ from pathlib import Path
 import tempfile
 from typing import Any
 import unittest
+from unittest.mock import MagicMock, patch
 
 from custom_components.wine_inventory.coordinator import WineInventoryCoordinator
 from custom_components.wine_inventory.scanner import (
@@ -827,6 +828,203 @@ class TestScannerVivinoAndCoordinator(unittest.TestCase):
             tig_after_init = [w for w in db.list_wines() if "Tignanello" in w["name"]][0]
             self.assertEqual(tig_after_init["vivino_url"], "https://www.vivino.com/wines/160128212")
             self.assertEqual(tig_after_init["vivino_wine_id"], 160128212)
+
+    def test_v053_scanner_wine_guardrail_rejection_and_acceptance(self) -> None:
+        """v0.5.3: Verify wine bottle/label guardrail rejects non-wine images and accepts bottles."""
+        from custom_components.wine_inventory.scanner import (
+            GeminiScannerError,
+            async_scan_bottle_label,
+        )
+
+        class _MockSession:
+            def __init__(self, response_dict: dict[str, Any]) -> None:
+                self.resp_payload = {
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {"text": json.dumps(response_dict)}
+                                ]
+                            }
+                        }
+                    ]
+                }
+
+            def post(self, url: str, **kwargs: Any) -> Any:
+                class _Resp:
+                    def __init__(self, payload: dict[str, Any]) -> None:
+                        self.status = 200
+                        self.payload = payload
+
+                    async def text(self) -> str:
+                        return json.dumps(self.payload)
+
+                    async def __aenter__(self) -> Any:
+                        return self
+
+                    async def __aexit__(self, *args: Any) -> None:
+                        pass
+
+                return _Resp(self.resp_payload)
+
+        async def _run() -> None:
+            # 1. Non-wine image (e.g. food dish or pet): is_wine_bottle_or_label is False
+            session_non_wine = _MockSession({
+                "is_wine_bottle_or_label": False,
+                "winery": "",
+                "name": "",
+                "wine_type": "red",
+                "varietal": "",
+                "region": "",
+                "country": "",
+                "drink_window_note": "",
+                "food_pairings": [],
+                "label_summary": "Photo of a plate of pasta with tomato sauce.",
+                "label_text_verbatim": "",
+                "winery_printed": False,
+                "name_printed": False,
+                "vintage_printed": False,
+            })
+            with self.assertRaises(GeminiScannerError) as ctx:
+                await async_scan_bottle_label(
+                    session_non_wine,  # type: ignore[arg-type]
+                    api_key="valid-key",
+                    image_bytes=b"dummy",
+                )
+            self.assertIn("This is not a wine bottle or label", str(ctx.exception))
+            self.assertIn("Please only scan wine bottles and labels", str(ctx.exception))
+
+            # 2. Non-wine image with no identifying wine text even if flag missing
+            session_empty_clues = _MockSession({
+                "is_wine_bottle_or_label": False,
+                "winery": "",
+                "name": "",
+                "label_text_verbatim": "",
+            })
+            with self.assertRaises(GeminiScannerError) as ctx_empty:
+                await async_scan_bottle_label(
+                    session_empty_clues,  # type: ignore[arg-type]
+                    api_key="valid-key",
+                    image_bytes=b"dummy",
+                )
+            self.assertIn("This is not a wine bottle or label", str(ctx_empty.exception))
+
+            # 3. Valid wine bottle / label: passes guardrail and normalizes cleanly
+            session_valid_wine = _MockSession({
+                "is_wine_bottle_or_label": True,
+                "winery": "Château Margaux",
+                "name": "Premier Grand Cru Classé",
+                "vintage": 2015,
+                "wine_type": "red",
+                "varietal": "Cabernet Sauvignon Blend",
+                "region": "Margaux, Bordeaux",
+                "country": "France",
+                "drink_window_note": "Peak 2025-2045",
+                "food_pairings": ["Roasted lamb", "Prime rib"],
+                "label_summary": "Château Margaux 2015 Premier Grand Cru Classé",
+                "label_text_verbatim": "CHATEAU MARGAUX 2015 PREMIER GRAND CRU CLASSE",
+                "winery_printed": True,
+                "name_printed": True,
+                "vintage_printed": True,
+            })
+            extracted = await async_scan_bottle_label(
+                session_valid_wine,  # type: ignore[arg-type]
+                api_key="valid-key",
+                image_bytes=b"dummy",
+            )
+            self.assertTrue(extracted.get("is_wine_bottle_or_label"))
+            self.assertEqual(extracted["winery"], "Château Margaux")
+            self.assertEqual(extracted["vintage"], 2015)
+
+        asyncio.run(_run())
+
+    def test_v053_coordinator_cover_cleanup_and_photo_upload(self) -> None:
+        """v0.5.3: Verify cover cleanup on scan error, and async_update_wine photo upload."""
+        from custom_components.wine_inventory.coordinator import WineInventoryCoordinator
+        from custom_components.wine_inventory.database import WineDatabase
+        from custom_components.wine_inventory.scanner import GeminiScannerError
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_dir = Path(tmpdir)
+            db = WineDatabase(config_dir / "wine_inventory.db")
+            db.initialize()
+
+            class _FakeHass:
+                def __init__(self, cdir: Path) -> None:
+                    self.config = MagicMock()
+                    self.config.config_dir = str(cdir)
+                    self.bus = MagicMock()
+
+                async def async_add_executor_job(self, fn: Any, *args: Any) -> Any:
+                    return fn(*args)
+
+            hass = _FakeHass(config_dir)
+            entry = MagicMock()
+            entry.entry_id = "test-entry"
+            entry.options = {
+                "gemini_api_key": "test-key",
+                "gemini_model": "gemini-3.8-flash-lite",
+            }
+
+            coordinator = WineInventoryCoordinator(
+                hass,
+                entry_id="test-entry",
+                config={
+                    "gemini_api_key": "test-key",
+                    "gemini_model": "gemini-3.8-flash-lite",
+                },
+                session_getter=lambda h: MagicMock(),
+            )
+            coordinator.db = db
+
+            # 1. Test cover file cleanup when scanning fails guardrail
+            jpeg_header = b"\xff\xd8\xff\xe0" + b"\x00" * 32
+            b64_img = f"data:image/jpeg;base64,{base64.b64encode(jpeg_header).decode('ascii')}"
+
+            async def _scan_runner() -> None:
+                with patch("custom_components.wine_inventory.coordinator.async_scan_bottle_label", side_effect=GeminiScannerError("This is not a wine bottle or label. Please only scan wine bottles and labels.")):
+                    with self.assertRaises(GeminiScannerError):
+                        await coordinator.async_scan_bottle(image_data=b64_img)
+
+                # Ensure covers dir exists but has no orphaned files from failed scan
+                covers_dir = config_dir / "www" / "wine_inventory" / "covers"
+                if covers_dir.exists():
+                    self.assertEqual(len(list(covers_dir.glob("*.jpg"))), 0)
+
+            asyncio.run(_scan_runner())
+
+            # 2. Test async_update_wine with image_data upload
+            wine = db.add_or_increment_wine(
+                winery="Domaine Dujac",
+                name="Morey-Saint-Denis",
+                vintage=2020,
+                wine_type="red",
+                quantity=2,
+            )
+            wine_id = wine["id"]
+            self.assertEqual(wine.get("image_url"), "")
+
+            async def _update_runner() -> None:
+                updated = await coordinator.async_update_wine(
+                    wine_id,
+                    {"image_data": b64_img, "personal_rating": 4.8},
+                )
+                self.assertTrue(updated["image_url"].startswith("/local/wine_inventory/covers/"))
+                self.assertEqual(updated["personal_rating"], 4.8)
+
+                # Check on disk
+                cover_filename = Path(updated["image_url"]).name
+                disk_file = config_dir / "www" / "wine_inventory" / "covers" / cover_filename
+                self.assertTrue(disk_file.exists())
+                self.assertEqual(disk_file.read_bytes(), jpeg_header)
+
+                # Verify in database
+                fetched = db.get_wine_detail(wine_id)
+                self.assertIsNotNone(fetched)
+                self.assertEqual(fetched["image_url"], updated["image_url"])
+                self.assertEqual(fetched["personal_rating"], 4.8)
+
+            asyncio.run(_update_runner())
 
 
 if __name__ == "__main__":

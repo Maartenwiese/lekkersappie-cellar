@@ -1187,6 +1187,7 @@ class WineDatabase:
             "ready_to_drink_bottles": ready_to_drink_bottles,
             "drink_soon_bottles": drink_soon_bottles,
             "hold_bottles": hold_bottles,
+            "keep_bottles": hold_bottles,
             "past_peak_bottles": past_peak_bottles,
             "estimated_value": round(estimated_value, 2),
             "by_type": by_type,

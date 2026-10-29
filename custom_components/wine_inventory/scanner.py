@@ -32,6 +32,10 @@ LABEL_EXTRACTION_PROMPT = """You are an expert master sommelier and wine catalog
 Analyze the provided photo of a wine bottle label (which has been cropped and oriented upright) and extract as much comprehensive, accurate detail as possible into JSON.
 
 Core Extraction Rules:
+0. Visual Verification Guardrail (`is_wine_bottle_or_label`):
+   - You MUST determine whether the provided image contains a wine bottle, a part of a wine bottle, a wine label, a part of a wine label, a wine cork, or foil capsule.
+   - Set `is_wine_bottle_or_label` to true ONLY if the image visually contains a wine bottle, label, or portion thereof.
+   - If the image depicts anything else (such as a dish, food, animal, pet, human, car, scenery, book, document, beer bottle, soda can, liquor bottle, or other non-wine subject), set `is_wine_bottle_or_label` to false.
 1. Producer / Winery (`winery`) and Specific Cuvée / Wine Name (`name`):
    - Identify the winemaker/producer/château/bodega/estate cleanly (`winery`).
    - Identify the specific cuvée, vineyard designation, or wine title (`name`).
@@ -65,6 +69,7 @@ Core Extraction Rules:
 LABEL_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "OBJECT",
     "properties": {
+        "is_wine_bottle_or_label": {"type": "BOOLEAN"},
         "winery": {"type": "STRING"},
         "name": {"type": "STRING"},
         "vintage": {"type": "INTEGER", "nullable": True},
@@ -91,6 +96,7 @@ LABEL_RESPONSE_SCHEMA: dict[str, Any] = {
         "vintage_printed": {"type": "BOOLEAN"},
     },
     "required": [
+        "is_wine_bottle_or_label",
         "winery",
         "name",
         "wine_type",
@@ -227,6 +233,7 @@ def _normalize_extracted_payload(raw: dict[str, Any]) -> dict[str, Any]:
         pairings = [str(p).strip() for p in pairings if str(p).strip()]
 
     return {
+        "is_wine_bottle_or_label": bool(raw.get("is_wine_bottle_or_label", True)),
         "winery": str(raw.get("winery") or "").strip(),
         "name": str(raw.get("name") or "").strip(),
         "vintage": vintage,
@@ -368,6 +375,21 @@ async def async_scan_bottle_label(
         raise GeminiScannerError(
             f"Gemini output could not be parsed as JSON: {text_output[:200]}"
         ) from err
+
+    # Guardrail: Fail immediately if image does not depict a wine bottle or label
+    if parsed_json.get("is_wine_bottle_or_label") is False:
+        raise GeminiScannerError(
+            "This is not a wine bottle or label. Please only scan wine bottles and labels."
+        )
+    has_wine_clues = bool(
+        (parsed_json.get("winery") or "").strip()
+        or (parsed_json.get("name") or "").strip()
+        or (parsed_json.get("label_text_verbatim") or "").strip()
+    )
+    if not parsed_json.get("is_wine_bottle_or_label") and not has_wine_clues:
+        raise GeminiScannerError(
+            "This is not a wine bottle or label. Please only scan wine bottles and labels."
+        )
 
     normalized = _normalize_extracted_payload(parsed_json)
     normalized["model_used"] = model_id

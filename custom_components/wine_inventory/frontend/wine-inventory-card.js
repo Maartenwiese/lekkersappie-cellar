@@ -13,9 +13,10 @@ const WINE_TYPE_LABELS = {
 };
 
 const DRINK_STATUS_META = {
-  ready: { label: "Ready to Drink", color: "var(--success-color, #2e7d32)" },
-  drink_soon: { label: "Drink Soon", color: "var(--warning-color, #ef6c00)" },
-  hold: { label: "Hold / Aging", color: "var(--info-color, #0288d1)" },
+  ready: { label: "Ready", color: "var(--success-color, #2e7d32)" },
+  drink_soon: { label: "Soon", color: "var(--warning-color, #ef6c00)" },
+  hold: { label: "Keep", color: "var(--info-color, #0288d1)" },
+  keep: { label: "Keep", color: "var(--info-color, #0288d1)" },
   past_peak: { label: "Past Peak", color: "var(--error-color, #c62828)" },
   unknown: { label: "No Window Set", color: "var(--secondary-text-color, #757575)" },
 };
@@ -91,6 +92,7 @@ class WineInventoryCard extends HTMLElement {
     this._filterTab = "all";
     this._searchQuery = "";
     this._sortBy = "recent";
+    this._sortInverted = false;
     this._viewMode = "list";
     this._userToggledView = false;
     this._searchDebounce = null;
@@ -355,6 +357,75 @@ class WineInventoryCard extends HTMLElement {
     );
   }
 
+  _getWineSearchText(w) {
+    if (!w) return "";
+    const parts = [
+      w.winery,
+      w.name,
+      w.vintage,
+      w.wine_type,
+      w.varietal,
+      w.region,
+      w.country,
+      w.alcohol_pct ? `${w.alcohol_pct}%` : "",
+      w.alcohol_pct,
+      w.bottle_size_ml ? `${w.bottle_size_ml}ml` : "",
+      w.bottle_size_ml,
+      w.drink_from_year,
+      w.drink_until_year,
+      w.drink_window_note,
+      w.drink_status,
+      DRINK_STATUS_META[w.drink_status]?.label,
+      w.general_notes,
+      w.label_summary,
+      w.label_text_verbatim,
+      w.last_purchase_location,
+      w.last_storage_location,
+      w.purchase_location,
+      w.storage_location,
+      w.purchase_price,
+      w.last_purchase_price,
+      w.vivino_price_estimate,
+      w.personal_rating ? `★ ${w.personal_rating}` : "",
+      w.personal_rating,
+      w.vivino_rating ? `★ ${w.vivino_rating}` : "",
+      w.vivino_rating,
+      w.vivino_url,
+    ];
+
+    if (Array.isArray(w.food_pairings)) {
+      parts.push(...w.food_pairings);
+    } else if (w.food_pairings) {
+      parts.push(String(w.food_pairings));
+    }
+
+    if (w.research_notes) {
+      if (typeof w.research_notes === "object") {
+        try {
+          parts.push(JSON.stringify(w.research_notes));
+        } catch (_) {}
+      } else {
+        parts.push(String(w.research_notes));
+      }
+    }
+
+    if (Array.isArray(w.batches)) {
+      for (const b of w.batches) {
+        if (!b) continue;
+        parts.push(b.purchase_location, b.storage_location, b.notes, b.drink_window_note);
+      }
+    }
+
+    if (Array.isArray(w.timeline)) {
+      for (const t of w.timeline) {
+        if (!t) continue;
+        parts.push(t.event_type, t.tasting_notes, t.storage_location, t.purchase_location, t.notes);
+      }
+    }
+
+    return parts.filter(Boolean).join(" ").toLowerCase();
+  }
+
   _getFilteredAndSortedWines() {
     const q = (this._searchQuery || "").trim().toLowerCase();
     let list = this._wines.filter((w) => {
@@ -363,10 +434,13 @@ class WineInventoryCard extends HTMLElement {
         if (!this._isWineTasted(w)) return false;
       } else {
         if (qty <= 0) return false;
-        if (this._filterTab === "ready" && w.drink_status !== "ready" && w.drink_status !== "drink_soon") {
+        if (this._filterTab === "ready" && w.drink_status !== "ready") {
           return false;
         }
         if (this._filterTab === "drink_soon" && w.drink_status !== "drink_soon") {
+          return false;
+        }
+        if ((this._filterTab === "keep" || this._filterTab === "hold") && w.drink_status !== "hold" && w.drink_status !== "keep") {
           return false;
         }
         if (["red", "white", "rose", "sparkling"].includes(this._filterTab) && w.wine_type !== this._filterTab) {
@@ -377,45 +451,35 @@ class WineInventoryCard extends HTMLElement {
         }
       }
 
-      if (!q) return true;
-      const haystack = [
-        w.winery,
-        w.name,
-        w.vintage,
-        w.varietal,
-        w.region,
-        w.country,
-        w.general_notes,
-        w.drink_window_note,
-        w.last_purchase_location,
-        w.last_storage_location,
-        ...(w.food_pairings || []),
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(q);
+      if (q) {
+        const terms = q.split(/\s+/).filter(Boolean);
+        const haystack = this._getWineSearchText(w);
+        if (!terms.every((t) => haystack.includes(t))) return false;
+      }
+      return true;
     });
 
+    const inv = this._sortInverted ? -1 : 1;
     list.sort((a, b) => {
       if (this._sortBy === "rating") {
-        return Number(b.vivino_rating || 0) - Number(a.vivino_rating || 0);
+        return inv * (Number(b.vivino_rating || 0) - Number(a.vivino_rating || 0));
       }
       if (this._sortBy === "drink_window") {
         const ay = Number(a.drink_until_year || 9999);
         const by = Number(b.drink_until_year || 9999);
-        return ay - by;
+        return inv * (ay - by);
       }
       if (this._sortBy === "vintage") {
-        const av = Number(a.vintage || 9999);
-        const bv = Number(b.vintage || 9999);
-        return av - bv;
+        if (!a.vintage && !b.vintage) return 0;
+        if (!a.vintage) return 1;
+        if (!b.vintage) return -1;
+        return inv * (Number(a.vintage) - Number(b.vintage));
       }
       if (this._sortBy === "quantity") {
-        return Number(b.quantity || 0) - Number(a.quantity || 0);
+        return inv * (Number(b.quantity || 0) - Number(a.quantity || 0));
       }
       // default: recent
-      return String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
+      return inv * String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
     });
 
     return list;
@@ -2681,6 +2745,11 @@ class WineInventoryCard extends HTMLElement {
       this._render();
     });
 
+    root.querySelector("#btn-card-invert-sort")?.addEventListener("click", () => {
+      this._sortInverted = !this._sortInverted;
+      this._render();
+    });
+
     root.querySelectorAll(".filter-chip").forEach((chip) => {
       if (!chip.dataset.tab) return;
       chip.addEventListener("click", () => {
@@ -2913,7 +2982,8 @@ class WineInventoryCard extends HTMLElement {
     const tabs = [
       { id: "all", label: `In Stock (${stats.total_bottles || 0})` },
       { id: "ready", label: `Ready to Drink (${stats.ready_to_drink_bottles || 0})` },
-      { id: "drink_soon", label: `Drink Soon (${stats.drink_soon_bottles || 0})` },
+      { id: "drink_soon", label: `Soon (${stats.drink_soon_bottles || 0})` },
+      { id: "keep", label: `Keep (${stats.keep_bottles || stats.hold_bottles || 0})` },
       { id: "red", label: `Red (${stats.by_type?.red || 0})` },
       { id: "white", label: `White (${stats.by_type?.white || 0})` },
       { id: "rose", label: `Rosé (${stats.by_type?.rose || 0})` },
@@ -4258,7 +4328,7 @@ class WineInventoryCard extends HTMLElement {
               <ha-icon icon="mdi:close-circle"></ha-icon>
             </button>
           </div>
-          <div class="sort-wrap">
+          <div class="sort-wrap" style="display:flex; gap:6px; align-items:center;">
             <select id="wine-sort-select" class="ha-input">
               <option value="recent" ${this._sortBy === "recent" ? "selected" : ""}>Sort: Recently Added / Updated</option>
               <option value="rating" ${this._sortBy === "rating" ? "selected" : ""}>Sort: Vivino Rating (High → Low)</option>
@@ -4266,6 +4336,15 @@ class WineInventoryCard extends HTMLElement {
               <option value="vintage" ${this._sortBy === "vintage" ? "selected" : ""}>Sort: Vintage (Oldest First)</option>
               <option value="quantity" ${this._sortBy === "quantity" ? "selected" : ""}>Sort: Bottle Count</option>
             </select>
+            <button
+              type="button"
+              id="btn-card-invert-sort"
+              class="action-btn"
+              style="min-height:36px; min-width:36px; padding:0 8px; font-weight:700; border-radius:8px; border:1px solid var(--divider-color, #e0e0e0); background:${this._sortInverted ? "var(--primary-color, #722f37)" : "transparent"}; color:${this._sortInverted ? "#fff" : "var(--primary-text-color)"}; cursor:pointer;"
+              title="${this._sortInverted ? "Inverted: Newest / Lowest / Furthest" : "Default: Oldest / Highest / Urgent"}"
+            >
+              ${this._sortInverted ? "⇅ ▾" : "⇅ ▴"}
+            </button>
           </div>
         </div>
 

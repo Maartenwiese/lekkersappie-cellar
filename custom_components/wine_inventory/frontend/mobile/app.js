@@ -1,5 +1,5 @@
 /**
- * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.5.2)
+ * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.5.3)
  * Runs parallel to the native Home Assistant UI, inherits Home Assistant OAuth2
  * authentication, defaults to Large (L) text scale, and supports Home Screen installation.
  */
@@ -14,9 +14,10 @@ const WINE_TYPES = {
 };
 
 const DRINK_META = {
-  ready: { label: "Ready to Drink", color: "#2e7d32" },
-  drink_soon: { label: "Drink Soon", color: "#ef6c00" },
-  hold: { label: "Hold / Aging", color: "#0277bd" },
+  ready: { label: "Ready", color: "#2e7d32" },
+  drink_soon: { label: "Soon", color: "#ef6c00" },
+  hold: { label: "Keep", color: "#0277bd" },
+  keep: { label: "Keep", color: "#0277bd" },
   past_peak: { label: "Past Peak", color: "#c62828" },
   unknown: { label: "No Window Set", color: "#6c5e63" },
 };
@@ -175,6 +176,7 @@ class LekkersappieMobileApp {
       areaFilter: "",
       searchQuery: "",
       sortBy: "recent",
+      sortInverted: false,
 
       // SommAI Sommelier state
       sommAiMessages: [],
@@ -194,6 +196,7 @@ class LekkersappieMobileApp {
       tastedFilterTab: "all",
       tastedSearchQuery: "",
       tastedSortBy: "recent_tasted",
+      tastedSortInverted: false,
 
       // Scan destination: "cellar" | "tasted"
       scanDestination: "cellar",
@@ -905,6 +908,75 @@ class LekkersappieMobileApp {
     return false;
   }
 
+  _getWineSearchText(w) {
+    if (!w) return "";
+    const parts = [
+      w.winery,
+      w.name,
+      w.vintage,
+      w.wine_type,
+      w.varietal,
+      w.region,
+      w.country,
+      w.alcohol_pct ? `${w.alcohol_pct}%` : "",
+      w.alcohol_pct,
+      w.bottle_size_ml ? `${w.bottle_size_ml}ml` : "",
+      w.bottle_size_ml,
+      w.drink_from_year,
+      w.drink_until_year,
+      w.drink_window_note,
+      w.drink_status,
+      DRINK_META[w.drink_status]?.label,
+      w.general_notes,
+      w.label_summary,
+      w.label_text_verbatim,
+      w.last_purchase_location,
+      w.last_storage_location,
+      w.purchase_location,
+      w.storage_location,
+      w.purchase_price,
+      w.last_purchase_price,
+      w.vivino_price_estimate,
+      w.personal_rating ? `★ ${w.personal_rating}` : "",
+      w.personal_rating,
+      w.vivino_rating ? `★ ${w.vivino_rating}` : "",
+      w.vivino_rating,
+      w.vivino_url,
+    ];
+
+    if (Array.isArray(w.food_pairings)) {
+      parts.push(...w.food_pairings);
+    } else if (w.food_pairings) {
+      parts.push(String(w.food_pairings));
+    }
+
+    if (w.research_notes) {
+      if (typeof w.research_notes === "object") {
+        try {
+          parts.push(JSON.stringify(w.research_notes));
+        } catch (_) {}
+      } else {
+        parts.push(String(w.research_notes));
+      }
+    }
+
+    if (Array.isArray(w.batches)) {
+      for (const b of w.batches) {
+        if (!b) continue;
+        parts.push(b.purchase_location, b.storage_location, b.notes, b.drink_window_note);
+      }
+    }
+
+    if (Array.isArray(w.timeline)) {
+      for (const t of w.timeline) {
+        if (!t) continue;
+        parts.push(t.event_type, t.tasting_notes, t.storage_location, t.purchase_location, t.notes);
+      }
+    }
+
+    return parts.filter(Boolean).join(" ").toLowerCase();
+  }
+
   getFilteredWines() {
     const q = (this.state.searchQuery || "").trim().toLowerCase();
     const areaFilter = (this.state.areaFilter || "").trim().toLowerCase();
@@ -915,14 +987,17 @@ class LekkersappieMobileApp {
         if (!this._isWineTasted(w)) return false;
       } else {
         if (qty <= 0) return false;
-        if (
-          this.state.filterTab === "ready" &&
-          w.drink_status !== "ready" &&
-          w.drink_status !== "drink_soon"
-        ) {
+        if (this.state.filterTab === "ready" && w.drink_status !== "ready") {
           return false;
         }
         if (this.state.filterTab === "drink_soon" && w.drink_status !== "drink_soon") {
+          return false;
+        }
+        if (
+          (this.state.filterTab === "keep" || this.state.filterTab === "hold") &&
+          w.drink_status !== "hold" &&
+          w.drink_status !== "keep"
+        ) {
           return false;
         }
         if (
@@ -944,38 +1019,32 @@ class LekkersappieMobileApp {
         if (!wineAreas.includes(areaFilter)) return false;
       }
 
-      if (!q) return true;
-      const hay = [
-        w.winery,
-        w.name,
-        w.vintage,
-        w.varietal,
-        w.region,
-        w.country,
-        w.general_notes,
-        w.last_purchase_location,
-        w.last_storage_location,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return hay.includes(q);
+      if (q) {
+        const terms = q.split(/\s+/).filter(Boolean);
+        const hay = this._getWineSearchText(w);
+        if (!terms.every((t) => hay.includes(t))) return false;
+      }
+      return true;
     });
 
+    const inv = this.state.sortInverted ? -1 : 1;
     filtered.sort((a, b) => {
       if (this.state.sortBy === "rating") {
-        return Number(b.vivino_rating || 0) - Number(a.vivino_rating || 0);
+        return inv * (Number(b.vivino_rating || 0) - Number(a.vivino_rating || 0));
       }
       if (this.state.sortBy === "drink_window") {
-        return Number(a.drink_until_year || 9999) - Number(b.drink_until_year || 9999);
+        return inv * (Number(a.drink_until_year || 9999) - Number(b.drink_until_year || 9999));
       }
       if (this.state.sortBy === "vintage") {
-        return Number(a.vintage || 9999) - Number(b.vintage || 9999);
+        if (!a.vintage && !b.vintage) return 0;
+        if (!a.vintage) return 1;
+        if (!b.vintage) return -1;
+        return inv * (Number(a.vintage) - Number(b.vintage));
       }
       if (this.state.sortBy === "quantity") {
-        return Number(b.quantity || 0) - Number(a.quantity || 0);
+        return inv * (Number(b.quantity || 0) - Number(a.quantity || 0));
       }
-      return String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
+      return inv * String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
     });
 
     return filtered;
@@ -994,42 +1063,36 @@ class LekkersappieMobileApp {
         return false;
       }
 
-      if (!q) return true;
-      const hay = [
-        w.winery,
-        w.name,
-        w.vintage,
-        w.varietal,
-        w.region,
-        w.country,
-        w.general_notes,
-        w.last_purchase_location,
-        w.last_storage_location,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return hay.includes(q);
+      if (q) {
+        const terms = q.split(/\s+/).filter(Boolean);
+        const hay = this._getWineSearchText(w);
+        if (!terms.every((t) => hay.includes(t))) return false;
+      }
+      return true;
     });
 
+    const inv = this.state.tastedSortInverted ? -1 : 1;
     filtered.sort((a, b) => {
       if (this.state.tastedSortBy === "rating") {
-        return Number(b.vivino_rating || 0) - Number(a.vivino_rating || 0);
+        return inv * (Number(b.vivino_rating || 0) - Number(a.vivino_rating || 0));
       }
       if (this.state.tastedSortBy === "personal_rating") {
-        return Number(b.personal_rating || 0) - Number(a.personal_rating || 0);
+        return inv * (Number(b.personal_rating || 0) - Number(a.personal_rating || 0));
       }
       if (this.state.tastedSortBy === "vintage") {
-        return Number(a.vintage || 9999) - Number(b.vintage || 9999);
+        if (!a.vintage && !b.vintage) return 0;
+        if (!a.vintage) return 1;
+        if (!b.vintage) return -1;
+        return inv * (Number(a.vintage) - Number(b.vintage));
       }
       if (this.state.tastedSortBy === "tasted_count") {
         const aCnt = Number(a.tasted_bottles || a.tasted_count || 1);
         const bCnt = Number(b.tasted_bottles || b.tasted_count || 1);
-        return bCnt - aCnt;
+        return inv * (bCnt - aCnt);
       }
       const aDate = String(a.last_tasted_at || a.updated_at || "");
       const bDate = String(b.last_tasted_at || b.updated_at || "");
-      return bDate.localeCompare(aDate);
+      return inv * bDate.localeCompare(aDate);
     });
 
     return filtered;
@@ -1098,6 +1161,38 @@ class LekkersappieMobileApp {
     } catch (err) {
       this.showError("Failed to update stock", err);
     }
+  }
+
+  async _handlePhotoUpload(file, wine) {
+    if (!file || !wine) return;
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      const dataUrl = ev.target?.result;
+      if (!dataUrl) return;
+      try {
+        this.showToast("Uploading bottle photo…");
+        const res = await this.apiPost("update", {
+          wine_id: wine.id,
+          updates: { image_data: dataUrl },
+        });
+        if (res && res.wine) {
+          const updated = res.wine;
+          const idx = this.state.wines.findIndex((x) => x.id === wine.id);
+          if (idx >= 0) this.state.wines[idx] = updated;
+          if (this.state.detailWine && this.state.detailWine.id === wine.id) {
+            this.state.detailWine = updated;
+          }
+          if (this.state.previewWine && this.state.previewWine.id === wine.id) {
+            this.state.previewWine = updated;
+          }
+          this.showToast("Bottle photo updated!");
+          this.render();
+        }
+      } catch (err) {
+        this.showError("Failed to upload photo", err);
+      }
+    };
+    reader.readAsDataURL(file);
   }
 
   async handleInstallClick() {
@@ -1267,6 +1362,7 @@ class LekkersappieMobileApp {
       { id: "all", label: `In Stock (${stats.total_bottles || 0})` },
       { id: "ready", label: `Ready (${stats.ready_to_drink_bottles || 0})` },
       { id: "drink_soon", label: `Soon (${stats.drink_soon_bottles || 0})` },
+      { id: "keep", label: `Keep (${stats.keep_bottles || stats.hold_bottles || 0})` },
       { id: "red", label: `Red (${stats.by_type?.red || 0})` },
       { id: "white", label: `White (${stats.by_type?.white || 0})` },
       { id: "rose", label: `Rosé (${stats.by_type?.rose || 0})` },
@@ -1322,6 +1418,16 @@ class LekkersappieMobileApp {
             <option value="vintage" ${this.state.sortBy === "vintage" ? "selected" : ""}>Vintage</option>
             <option value="quantity" ${this.state.sortBy === "quantity" ? "selected" : ""}>Stock</option>
           </select>
+          <button
+            type="button"
+            id="btn-mobile-invert-sort"
+            class="sort-invert-btn ${this.state.sortInverted ? "active" : ""}"
+            aria-label="Invert sort order"
+            title="${this.state.sortInverted ? "Inverted: Newest / Lowest / Furthest" : "Default: Oldest / Highest / Urgent"}"
+            style="min-height:44px; min-width:44px; padding:0 8px; border-radius:10px; border:1px solid var(--border); background:${this.state.sortInverted ? "var(--brand-soft)" : "var(--surface)"}; color:${this.state.sortInverted ? "var(--brand)" : "var(--text)"}; font-weight:700; display:flex; align-items:center; justify-content:center; font-size:15px; cursor:pointer;"
+          >
+            ${this.state.sortInverted ? "⇅ ▾" : "⇅ ▴"}
+          </button>
         </div>
 
         ${
@@ -1415,6 +1521,16 @@ class LekkersappieMobileApp {
             <option value="vintage" ${this.state.tastedSortBy === "vintage" ? "selected" : ""}>Vintage</option>
             <option value="tasted_count" ${this.state.tastedSortBy === "tasted_count" ? "selected" : ""}>Times Tasted</option>
           </select>
+          <button
+            type="button"
+            id="btn-mobile-tasted-invert-sort"
+            class="sort-invert-btn ${this.state.tastedSortInverted ? "active" : ""}"
+            aria-label="Invert tasted sort order"
+            title="${this.state.tastedSortInverted ? "Inverted" : "Default"}"
+            style="min-height:44px; min-width:44px; padding:0 8px; border-radius:10px; border:1px solid var(--border); background:${this.state.tastedSortInverted ? "var(--brand-soft)" : "var(--surface)"}; color:${this.state.tastedSortInverted ? "var(--brand)" : "var(--text)"}; font-weight:700; display:flex; align-items:center; justify-content:center; font-size:15px; cursor:pointer;"
+          >
+            ${this.state.tastedSortInverted ? "⇅ ▾" : "⇅ ▴"}
+          </button>
         </div>
 
         <div class="filter-pills-scroll">
@@ -2168,11 +2284,18 @@ class LekkersappieMobileApp {
           <div class="sheet-body" id="detail-sheet-body">
             <div class="scaled-zone">
               <div class="detail-hero">
+                <input type="file" id="detail-bottle-photo-input" accept="image/*" style="display:none;" />
                 <div class="detail-hero-top">
                   ${
                     safeImageUrl(w.image_url)
-                      ? `<img class="detail-hero-img" src="${safeImageUrl(w.image_url)}" alt="${esc(w.name)}" id="btn-detail-zoom-img" title="Tap to enlarge photo" />`
-                      : `<div class="detail-hero-img" style="background:var(--brand-soft); display:flex; align-items:center; justify-content:center; font-size:32px;">🍷</div>`
+                      ? `<div class="detail-hero-img-wrap" style="position:relative; display:inline-block;">
+                          <img class="detail-hero-img" src="${safeImageUrl(w.image_url)}" alt="${esc(w.name)}" id="btn-detail-zoom-img" title="Tap to view or change photo" style="cursor:pointer;" />
+                          <button type="button" class="btn btn-icon" id="btn-detail-upload-photo" aria-label="Change photo" title="Upload new photo" style="position:absolute; bottom:6px; right:6px; min-height:44px; min-width:44px; width:44px; height:44px; padding:0; border-radius:50%; background:rgba(0,0,0,0.75); color:#fff; border:1px solid rgba(255,255,255,0.4); font-size:16px; display:flex; align-items:center; justify-content:center; cursor:pointer;">📷</button>
+                        </div>`
+                      : `<div class="detail-hero-img" id="btn-detail-zoom-img" role="button" tabindex="0" title="Tap to upload bottle photo" style="background:var(--brand-soft); display:flex; flex-direction:column; align-items:center; justify-content:center; font-size:26px; cursor:pointer; gap:4px; border:2px dashed var(--brand); border-radius:10px;">
+                          <span aria-hidden="true">📷</span>
+                          <span style="font-size:10px; font-weight:700; color:var(--brand); text-transform:uppercase; letter-spacing:0.5px;">Add Photo</span>
+                        </div>`
                   }
                   <div class="detail-hero-summary">
                     <div class="detail-hero-winery">${esc(w.winery)}</div>
@@ -2622,8 +2745,8 @@ class LekkersappieMobileApp {
 
   _renderPreviewSheet() {
     const w = this.state.previewWine;
-    const imgUrl = safeImageUrl(w && w.image_url);
-    if (!w || !imgUrl) return "";
+    if (!w) return "";
+    const imgUrl = safeImageUrl(w.image_url);
     return `
       <div class="sheet-backdrop" id="sheet-backdrop">
         <div class="sheet-surface">
@@ -2631,8 +2754,21 @@ class LekkersappieMobileApp {
             <button class="btn btn-icon btn-back" id="btn-close-preview" aria-label="Back"><span aria-hidden="true">‹</span></button>
             <h2>${esc(w.winery)} – ${esc(w.name)} (${esc(w.vintage || "NV")})</h2>
           </div>
-          <div class="sheet-body" style="display:flex; align-items:center; justify-content:center; background:#111;">
-            <img src="${imgUrl}" alt="${esc(w.name)}" style="max-height:82dvh; max-width:100%; object-fit:contain; border-radius:8px;" />
+          <div class="sheet-body" style="display:flex; flex-direction:column; align-items:center; justify-content:center; background:${imgUrl ? "#111" : "var(--surface)"}; padding:20px; min-height:320px;">
+            <input type="file" id="preview-bottle-photo-input" accept="image/*" style="display:none;" />
+            ${
+              imgUrl
+                ? `<img src="${imgUrl}" alt="${esc(w.name)}" style="max-height:72dvh; max-width:100%; object-fit:contain; border-radius:8px; margin-bottom:16px;" />
+                   <div style="display:flex; gap:10px; width:100%; max-width:320px;">
+                     <button type="button" class="btn btn-secondary" id="btn-preview-upload-photo" style="flex:1; min-height:46px; background:rgba(255,255,255,0.15); color:#fff; border-color:rgba(255,255,255,0.3); font-weight:700;">📷 Change Photo</button>
+                   </div>`
+                : `<div style="text-align:center; padding:32px 16px;">
+                     <div style="font-size:52px; margin-bottom:14px;">🍷</div>
+                     <h3 style="margin-bottom:8px; font-size:18px;">No Bottle Photo</h3>
+                     <p style="color:var(--text-muted); font-size:13.5px; max-width:280px; margin:0 auto 24px auto; line-height:1.5;">Add a photo of the bottle or label to easily identify this wine in your cellar.</p>
+                     <button type="button" class="btn btn-primary" id="btn-preview-upload-photo" style="min-height:50px; padding:0 24px; font-size:15px; font-weight:700;">📷 Upload Bottle Photo</button>
+                   </div>`
+            }
           </div>
         </div>
       </div>
@@ -2951,6 +3087,10 @@ class LekkersappieMobileApp {
       this.state.sortBy = e.target.value;
       this.render();
     });
+    r.querySelector("#btn-mobile-invert-sort")?.addEventListener("click", () => {
+      this.state.sortInverted = !this.state.sortInverted;
+      this.render();
+    });
     r.querySelectorAll(".filter-pill[data-tab]").forEach((pill) => {
       pill.addEventListener("click", () => {
         this.state.filterTab = pill.dataset.tab;
@@ -2981,6 +3121,10 @@ class LekkersappieMobileApp {
     });
     r.querySelector("#mobile-tasted-sort-select")?.addEventListener("change", (e) => {
       this.state.tastedSortBy = e.target.value;
+      this.render();
+    });
+    r.querySelector("#btn-mobile-tasted-invert-sort")?.addEventListener("click", () => {
+      this.state.tastedSortInverted = !this.state.tastedSortInverted;
       this.render();
     });
     r.querySelectorAll(".filter-pill[data-tasted-tab]").forEach((pill) => {
@@ -3231,12 +3375,28 @@ class LekkersappieMobileApp {
     r.querySelector("#btn-close-sheet")?.addEventListener("click", () => this.goBack());
     r.querySelector("#btn-close-preview")?.addEventListener("click", () => this.goBack());
 
+    // Preview sheet photo upload handlers
+    r.querySelector("#btn-preview-upload-photo")?.addEventListener("click", () => {
+      r.querySelector("#preview-bottle-photo-input")?.click();
+    });
+    r.querySelector("#preview-bottle-photo-input")?.addEventListener("change", (e) => {
+      const file = e.target?.files?.[0];
+      if (file) this._handlePhotoUpload(file, this.state.previewWine);
+    });
+
     // Detail sheet handlers
     r.querySelector("#btn-detail-zoom-img")?.addEventListener("click", () => {
       this.state.previewWine = this.state.detailWine;
       this.state.previousSheet = "detail";
       this.state.activeSheet = "preview";
       this.render();
+    });
+    r.querySelector("#btn-detail-upload-photo")?.addEventListener("click", () => {
+      r.querySelector("#detail-bottle-photo-input")?.click();
+    });
+    r.querySelector("#detail-bottle-photo-input")?.addEventListener("change", (e) => {
+      const file = e.target?.files?.[0];
+      if (file) this._handlePhotoUpload(file, this.state.detailWine);
     });
     r.querySelector("#btn-detail-plus")?.addEventListener("click", () => {
       if (this.state.detailWine) this.adjustBottleStock(this.state.detailWine, 1);

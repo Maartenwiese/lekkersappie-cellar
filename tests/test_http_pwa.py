@@ -611,6 +611,7 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
             or '"version": "0.5.0"' in manifest_json
             or '"version": "0.5.1"' in manifest_json
             or '"version": "0.5.2"' in manifest_json
+            or '"version": "0.5.3"' in manifest_json
         )
         self.assertTrue(
             "v0.3.9" in app_js
@@ -618,6 +619,7 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
             or "v0.5.0" in app_js
             or "v0.5.1" in app_js
             or "v0.5.2" in app_js
+            or "v0.5.3" in app_js
         )
 
         # 2. Font scale defaults to 1.15 (Large)
@@ -767,6 +769,52 @@ class TestMobilePwaAndCards(unittest.IsolatedAsyncioTestCase):
         self.assertIn("WineSommAICard", card_js)
         self.assertIn("custom:wine-sommai-card", dashboard_yaml)
         self.assertIn("path: sommai", dashboard_yaml)
+
+    def test_v053_mobile_and_card_features(self) -> None:
+        """v0.5.3: Verify photo upload, Keep & Soon labels, invert sort toggles, and all-details search."""
+        app_js = (MOBILE_DIR / "app.js").read_text(encoding="utf-8")
+        card_js = (INTEGRATION_DIR / "frontend" / "wine-inventory-card.js").read_text(encoding="utf-8")
+
+        # 1. Drink Window Labels: Keep and Soon
+        self.assertIn('hold: { label: "Keep", color: "#0277bd" }', app_js)
+        self.assertIn('drink_soon: { label: "Soon", color: "#ef6c00" }', app_js)
+        self.assertIn('ready: { label: "Ready", color: "#2e7d32" }', app_js)
+        self.assertIn('{ id: "keep", label: `Keep (${stats.keep_bottles || stats.hold_bottles || 0})` }', app_js)
+
+        self.assertIn('hold: { label: "Keep", color: "var(--info-color, #0288d1)" }', card_js)
+        self.assertIn('drink_soon: { label: "Soon", color: "var(--warning-color, #ef6c00)" }', card_js)
+        self.assertIn('{ id: "keep", label: `Keep (${stats.keep_bottles || stats.hold_bottles || 0})` }', card_js)
+
+        # 2. Invert Sort Buttons & Logic
+        self.assertIn("id=\"btn-mobile-invert-sort\"", app_js)
+        self.assertIn("id=\"btn-mobile-tasted-invert-sort\"", app_js)
+        self.assertIn("sortInverted: false", app_js)
+        self.assertIn("tastedSortInverted: false", app_js)
+        self.assertIn("const inv = this.state.sortInverted ? -1 : 1;", app_js)
+
+        self.assertIn("id=\"btn-card-invert-sort\"", card_js)
+        self.assertIn("this._sortInverted = false;", card_js)
+        self.assertIn("const inv = this._sortInverted ? -1 : 1;", card_js)
+
+        # 3. All-Details Search Engine
+        self.assertIn("_getWineSearchText(w)", app_js)
+        self.assertIn("w.food_pairings", app_js)
+        self.assertIn("w.research_notes", app_js)
+        self.assertIn("w.batches", app_js)
+        self.assertIn("w.timeline", app_js)
+        self.assertIn("terms.every((t) => hay.includes(t))", app_js)
+
+        self.assertIn("_getWineSearchText(w)", card_js)
+        self.assertIn("w.research_notes", card_js)
+        self.assertIn("terms.every((t) => haystack.includes(t))", card_js)
+
+        # 4. Detailed View Photo Upload
+        self.assertIn("id=\"detail-bottle-photo-input\"", app_js)
+        self.assertIn("id=\"btn-detail-upload-photo\"", app_js)
+        self.assertIn("id=\"btn-preview-upload-photo\"", app_js)
+        self.assertIn("id=\"preview-bottle-photo-input\"", app_js)
+        self.assertIn("_handlePhotoUpload(file, wine)", app_js)
+        self.assertIn("updates: { image_data: dataUrl }", app_js)
 
 
 

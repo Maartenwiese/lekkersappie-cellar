@@ -245,13 +245,25 @@ class WineInventoryCoordinator:
         )
 
         session = self._get_http_session()
-        extracted = await async_scan_bottle_label(
-            session,
-            api_key=self.gemini_api_key,
-            image_bytes=raw_bytes,
-            mime_type=mime_type,
-            model=self.gemini_model,
-        )
+        try:
+            extracted = await async_scan_bottle_label(
+                session,
+                api_key=self.gemini_api_key,
+                image_bytes=raw_bytes,
+                mime_type=mime_type,
+                model=self.gemini_model,
+            )
+        except Exception:
+            if saved_image_url:
+                try:
+                    cover_filename = Path(saved_image_url).name
+                    cover_path = config_dir / "www" / "wine_inventory" / "covers" / cover_filename
+                    if cover_path.exists():
+                        cover_path.unlink()
+                except Exception:
+                    pass
+            raise
+
         extracted["image_url"] = saved_image_url
 
         match = await self.async_match_vivino(
@@ -526,10 +538,22 @@ class WineInventoryCoordinator:
         updates: dict[str, Any],
     ) -> dict[str, Any]:
         """Update wine metadata and refresh state."""
+        updates_copy = dict(updates)
+        if "image_data" in updates_copy and updates_copy["image_data"]:
+            mime_type, raw_bytes = parse_image_data_uri(updates_copy.pop("image_data"))
+            config_dir = Path(getattr(self.hass.config, "config_dir", "."))
+            saved_image_url = await self.hass.async_add_executor_job(
+                save_bottle_cover_image,
+                config_dir,
+                raw_bytes,
+                mime_type,
+            )
+            updates_copy["image_url"] = saved_image_url
+
         wine = await self.hass.async_add_executor_job(
             self.db.update_wine,
             int(wine_id),
-            updates,
+            updates_copy,
         )
         await self.async_refresh()
         self._emit_event(
