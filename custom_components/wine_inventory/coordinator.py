@@ -14,17 +14,22 @@ from typing import Any
 
 from .const import (
     CONF_CELLAR_NAME,
+    CONF_CLAUDE_API_KEY,
+    CONF_CLAUDE_MODEL,
     CONF_CURRENCY,
     CONF_GEMINI_API_KEY,
     CONF_GEMINI_MODEL,
     CONF_HUMIDITY_ENTITY,
+    CONF_LLM_PROVIDER,
     CONF_LOW_STOCK_THRESHOLD,
     CONF_TEMPERATURE_ENTITY,
     CONF_VIVINO_COUNTRY_CODE,
     DB_FILENAME,
     DEFAULT_CELLAR_NAME,
+    DEFAULT_CLAUDE_MODEL,
     DEFAULT_CURRENCY,
     DEFAULT_GEMINI_MODEL,
+    DEFAULT_LLM_PROVIDER,
     DEFAULT_LOW_STOCK_THRESHOLD,
     DEFAULT_VIVINO_COUNTRY_CODE,
     EVENT_BOTTLE_ADDED,
@@ -35,14 +40,19 @@ from .const import (
     EVENT_WINE_UPDATED,
     EXPORTS_SUBDIR,
     GEMINI_RATE_WINDOW_SECONDS,
+    LLM_PROVIDER_CLAUDE,
+    LLM_PROVIDER_GEMINI,
     MAX_GEMINI_CALLS_PER_MINUTE,
     STORAGE_DIR_NAME,
 )
 from .database import WineDatabase, utc_now_iso
 from .scanner import (
+    ClaudeScannerError,
     GeminiScannerError,
+    LLMScannerError,
     async_enrich_vivino_bottle,
     async_judge_vivino_candidates,
+    async_research_wine,
     async_research_wine_with_gemini,
     async_scan_bottle_label,
     async_sommelier_dish_pairing,
@@ -90,15 +100,16 @@ class WineInventoryCoordinator:
         }
 
     def _check_gemini_rate_limit(self) -> None:
-        """Enforce a per-coordinator sliding-window rate limit on paid Gemini API calls."""
+        """Enforce a per-coordinator sliding-window rate limit on LLM API calls."""
         now = time.monotonic()
         cutoff = now - GEMINI_RATE_WINDOW_SECONDS
         self._gemini_call_timestamps = [
             ts for ts in self._gemini_call_timestamps if ts > cutoff
         ]
         if len(self._gemini_call_timestamps) >= MAX_GEMINI_CALLS_PER_MINUTE:
+            provider_label = "Claude" if self.llm_provider == LLM_PROVIDER_CLAUDE else "Gemini"
             raise GeminiScannerError(
-                f"Rate limit exceeded: maximum {MAX_GEMINI_CALLS_PER_MINUTE} Gemini AI requests per minute. Please wait a moment and try again."
+                f"Rate limit exceeded: maximum {MAX_GEMINI_CALLS_PER_MINUTE} {provider_label} AI requests per minute. Please wait a moment and try again."
             )
         self._gemini_call_timestamps.append(now)
 
@@ -113,6 +124,12 @@ class WineInventoryCoordinator:
         return str(self.config.get(CONF_CURRENCY) or DEFAULT_CURRENCY)
 
     @property
+    def llm_provider(self) -> str:
+        """Return configured LLM provider (gemini or claude)."""
+        provider = str(self.config.get(CONF_LLM_PROVIDER) or DEFAULT_LLM_PROVIDER).lower().strip()
+        return LLM_PROVIDER_CLAUDE if provider == LLM_PROVIDER_CLAUDE else LLM_PROVIDER_GEMINI
+
+    @property
     def gemini_api_key(self) -> str:
         """Return configured Gemini API key."""
         return str(self.config.get(CONF_GEMINI_API_KEY) or "")
@@ -121,6 +138,26 @@ class WineInventoryCoordinator:
     def gemini_model(self) -> str:
         """Return configured Gemini model identifier."""
         return str(self.config.get(CONF_GEMINI_MODEL) or DEFAULT_GEMINI_MODEL)
+
+    @property
+    def claude_api_key(self) -> str:
+        """Return configured Anthropic Claude API key."""
+        return str(self.config.get(CONF_CLAUDE_API_KEY) or "")
+
+    @property
+    def claude_model(self) -> str:
+        """Return configured Claude model identifier."""
+        return str(self.config.get(CONF_CLAUDE_MODEL) or DEFAULT_CLAUDE_MODEL)
+
+    @property
+    def active_llm_api_key(self) -> str:
+        """Return the API key for the currently configured provider."""
+        return self.claude_api_key if self.llm_provider == LLM_PROVIDER_CLAUDE else self.gemini_api_key
+
+    @property
+    def active_llm_model(self) -> str:
+        """Return the model identifier for the currently configured provider."""
+        return self.claude_model if self.llm_provider == LLM_PROVIDER_CLAUDE else self.gemini_model
 
     @property
     def vivino_country_code(self) -> str:
@@ -248,10 +285,11 @@ class WineInventoryCoordinator:
         try:
             extracted = await async_scan_bottle_label(
                 session,
-                api_key=self.gemini_api_key,
+                api_key=self.active_llm_api_key,
                 image_bytes=raw_bytes,
                 mime_type=mime_type,
-                model=self.gemini_model,
+                model=self.active_llm_model,
+                provider=self.llm_provider,
             )
         except Exception:
             if saved_image_url:
@@ -349,12 +387,13 @@ class WineInventoryCoordinator:
 
         judge = await async_judge_vivino_candidates(
             session,
-            api_key=self.gemini_api_key,
+            api_key=self.active_llm_api_key,
             image_bytes=image_bytes,
             mime_type=mime_type,
             label_text_verbatim=str(extracted.get("label_text_verbatim") or ""),
             candidates=candidates,
-            model=self.gemini_model,
+            model=self.active_llm_model,
+            provider=self.llm_provider,
         )
         result["judge_reason"] = judge.get("reason", "")
         choice = judge.get("choice")
@@ -602,11 +641,12 @@ class WineInventoryCoordinator:
             raise ValueError(f"Wine ID {wine_id} not found")
 
         session = self._get_http_session()
-        result = await async_research_wine_with_gemini(
+        result = await async_research_wine(
             session,
-            api_key=self.gemini_api_key,
+            api_key=self.active_llm_api_key,
             wine_data=wine,
-            model=self.gemini_model,
+            model=self.active_llm_model,
+            provider=self.llm_provider,
         )
         research_data = result.get("research") or {}
         research_json = json.dumps(research_data)
@@ -830,13 +870,14 @@ class WineInventoryCoordinator:
         session = self._get_http_session()
         result = await async_sommelier_dish_pairing(
             session,
-            api_key=self.gemini_api_key,
+            api_key=self.active_llm_api_key,
             cellar_wines=cellar_wines,
             dish_description=query_text,
             image_bytes=image_bytes,
             mime_type=mime_type,
             conversation_history=conversation_history,
-            model=self.gemini_model,
+            model=self.active_llm_model,
+            provider=self.llm_provider,
         )
         pairing = result.get("pairing") or {}
         return {
@@ -864,9 +905,10 @@ class WineInventoryCoordinator:
         session = self._get_http_session()
         result = await async_enrich_vivino_bottle(
             session,
-            api_key=self.gemini_api_key,
+            api_key=self.active_llm_api_key,
             wine_data=wine,
-            model=self.gemini_model,
+            model=self.active_llm_model,
+            provider=self.llm_provider,
         )
         enr = result.get("enrichment") or {}
         updates: dict[str, Any] = {}
@@ -944,7 +986,7 @@ class WineInventoryCoordinator:
             )
 
         enriched_count = 0
-        if enrich_ai and self.gemini_api_key:
+        if enrich_ai and self.active_llm_api_key:
             all_wines = await self.hass.async_add_executor_job(
                 functools.partial(self.db.list_wines, include_out_of_stock=True)
             )
@@ -1024,7 +1066,7 @@ class WineInventoryCoordinator:
         )
 
         enriched_count = 0
-        if enrich_ai and self.gemini_api_key:
+        if enrich_ai and self.active_llm_api_key:
             # Target in-stock cellar wines first, then wines missing research
             all_wines = await self.hass.async_add_executor_job(
                 functools.partial(self.db.list_wines, include_out_of_stock=True)

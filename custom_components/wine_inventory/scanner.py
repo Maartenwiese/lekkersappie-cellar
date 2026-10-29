@@ -16,8 +16,12 @@ except ImportError:  # pragma: no cover - fallback when running standalone unit 
     aiohttp = None  # type: ignore[assignment]
 
 from .const import (
+    CLAUDE_API_BASE_URL,
     COVERS_SUBDIR,
+    DEFAULT_CLAUDE_MODEL,
     DEFAULT_GEMINI_MODEL,
+    LLM_PROVIDER_CLAUDE,
+    LLM_PROVIDER_GEMINI,
     MAX_IMAGE_UPLOAD_BYTES,
     WINE_TYPE_RED,
     WINE_TYPES,
@@ -114,8 +118,128 @@ LABEL_RESPONSE_SCHEMA: dict[str, Any] = {
 }
 
 
-class GeminiScannerError(Exception):
+class LLMScannerError(Exception):
+    """Base error for LLM scanning and AI operations."""
+
+
+class GeminiScannerError(LLMScannerError):
     """Raised when Gemini vision label extraction fails."""
+
+
+class ClaudeScannerError(GeminiScannerError):
+    """Raised when Anthropic Claude vision label extraction fails."""
+
+
+def _extract_json_from_text(text: str) -> dict[str, Any]:
+    """Extract and parse a JSON object from model text response."""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        raise ValueError("Model response is empty.")
+
+    if "```" in cleaned:
+        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
+        if match:
+            cleaned = match.group(1).strip()
+        else:
+            cleaned = re.sub(r"^```[a-zA-Z]*\n", "", cleaned)
+            cleaned = re.sub(r"\n```$", "", cleaned).strip()
+
+    try:
+        data = json.loads(cleaned)
+        if isinstance(data, dict):
+            return data
+    except json.JSONDecodeError:
+        pass
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        candidate = cleaned[start : end + 1]
+        try:
+            data = json.loads(candidate)
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            pass
+
+    raise ValueError(f"Could not parse valid JSON object from model output: {text[:200]}")
+
+
+def _normalize_image_media_type(mime: str | None) -> str:
+    """Normalize image MIME string for Anthropic Claude messages API."""
+    m = (mime or "image/jpeg").lower().strip()
+    if m == "image/jpg":
+        return "image/jpeg"
+    if m in ("image/jpeg", "image/png", "image/webp", "image/gif"):
+        return m
+    return "image/jpeg"
+
+
+async def _send_claude_messages_request(
+    session: aiohttp.ClientSession,
+    *,
+    api_key: str,
+    payload: dict[str, Any],
+    timeout_seconds: float = 30.0,
+) -> dict[str, Any]:
+    """Send an authenticated POST request to Anthropic Claude messages endpoint."""
+    clean_key = (api_key or "").strip()
+    if not clean_key:
+        raise ClaudeScannerError(
+            "Anthropic Claude API key is not configured. Add it in Lekkersappie options."
+        )
+
+    headers = {
+        "x-api-key": clean_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    timeout = (
+        aiohttp.ClientTimeout(total=timeout_seconds)
+        if aiohttp is not None
+        else timeout_seconds
+    )
+    client_error_cls = aiohttp.ClientError if aiohttp is not None else OSError
+    try:
+        async with session.post(
+            CLAUDE_API_BASE_URL,
+            headers=headers,
+            json=payload,
+            timeout=timeout,
+        ) as resp:
+            resp_text = await resp.text()
+            if resp.status != 200:
+                if resp.status == 400:
+                    raise ClaudeScannerError(
+                        f"Claude API Bad Request (HTTP 400): {resp_text[:250]}. Check your configured Claude Model ID in Lekkersappie options."
+                    )
+                if resp.status in (401, 403):
+                    raise ClaudeScannerError(
+                        f"Claude API Authentication/Permission Denied (HTTP {resp.status}): {resp_text[:250]}. Check that your Anthropic Claude API key is valid."
+                    )
+                if resp.status == 429:
+                    raise ClaudeScannerError(
+                        "Claude API Rate Limit Exceeded (HTTP 429). Please wait a moment before trying again."
+                    )
+                raise ClaudeScannerError(
+                    f"Claude API returned HTTP {resp.status}: {resp_text[:300]}"
+                )
+            return json.loads(resp_text)
+    except client_error_cls as err:
+        raise ClaudeScannerError(f"Network error contacting Claude API: {err}") from err
+    except json.JSONDecodeError as err:
+        raise ClaudeScannerError(f"Invalid JSON returned by Claude API: {err}") from err
+
+
+def _extract_claude_response_text(resp_payload: dict[str, Any]) -> str:
+    """Extract concatenated text from Claude response content blocks."""
+    content_list = resp_payload.get("content") or []
+    text_blocks = [
+        str(block.get("text") or "")
+        for block in content_list
+        if isinstance(block, dict) and block.get("type") == "text"
+    ]
+    return "".join(text_blocks).strip()
 
 
 def detect_image_mime(raw_bytes: bytes) -> str | None:
@@ -280,7 +404,7 @@ def grounded_search_fields(extracted: dict[str, Any]) -> dict[str, Any]:
     return {"winery": winery, "name": name, "vintage": vintage}
 
 
-async def async_scan_bottle_label(
+async def async_scan_bottle_label_gemini(
     session: aiohttp.ClientSession,
     *,
     api_key: str,
@@ -393,7 +517,125 @@ async def async_scan_bottle_label(
 
     normalized = _normalize_extracted_payload(parsed_json)
     normalized["model_used"] = model_id
+    normalized["provider"] = LLM_PROVIDER_GEMINI
     return normalized
+
+
+async def async_scan_bottle_label_claude(
+    session: aiohttp.ClientSession,
+    *,
+    api_key: str,
+    image_bytes: bytes,
+    mime_type: str = "image/jpeg",
+    model: str = DEFAULT_CLAUDE_MODEL,
+    timeout_seconds: float = 30.0,
+) -> dict[str, Any]:
+    """Call Anthropic Claude Messages API to extract structured wine label metadata from an image."""
+    clean_key = (api_key or "").strip()
+    if not clean_key:
+        raise ClaudeScannerError(
+            "Anthropic Claude API key is not configured. Add it in Wine Inventory settings."
+        )
+    model_id = (model or DEFAULT_CLAUDE_MODEL).strip()
+    encoded_image = base64.b64encode(image_bytes).decode("ascii")
+    norm_mime = _normalize_image_media_type(mime_type)
+
+    prompt = (
+        f"{LABEL_EXTRACTION_PROMPT}\n\n"
+        f"STRICT OUTPUT REQUIREMENT:\n"
+        f"You must respond ONLY with a single valid JSON object strictly matching this schema. "
+        f"Do not include any conversational preamble, explanations, or text outside the JSON object.\n"
+        f"Schema:\n{json.dumps(LABEL_RESPONSE_SCHEMA, indent=2)}"
+    )
+
+    payload = {
+        "model": model_id,
+        "max_tokens": 2048,
+        "temperature": 0.1,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": norm_mime,
+                            "data": encoded_image,
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": prompt,
+                    },
+                ],
+            }
+        ],
+    }
+
+    resp_json = await _send_claude_messages_request(
+        session, api_key=clean_key, payload=payload, timeout_seconds=timeout_seconds
+    )
+    raw_text = _extract_claude_response_text(resp_json)
+    if not raw_text:
+        raise ClaudeScannerError("Claude returned an empty response for the bottle image.")
+
+    try:
+        parsed_json = _extract_json_from_text(raw_text)
+    except Exception as err:
+        raise ClaudeScannerError(
+            f"Claude output could not be parsed as JSON: {raw_text[:200]}"
+        ) from err
+
+    # Guardrail: Fail immediately if image does not depict a wine bottle or label
+    if parsed_json.get("is_wine_bottle_or_label") is False:
+        raise ClaudeScannerError(
+            "This is not a wine bottle or label. Please only scan wine bottles and labels."
+        )
+    has_wine_clues = bool(
+        (parsed_json.get("winery") or "").strip()
+        or (parsed_json.get("name") or "").strip()
+        or (parsed_json.get("label_text_verbatim") or "").strip()
+    )
+    if not parsed_json.get("is_wine_bottle_or_label") and not has_wine_clues:
+        raise ClaudeScannerError(
+            "This is not a wine bottle or label. Please only scan wine bottles and labels."
+        )
+
+    normalized = _normalize_extracted_payload(parsed_json)
+    normalized["model_used"] = model_id
+    normalized["provider"] = LLM_PROVIDER_CLAUDE
+    return normalized
+
+
+async def async_scan_bottle_label(
+    session: aiohttp.ClientSession,
+    *,
+    api_key: str,
+    image_bytes: bytes,
+    mime_type: str = "image/jpeg",
+    model: str | None = None,
+    timeout_seconds: float = 30.0,
+    provider: str = LLM_PROVIDER_GEMINI,
+) -> dict[str, Any]:
+    """Extract structured wine label metadata using the configured LLM provider."""
+    if provider == LLM_PROVIDER_CLAUDE:
+        return await async_scan_bottle_label_claude(
+            session,
+            api_key=api_key,
+            image_bytes=image_bytes,
+            mime_type=mime_type,
+            model=model or DEFAULT_CLAUDE_MODEL,
+            timeout_seconds=timeout_seconds,
+        )
+    return await async_scan_bottle_label_gemini(
+        session,
+        api_key=api_key,
+        image_bytes=image_bytes,
+        mime_type=mime_type,
+        model=model or DEFAULT_GEMINI_MODEL,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 VIVINO_JUDGE_PROMPT = """You verify whether a photographed wine label is one of the listed Vivino database records.
@@ -411,7 +653,7 @@ Candidate records:
 """
 
 
-async def async_judge_vivino_candidates(
+async def async_judge_vivino_candidates_gemini(
     session: aiohttp.ClientSession,
     *,
     api_key: str,
@@ -493,6 +735,115 @@ async def async_judge_vivino_candidates(
     if choice_raw.isdigit() and int(choice_raw) < len(candidates):
         return {"status": "ok", "choice": int(choice_raw), "reason": reason}
     return {"status": "ok", "choice": None, "reason": reason or "none"}
+
+
+async def async_judge_vivino_candidates_claude(
+    session: aiohttp.ClientSession,
+    *,
+    api_key: str,
+    image_bytes: bytes | None,
+    mime_type: str,
+    label_text_verbatim: str,
+    candidates: list[dict[str, Any]],
+    model: str = DEFAULT_CLAUDE_MODEL,
+    timeout_seconds: float = 20.0,
+) -> dict[str, Any]:
+    """Ask Anthropic Claude to pick one of the REAL Vivino candidates (by index) or NONE."""
+    clean_key = (api_key or "").strip()
+    if not clean_key or not candidates:
+        return {"status": "error", "choice": None, "reason": "judge_unavailable"}
+
+    model_id = (model or DEFAULT_CLAUDE_MODEL).strip()
+    lines = []
+    for idx, cand in enumerate(candidates):
+        parts = [f"[{idx}] Producer: {cand.get('winery', '')}", f"Wine: {cand.get('name', '')}"]
+        if cand.get("region") or cand.get("country"):
+            parts.append(f"Origin: {', '.join(x for x in (cand.get('region'), cand.get('country')) if x)}")
+        lines.append(" | ".join(parts))
+
+    prompt = VIVINO_JUDGE_PROMPT.format(
+        verbatim=(label_text_verbatim or "(not available)")[:1500],
+        candidates="\n".join(lines),
+    )
+    prompt += (
+        "\n\nSTRICT OUTPUT REQUIREMENT:\n"
+        "Respond ONLY with a valid JSON object matching: "
+        '{"choice": "<INDEX_OR_NONE>", "reason": "<brief_explanation>"}\n'
+        f"Allowed values for choice: {[str(i) for i in range(len(candidates))] + ['NONE']}"
+    )
+
+    user_content: list[dict[str, Any]] = []
+    if image_bytes:
+        user_content.append(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": _normalize_image_media_type(mime_type),
+                    "data": base64.b64encode(image_bytes).decode("ascii"),
+                },
+            }
+        )
+    user_content.append({"type": "text", "text": prompt})
+
+    payload = {
+        "model": model_id,
+        "max_tokens": 512,
+        "temperature": 0.0,
+        "messages": [{"role": "user", "content": user_content}],
+    }
+
+    try:
+        resp_json = await _send_claude_messages_request(
+            session, api_key=clean_key, payload=payload, timeout_seconds=timeout_seconds
+        )
+        raw_text = _extract_claude_response_text(resp_json)
+        result = _extract_json_from_text(raw_text)
+    except Exception as err:
+        _LOGGER.debug("Claude Vivino judge call failed: %s", err)
+        return {"status": "error", "choice": None, "reason": "judge_failed"}
+
+    choice_raw = str(result.get("choice") or "NONE").strip()
+    reason = str(result.get("reason") or "").strip()
+    if choice_raw.isdigit() and int(choice_raw) < len(candidates):
+        return {"status": "ok", "choice": int(choice_raw), "reason": reason}
+    return {"status": "ok", "choice": None, "reason": reason or "none"}
+
+
+async def async_judge_vivino_candidates(
+    session: aiohttp.ClientSession,
+    *,
+    api_key: str,
+    image_bytes: bytes | None,
+    mime_type: str,
+    label_text_verbatim: str,
+    candidates: list[dict[str, Any]],
+    model: str | None = None,
+    timeout_seconds: float = 20.0,
+    provider: str = LLM_PROVIDER_GEMINI,
+) -> dict[str, Any]:
+    """Judge Vivino candidates using the configured LLM provider."""
+    if provider == LLM_PROVIDER_CLAUDE:
+        return await async_judge_vivino_candidates_claude(
+            session,
+            api_key=api_key,
+            image_bytes=image_bytes,
+            mime_type=mime_type,
+            label_text_verbatim=label_text_verbatim,
+            candidates=candidates,
+            model=model or DEFAULT_CLAUDE_MODEL,
+            timeout_seconds=timeout_seconds,
+        )
+    return await async_judge_vivino_candidates_gemini(
+        session,
+        api_key=api_key,
+        image_bytes=image_bytes,
+        mime_type=mime_type,
+        label_text_verbatim=label_text_verbatim,
+        candidates=candidates,
+        model=model or DEFAULT_GEMINI_MODEL,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 WINE_RESEARCH_PROMPT = """You are a world-class master sommelier and esteemed wine historian.
@@ -673,7 +1024,104 @@ async def async_research_wine_with_gemini(
         "status": "ok",
         "research": research_json,
         "model_used": model_id,
+        "provider": LLM_PROVIDER_GEMINI,
     }
+
+
+async def async_research_wine_with_claude(
+    session: aiohttp.ClientSession,
+    *,
+    api_key: str,
+    wine_data: dict[str, Any],
+    model: str = DEFAULT_CLAUDE_MODEL,
+    timeout_seconds: float = 35.0,
+) -> dict[str, Any]:
+    """Perform in-depth Claude AI research scan on wine producer and cuvée history."""
+    clean_key = (api_key or "").strip()
+    if not clean_key:
+        raise ClaudeScannerError(
+            "Anthropic Claude API key is not configured. Add it in Lekkersappie options."
+        )
+
+    model_id = (model or DEFAULT_CLAUDE_MODEL).strip()
+    winery = _sanitize_prompt_field(wine_data.get("winery") or "Unknown Producer", 160)
+    name = _sanitize_prompt_field(wine_data.get("name") or "Estate Wine", 160)
+    vintage_str = _sanitize_prompt_field(wine_data.get("vintage") or "Non-Vintage", 20)
+    varietal = _sanitize_prompt_field(wine_data.get("varietal") or "Traditional Varieties", 160)
+    region = _sanitize_prompt_field(wine_data.get("region") or "Unknown Region", 120)
+    country = _sanitize_prompt_field(wine_data.get("country") or "Unknown Country", 80)
+    wine_type = _sanitize_prompt_field(wine_data.get("wine_type") or "red", 30)
+    notes = _sanitize_prompt_field(wine_data.get("general_notes") or "", 400)
+
+    prompt = WINE_RESEARCH_PROMPT.format(
+        winery=winery,
+        name=name,
+        vintage=vintage_str,
+        varietal=varietal,
+        region=region,
+        country=country,
+        wine_type=wine_type,
+        notes=notes,
+    )
+    prompt += (
+        "\n\nSTRICT OUTPUT REQUIREMENT:\n"
+        "You must respond ONLY with a single valid JSON object strictly matching this schema. "
+        "Do not include any commentary or markdown formatting outside the JSON object.\n"
+        f"Schema:\n{json.dumps(WINE_RESEARCH_SCHEMA, indent=2)}"
+    )
+
+    payload = {
+        "model": model_id,
+        "max_tokens": 2048,
+        "temperature": 0.2,
+        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+    }
+
+    resp_json = await _send_claude_messages_request(
+        session, api_key=clean_key, payload=payload, timeout_seconds=timeout_seconds
+    )
+    raw_text = _extract_claude_response_text(resp_json)
+    if not raw_text:
+        raise ClaudeScannerError("Claude returned empty wine research response.")
+
+    try:
+        research_json = _extract_json_from_text(raw_text)
+    except Exception as err:
+        raise ClaudeScannerError(f"Failed to parse Claude research JSON: {raw_text[:200]}") from err
+
+    return {
+        "status": "ok",
+        "research": research_json,
+        "model_used": model_id,
+        "provider": LLM_PROVIDER_CLAUDE,
+    }
+
+
+async def async_research_wine(
+    session: aiohttp.ClientSession,
+    *,
+    api_key: str,
+    wine_data: dict[str, Any],
+    model: str | None = None,
+    timeout_seconds: float = 35.0,
+    provider: str = LLM_PROVIDER_GEMINI,
+) -> dict[str, Any]:
+    """Perform in-depth AI research scan using the configured LLM provider."""
+    if provider == LLM_PROVIDER_CLAUDE:
+        return await async_research_wine_with_claude(
+            session,
+            api_key=api_key,
+            wine_data=wine_data,
+            model=model or DEFAULT_CLAUDE_MODEL,
+            timeout_seconds=timeout_seconds,
+        )
+    return await async_research_wine_with_gemini(
+        session,
+        api_key=api_key,
+        wine_data=wine_data,
+        model=model or DEFAULT_GEMINI_MODEL,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 # =========================================================================
@@ -747,7 +1195,7 @@ SOMMELIER_PAIRING_SCHEMA: dict[str, Any] = {
 }
 
 
-async def async_sommelier_dish_pairing(
+async def async_sommelier_dish_pairing_gemini(
     session: aiohttp.ClientSession,
     *,
     api_key: str,
@@ -883,7 +1331,159 @@ async def async_sommelier_dish_pairing(
         "status": "ok",
         "pairing": somm_json,
         "model_used": model_id,
+        "provider": LLM_PROVIDER_GEMINI,
     }
+
+
+async def async_sommelier_dish_pairing_claude(
+    session: aiohttp.ClientSession,
+    *,
+    api_key: str,
+    cellar_wines: list[dict[str, Any]],
+    dish_description: str | None = None,
+    image_bytes: bytes | None = None,
+    mime_type: str | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
+    model: str = DEFAULT_CLAUDE_MODEL,
+    timeout_seconds: float = 40.0,
+) -> dict[str, Any]:
+    """Execute Anthropic Claude multimodal sommelier pairing against cellar stock."""
+    clean_key = (api_key or "").strip()
+    if not clean_key:
+        raise ClaudeScannerError(
+            "Anthropic Claude API key is not configured. Add it in Lekkersappie options."
+        )
+
+    model_id = (model or DEFAULT_CLAUDE_MODEL).strip()
+
+    inventory_items = []
+    for w in cellar_wines:
+        qty = w.get("quantity") or 0
+        if int(qty) <= 0:
+            continue
+        v_rating = f", Vivino: {w.get('vivino_rating')}" if w.get("vivino_rating") else ""
+        p_rating = f", My Rating: {w.get('personal_rating')}" if w.get("personal_rating") else ""
+        drink = (
+            f", Drink: {w.get('drink_from_year', '')}-{w.get('drink_until_year', '')}"
+            if w.get("drink_from_year") or w.get("drink_until_year")
+            else ""
+        )
+        t_note = (
+            f", Window note: {w.get('drink_window_note')}"
+            if w.get("drink_window_note")
+            else ""
+        )
+        notes = f", Notes: {str(w.get('general_notes') or '')[:100]}" if w.get("general_notes") else ""
+        inventory_items.append(
+            f"- [ID {w.get('id')}] {w.get('winery', 'Unknown')} — {w.get('name', 'Wine')} ({w.get('vintage') or 'NV'}), "
+            f"Type: {w.get('wine_type', 'red')}, Grape: {w.get('varietal', 'unspecified')}, "
+            f"Region: {w.get('region', '')}, Country: {w.get('country', '')}, In Stock: {qty} bottles{v_rating}{p_rating}{drink}{t_note}{notes}"
+        )
+    cellar_text = (
+        "\n".join(inventory_items)
+        if inventory_items
+        else "No bottles currently in cellar stock (inventory is empty)."
+    )
+
+    query_str = (dish_description or "").strip() or "What wine from my cellar would pair best with this meal?"
+    prompt = SOMMELIER_PAIRING_PROMPT.format(
+        cellar_inventory=cellar_text,
+        query_text=query_str,
+    )
+    prompt += (
+        "\n\nSTRICT OUTPUT REQUIREMENT:\n"
+        "You must respond ONLY with a single valid JSON object strictly matching this schema. "
+        "Do not include any conversational preamble or text outside the JSON object.\n"
+        f"Schema:\n{json.dumps(SOMMELIER_PAIRING_SCHEMA, indent=2)}"
+    )
+
+    messages: list[dict[str, Any]] = []
+    if conversation_history:
+        for turn in conversation_history[-6:]:
+            role = "assistant" if turn.get("role") in ("model", "assistant") else "user"
+            msg = str(turn.get("content") or turn.get("text") or "").strip()
+            if msg:
+                messages.append({"role": role, "content": msg})
+
+    user_parts: list[dict[str, Any]] = []
+    if image_bytes:
+        user_parts.append(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": _normalize_image_media_type(mime_type),
+                    "data": base64.b64encode(image_bytes).decode("ascii"),
+                },
+            }
+        )
+    user_parts.append({"type": "text", "text": prompt})
+    messages.append({"role": "user", "content": user_parts})
+
+    payload = {
+        "model": model_id,
+        "max_tokens": 2048,
+        "temperature": 0.3,
+        "messages": messages,
+    }
+
+    resp_json = await _send_claude_messages_request(
+        session, api_key=clean_key, payload=payload, timeout_seconds=timeout_seconds
+    )
+    raw_text = _extract_claude_response_text(resp_json)
+    if not raw_text:
+        raise ClaudeScannerError("Claude returned empty sommelier pairing text.")
+
+    try:
+        somm_json = _extract_json_from_text(raw_text)
+    except Exception as err:
+        raise ClaudeScannerError(f"Failed to parse Claude sommelier JSON: {raw_text[:200]}") from err
+
+    return {
+        "status": "ok",
+        "pairing": somm_json,
+        "model_used": model_id,
+        "provider": LLM_PROVIDER_CLAUDE,
+    }
+
+
+async def async_sommelier_dish_pairing(
+    session: aiohttp.ClientSession,
+    *,
+    api_key: str,
+    cellar_wines: list[dict[str, Any]],
+    dish_description: str | None = None,
+    image_bytes: bytes | None = None,
+    mime_type: str | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
+    model: str | None = None,
+    timeout_seconds: float = 40.0,
+    provider: str = LLM_PROVIDER_GEMINI,
+) -> dict[str, Any]:
+    """Execute sommelier dish pairing using the configured LLM provider."""
+    if provider == LLM_PROVIDER_CLAUDE:
+        return await async_sommelier_dish_pairing_claude(
+            session,
+            api_key=api_key,
+            cellar_wines=cellar_wines,
+            dish_description=dish_description,
+            image_bytes=image_bytes,
+            mime_type=mime_type,
+            conversation_history=conversation_history,
+            model=model or DEFAULT_CLAUDE_MODEL,
+            timeout_seconds=timeout_seconds,
+        )
+    return await async_sommelier_dish_pairing_gemini(
+        session,
+        api_key=api_key,
+        cellar_wines=cellar_wines,
+        dish_description=dish_description,
+        image_bytes=image_bytes,
+        mime_type=mime_type,
+        conversation_history=conversation_history,
+        model=model or DEFAULT_GEMINI_MODEL,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 # =========================================================================
@@ -962,7 +1562,7 @@ VIVINO_ENRICHMENT_SCHEMA: dict[str, Any] = {
 }
 
 
-async def async_enrich_vivino_bottle(
+async def async_enrich_vivino_bottle_gemini(
     session: aiohttp.ClientSession,
     *,
     api_key: str,
@@ -1057,4 +1657,101 @@ async def async_enrich_vivino_bottle(
         "status": "ok",
         "enrichment": enrichment_json,
         "model_used": model_id,
+        "provider": LLM_PROVIDER_GEMINI,
     }
+
+
+async def async_enrich_vivino_bottle_claude(
+    session: aiohttp.ClientSession,
+    *,
+    api_key: str,
+    wine_data: dict[str, Any],
+    model: str = DEFAULT_CLAUDE_MODEL,
+    timeout_seconds: float = 30.0,
+) -> dict[str, Any]:
+    """Call Anthropic Claude to enrich missing cataloguing and sommelier details for an imported Vivino bottle."""
+    clean_key = (api_key or "").strip()
+    if not clean_key:
+        raise ClaudeScannerError(
+            "Anthropic Claude API key is not configured. Add it in Lekkersappie options."
+        )
+
+    model_id = (model or DEFAULT_CLAUDE_MODEL).strip()
+    winery = _sanitize_prompt_field(wine_data.get("winery") or "Unknown Producer", 160)
+    name = _sanitize_prompt_field(wine_data.get("name") or "Estate Wine", 160)
+    vintage_str = _sanitize_prompt_field(wine_data.get("vintage") or "Non-Vintage", 20)
+    region = _sanitize_prompt_field(wine_data.get("region") or "", 120)
+    country = _sanitize_prompt_field(wine_data.get("country") or "", 80)
+    wine_type = _sanitize_prompt_field(wine_data.get("wine_type") or "red", 30)
+    style = _sanitize_prompt_field(wine_data.get("style") or wine_data.get("regional_wine_style") or "", 80)
+    notes = _sanitize_prompt_field(wine_data.get("general_notes") or wine_data.get("review") or "", 300)
+
+    prompt = VIVINO_ENRICHMENT_PROMPT.format(
+        winery=winery,
+        name=name,
+        vintage=vintage_str,
+        region=region,
+        country=country,
+        wine_type=wine_type,
+        style=style,
+        notes=notes,
+    )
+    prompt += (
+        "\n\nSTRICT OUTPUT REQUIREMENT:\n"
+        "You must respond ONLY with a single valid JSON object strictly matching this schema. "
+        "Do not include any conversational preamble or text outside the JSON object.\n"
+        f"Schema:\n{json.dumps(VIVINO_ENRICHMENT_SCHEMA, indent=2)}"
+    )
+
+    payload = {
+        "model": model_id,
+        "max_tokens": 2048,
+        "temperature": 0.2,
+        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+    }
+
+    resp_json = await _send_claude_messages_request(
+        session, api_key=clean_key, payload=payload, timeout_seconds=timeout_seconds
+    )
+    raw_text = _extract_claude_response_text(resp_json)
+    if not raw_text:
+        raise ClaudeScannerError("Claude returned an empty enrichment response.")
+
+    try:
+        enrichment_json = _extract_json_from_text(raw_text)
+    except Exception as err:
+        raise ClaudeScannerError(f"Failed to parse Claude enrichment JSON: {raw_text[:200]}") from err
+
+    return {
+        "status": "ok",
+        "enrichment": enrichment_json,
+        "model_used": model_id,
+        "provider": LLM_PROVIDER_CLAUDE,
+    }
+
+
+async def async_enrich_vivino_bottle(
+    session: aiohttp.ClientSession,
+    *,
+    api_key: str,
+    wine_data: dict[str, Any],
+    model: str | None = None,
+    timeout_seconds: float = 30.0,
+    provider: str = LLM_PROVIDER_GEMINI,
+) -> dict[str, Any]:
+    """Enrich missing cataloguing and sommelier details using the configured LLM provider."""
+    if provider == LLM_PROVIDER_CLAUDE:
+        return await async_enrich_vivino_bottle_claude(
+            session,
+            api_key=api_key,
+            wine_data=wine_data,
+            model=model or DEFAULT_CLAUDE_MODEL,
+            timeout_seconds=timeout_seconds,
+        )
+    return await async_enrich_vivino_bottle_gemini(
+        session,
+        api_key=api_key,
+        wine_data=wine_data,
+        model=model or DEFAULT_GEMINI_MODEL,
+        timeout_seconds=timeout_seconds,
+    )

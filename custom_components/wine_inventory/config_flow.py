@@ -79,19 +79,26 @@ except ImportError:  # pragma: no cover - fallback for standalone unit tests
 
 from .const import (
     CONF_CELLAR_NAME,
+    CONF_CLAUDE_API_KEY,
+    CONF_CLAUDE_MODEL,
     CONF_CURRENCY,
     CONF_GEMINI_API_KEY,
     CONF_GEMINI_MODEL,
     CONF_HUMIDITY_ENTITY,
+    CONF_LLM_PROVIDER,
     CONF_LOW_STOCK_THRESHOLD,
     CONF_TEMPERATURE_ENTITY,
     CONF_VIVINO_COUNTRY_CODE,
     DEFAULT_CELLAR_NAME,
+    DEFAULT_CLAUDE_MODEL,
     DEFAULT_CURRENCY,
     DEFAULT_GEMINI_MODEL,
+    DEFAULT_LLM_PROVIDER,
     DEFAULT_LOW_STOCK_THRESHOLD,
     DEFAULT_VIVINO_COUNTRY_CODE,
     DOMAIN,
+    LLM_PROVIDER_CLAUDE,
+    LLM_PROVIDER_GEMINI,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -114,6 +121,10 @@ def _build_schema(defaults: dict[str, Any], include_cellar_name: bool = True) ->
         else str
     )
 
+    provider_default = str(defaults.get(CONF_LLM_PROVIDER) or DEFAULT_LLM_PROVIDER)
+    if provider_default not in (LLM_PROVIDER_GEMINI, LLM_PROVIDER_CLAUDE):
+        provider_default = DEFAULT_LLM_PROVIDER
+
     raw_threshold = defaults.get(CONF_LOW_STOCK_THRESHOLD)
     default_threshold = (
         int(raw_threshold)
@@ -123,6 +134,15 @@ def _build_schema(defaults: dict[str, Any], include_cellar_name: bool = True) ->
 
     fields.update(
         {
+            vol.Required(
+                CONF_LLM_PROVIDER,
+                default=provider_default,
+            ): vol.In(
+                {
+                    LLM_PROVIDER_GEMINI: "Google Gemini",
+                    LLM_PROVIDER_CLAUDE: "Anthropic Claude",
+                }
+            ),
             vol.Optional(
                 CONF_GEMINI_API_KEY,
                 default=str(defaults.get(CONF_GEMINI_API_KEY) or ""),
@@ -130,6 +150,14 @@ def _build_schema(defaults: dict[str, Any], include_cellar_name: bool = True) ->
             vol.Required(
                 CONF_GEMINI_MODEL,
                 default=str(defaults.get(CONF_GEMINI_MODEL) or DEFAULT_GEMINI_MODEL),
+            ): str,
+            vol.Optional(
+                CONF_CLAUDE_API_KEY,
+                default=str(defaults.get(CONF_CLAUDE_API_KEY) or ""),
+            ): api_key_validator,
+            vol.Required(
+                CONF_CLAUDE_MODEL,
+                default=str(defaults.get(CONF_CLAUDE_MODEL) or DEFAULT_CLAUDE_MODEL),
             ): str,
             vol.Required(
                 CONF_CURRENCY,
@@ -168,15 +196,26 @@ class WineInventoryConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
         """Handle the initial step configured by the user in Settings > Integrations."""
+        errors: dict[str, str] = {}
         if user_input is not None:
-            cellar_name = user_input.get(CONF_CELLAR_NAME, DEFAULT_CELLAR_NAME).strip()
-            await self.async_set_unique_id(cellar_name.lower().replace(" ", "_"))
-            self._abort_if_unique_id_configured()
-            return self.async_create_entry(title=cellar_name, data=user_input)
+            provider = str(user_input.get(CONF_LLM_PROVIDER) or LLM_PROVIDER_GEMINI)
+            gemini_key = str(user_input.get(CONF_GEMINI_API_KEY) or "").strip()
+            claude_key = str(user_input.get(CONF_CLAUDE_API_KEY) or "").strip()
+
+            if provider == LLM_PROVIDER_GEMINI and not gemini_key:
+                errors["base"] = "missing_gemini_api_key"
+            elif provider == LLM_PROVIDER_CLAUDE and not claude_key:
+                errors["base"] = "missing_claude_api_key"
+            else:
+                cellar_name = user_input.get(CONF_CELLAR_NAME, DEFAULT_CELLAR_NAME).strip()
+                await self.async_set_unique_id(cellar_name.lower().replace(" ", "_"))
+                self._abort_if_unique_id_configured()
+                return self.async_create_entry(title=cellar_name, data=user_input)
 
         return self.async_show_form(
             step_id="user",
-            data_schema=_build_schema({}, include_cellar_name=True),
+            data_schema=_build_schema(user_input or {}, include_cellar_name=True),
+            errors=errors,
         )
 
     @staticmethod
@@ -242,15 +281,26 @@ class WineInventoryOptionsFlowHandler(config_entries.OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
         """Manage general cellar settings."""
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_create_entry(title="", data=dict(user_input))
+            provider = str(user_input.get(CONF_LLM_PROVIDER) or LLM_PROVIDER_GEMINI)
+            gemini_key = str(user_input.get(CONF_GEMINI_API_KEY) or "").strip()
+            claude_key = str(user_input.get(CONF_CLAUDE_API_KEY) or "").strip()
+
+            if provider == LLM_PROVIDER_GEMINI and not gemini_key:
+                errors["base"] = "missing_gemini_api_key"
+            elif provider == LLM_PROVIDER_CLAUDE and not claude_key:
+                errors["base"] = "missing_claude_api_key"
+            else:
+                return self.async_create_entry(title="", data=dict(user_input))
 
         entry = self._entry
         data_dict = dict(getattr(entry, "data", None) or {})
-        merged = {**data_dict, **self._entry_options_dict()}
+        merged = {**data_dict, **self._entry_options_dict(), **(user_input or {})}
         return self.async_show_form(
             step_id="settings",
             data_schema=_build_schema(merged, include_cellar_name=False),
+            errors=errors,
         )
 
     async def async_step_backup(

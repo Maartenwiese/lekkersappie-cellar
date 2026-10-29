@@ -9,6 +9,7 @@ from pathlib import Path
 import tempfile
 from types import MappingProxyType, SimpleNamespace
 import unittest
+from unittest.mock import MagicMock
 import zipfile
 import yaml
 
@@ -20,8 +21,25 @@ from custom_components.wine_inventory.backup import (
     restore_backup_archive,
     stage_backup_for_download,
 )
-from custom_components.wine_inventory.config_flow import WineInventoryOptionsFlowHandler
-from custom_components.wine_inventory.const import DOMAIN, VERSION
+from custom_components.wine_inventory.config_flow import (
+    WineInventoryConfigFlow,
+    WineInventoryOptionsFlowHandler,
+)
+from custom_components.wine_inventory.const import (
+    CONF_CELLAR_NAME,
+    CONF_CLAUDE_API_KEY,
+    CONF_CLAUDE_MODEL,
+    CONF_GEMINI_API_KEY,
+    CONF_GEMINI_MODEL,
+    CONF_LLM_PROVIDER,
+    DEFAULT_CELLAR_NAME,
+    DEFAULT_CLAUDE_MODEL,
+    DEFAULT_GEMINI_MODEL,
+    DOMAIN,
+    LLM_PROVIDER_CLAUDE,
+    LLM_PROVIDER_GEMINI,
+    VERSION,
+)
 from custom_components.wine_inventory.database import WineDatabase
 
 
@@ -576,6 +594,110 @@ class TestBackupRestoreAndViews(unittest.TestCase):
                 self.assertEqual(real_res["cellar_imported"], 54)
                 self.assertEqual(real_res["cellar_bottles"], 77)
                 self.assertGreaterEqual(real_res["tasted_imported"], 430)
+
+    def test_v054_config_and_options_flow_llm_provider_validation(self) -> None:
+        """v0.5.4: Test ConfigFlow and OptionsFlow multi-model provider dropdown and conditional key validation."""
+        # 1. Test ConfigFlow initial form schema
+        flow = WineInventoryConfigFlow()
+        flow.hass = MagicMock()
+        async def _fake_set_uid(uid: str) -> None:
+            pass
+        flow.async_set_unique_id = _fake_set_uid  # type: ignore[assignment]
+        flow._abort_if_unique_id_configured = MagicMock()
+
+        form_initial = asyncio.run(flow.async_step_user(None))
+        self.assertEqual(form_initial["type"], "form")
+        schema_keys = [k.schema if hasattr(k, "schema") else k for k in form_initial["data_schema"].schema.keys()]
+        self.assertIn(CONF_LLM_PROVIDER, schema_keys)
+        self.assertIn(CONF_GEMINI_API_KEY, schema_keys)
+        self.assertIn(CONF_GEMINI_MODEL, schema_keys)
+        self.assertIn(CONF_CLAUDE_API_KEY, schema_keys)
+        self.assertIn(CONF_CLAUDE_MODEL, schema_keys)
+
+        # 2. ConfigFlow with Gemini selected but empty gemini_api_key -> fails with error
+        form_missing_gemini = asyncio.run(
+            flow.async_step_user({
+                CONF_CELLAR_NAME: "My Cellar",
+                CONF_LLM_PROVIDER: LLM_PROVIDER_GEMINI,
+                CONF_GEMINI_API_KEY: "",
+                CONF_GEMINI_MODEL: DEFAULT_GEMINI_MODEL,
+                CONF_CLAUDE_API_KEY: "sk-ant-not-needed",
+                CONF_CLAUDE_MODEL: DEFAULT_CLAUDE_MODEL,
+            })
+        )
+        self.assertEqual(form_missing_gemini["type"], "form")
+        self.assertEqual(form_missing_gemini["errors"].get("base"), "missing_gemini_api_key")
+
+        # 3. ConfigFlow with Claude selected but empty claude_api_key -> fails with error
+        form_missing_claude = asyncio.run(
+            flow.async_step_user({
+                CONF_CELLAR_NAME: "My Cellar",
+                CONF_LLM_PROVIDER: LLM_PROVIDER_CLAUDE,
+                CONF_GEMINI_API_KEY: "gemini-key-not-active",
+                CONF_GEMINI_MODEL: DEFAULT_GEMINI_MODEL,
+                CONF_CLAUDE_API_KEY: "   ",
+                CONF_CLAUDE_MODEL: DEFAULT_CLAUDE_MODEL,
+            })
+        )
+        self.assertEqual(form_missing_claude["type"], "form")
+        self.assertEqual(form_missing_claude["errors"].get("base"), "missing_claude_api_key")
+
+        # 4. ConfigFlow with Claude selected and valid claude_api_key -> succeeds
+        entry_created = asyncio.run(
+            flow.async_step_user({
+                CONF_CELLAR_NAME: "Grand Cru Cellar",
+                CONF_LLM_PROVIDER: LLM_PROVIDER_CLAUDE,
+                CONF_CLAUDE_API_KEY: "sk-ant-valid-key",
+                CONF_CLAUDE_MODEL: "claude-haiku-5-5",
+                CONF_GEMINI_API_KEY: "",
+                CONF_GEMINI_MODEL: DEFAULT_GEMINI_MODEL,
+            })
+        )
+        self.assertEqual(entry_created["type"], "create_entry")
+        self.assertEqual(entry_created["title"], "Grand Cru Cellar")
+        self.assertEqual(entry_created["data"][CONF_LLM_PROVIDER], LLM_PROVIDER_CLAUDE)
+        self.assertEqual(entry_created["data"][CONF_CLAUDE_API_KEY], "sk-ant-valid-key")
+        self.assertEqual(entry_created["data"][CONF_CLAUDE_MODEL], "claude-haiku-5-5")
+
+        # 5. OptionsFlow settings validation
+        entry = MagicMock()
+        entry.entry_id = "test_opt_054"
+        entry.data = {
+            CONF_LLM_PROVIDER: LLM_PROVIDER_GEMINI,
+            CONF_GEMINI_API_KEY: "initial-key",
+            CONF_GEMINI_MODEL: DEFAULT_GEMINI_MODEL,
+            CONF_CLAUDE_API_KEY: "",
+            CONF_CLAUDE_MODEL: DEFAULT_CLAUDE_MODEL,
+        }
+        entry.options = dict(entry.data)
+        opts_flow = WineInventoryOptionsFlowHandler(entry)
+
+        # OptionsFlow switch to Claude without key -> error
+        opts_missing_claude = asyncio.run(
+            opts_flow.async_step_settings({
+                CONF_LLM_PROVIDER: LLM_PROVIDER_CLAUDE,
+                CONF_CLAUDE_API_KEY: "",
+                CONF_CLAUDE_MODEL: "claude-haiku-5-5",
+                CONF_GEMINI_API_KEY: "initial-key",
+                CONF_GEMINI_MODEL: DEFAULT_GEMINI_MODEL,
+            })
+        )
+        self.assertEqual(opts_missing_claude["type"], "form")
+        self.assertEqual(opts_missing_claude["errors"].get("base"), "missing_claude_api_key")
+
+        # OptionsFlow switch to Claude with valid key -> succeeds
+        opts_success = asyncio.run(
+            opts_flow.async_step_settings({
+                CONF_LLM_PROVIDER: LLM_PROVIDER_CLAUDE,
+                CONF_CLAUDE_API_KEY: "sk-ant-new-key",
+                CONF_CLAUDE_MODEL: "claude-haiku-5-5",
+                CONF_GEMINI_API_KEY: "initial-key",
+                CONF_GEMINI_MODEL: DEFAULT_GEMINI_MODEL,
+            })
+        )
+        self.assertEqual(opts_success["type"], "create_entry")
+        self.assertEqual(opts_success["data"][CONF_LLM_PROVIDER], LLM_PROVIDER_CLAUDE)
+        self.assertEqual(opts_success["data"][CONF_CLAUDE_API_KEY], "sk-ant-new-key")
 
 
 if __name__ == "__main__":

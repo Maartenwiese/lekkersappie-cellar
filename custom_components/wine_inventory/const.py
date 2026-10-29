@@ -6,24 +6,40 @@ from typing import Final
 
 DOMAIN: Final = "wine_inventory"
 NAME: Final = "Lekkersappie"
-VERSION: Final = "0.5.3"
+VERSION: Final = "0.5.4"
 
 # Config & Options keys
 CONF_CELLAR_NAME: Final = "cellar_name"
+CONF_LLM_PROVIDER: Final = "llm_provider"
 CONF_GEMINI_API_KEY: Final = "gemini_api_key"
 CONF_GEMINI_MODEL: Final = "gemini_model"
+CONF_CLAUDE_API_KEY: Final = "claude_api_key"
+CONF_CLAUDE_MODEL: Final = "claude_model"
 CONF_CURRENCY: Final = "currency"
 CONF_VIVINO_COUNTRY_CODE: Final = "vivino_country_code"
 CONF_TEMPERATURE_ENTITY: Final = "temperature_entity"
 CONF_HUMIDITY_ENTITY: Final = "humidity_entity"
 CONF_LOW_STOCK_THRESHOLD: Final = "low_stock_threshold"
 
+# LLM Providers
+LLM_PROVIDER_GEMINI: Final = "gemini"
+LLM_PROVIDER_CLAUDE: Final = "claude"
+LLM_PROVIDERS: Final[list[str]] = [
+    LLM_PROVIDER_GEMINI,
+    LLM_PROVIDER_CLAUDE,
+]
+
 # Defaults
 DEFAULT_CELLAR_NAME: Final = "Lekkersappie"
-DEFAULT_GEMINI_MODEL: Final = "gemini-3.8-flash-lite"
+DEFAULT_LLM_PROVIDER: Final = LLM_PROVIDER_GEMINI
+DEFAULT_GEMINI_MODEL: Final = "gemini-3.5-flash-lite"
+DEFAULT_CLAUDE_MODEL: Final = "claude-haiku-5-5"
 DEFAULT_CURRENCY: Final = "EUR"
 DEFAULT_VIVINO_COUNTRY_CODE: Final = "NL"
 DEFAULT_LOW_STOCK_THRESHOLD: Final = 2
+
+# API Endpoints
+CLAUDE_API_BASE_URL: Final = "https://api.anthropic.com/v1/messages"
 
 # Storage & Static Paths
 STORAGE_DIR_NAME: Final = "wine_inventory"

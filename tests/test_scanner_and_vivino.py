@@ -20,6 +20,20 @@ from unittest.mock import MagicMock, patch
 
 from custom_components.wine_inventory.coordinator import WineInventoryCoordinator
 from custom_components.wine_inventory.scanner import (
+    ClaudeScannerError,
+    GeminiScannerError,
+    LLMScannerError,
+    _extract_json_from_text,
+    async_enrich_vivino_bottle,
+    async_enrich_vivino_bottle_claude,
+    async_judge_vivino_candidates,
+    async_judge_vivino_candidates_claude,
+    async_research_wine,
+    async_research_wine_with_claude,
+    async_scan_bottle_label,
+    async_scan_bottle_label_claude,
+    async_sommelier_dish_pairing,
+    async_sommelier_dish_pairing_claude,
     grounded_search_fields,
     parse_image_data_uri,
     save_bottle_cover_image,
@@ -1025,6 +1039,533 @@ class TestScannerVivinoAndCoordinator(unittest.TestCase):
                 self.assertEqual(fetched["personal_rating"], 4.8)
 
             asyncio.run(_update_runner())
+
+    def test_v054_claude_scanner_error_hierarchy(self) -> None:
+        """v0.5.4: Verify ClaudeScannerError and GeminiScannerError inherit from LLMScannerError."""
+        self.assertTrue(issubclass(ClaudeScannerError, GeminiScannerError))
+        self.assertTrue(issubclass(ClaudeScannerError, LLMScannerError))
+        self.assertTrue(issubclass(GeminiScannerError, LLMScannerError))
+
+        err = ClaudeScannerError("Claude test failure")
+        self.assertIsInstance(err, GeminiScannerError)
+        self.assertIsInstance(err, LLMScannerError)
+
+    def test_v054_extract_json_from_text(self) -> None:
+        """v0.5.4: Verify _extract_json_from_text handles clean JSON, markdown code fences, and text padding."""
+        # Pure JSON
+        data = _extract_json_from_text('{"winery": "Château Latour", "vintage": 2010}')
+        self.assertEqual(data["winery"], "Château Latour")
+        self.assertEqual(data["vintage"], 2010)
+
+        # Markdown fenced with json tag
+        fenced_json = "```json\n{\"winery\": \"Opus One\", \"vintage\": 2018}\n```"
+        data_fenced = _extract_json_from_text(fenced_json)
+        self.assertEqual(data_fenced["winery"], "Opus One")
+
+        # Markdown fenced without tag
+        fenced_plain = "```\n{\"winery\": \"Sassicaia\", \"vintage\": 2015}\n```"
+        data_plain = _extract_json_from_text(fenced_plain)
+        self.assertEqual(data_plain["winery"], "Sassicaia")
+
+        # Text wrapper around JSON object
+        padded = "Here is the extracted information:\n{\"name\": \"Grange\", \"producer\": \"Penfolds\"}\nHope this helps!"
+        data_padded = _extract_json_from_text(padded)
+        self.assertEqual(data_padded["name"], "Grange")
+        self.assertEqual(data_padded["producer"], "Penfolds")
+
+        # Invalid JSON text raises ValueError
+        with self.assertRaises(ValueError):
+            _extract_json_from_text("Sorry, I could not detect any wine bottle or label here.")
+
+    def test_v054_claude_bottle_label_scan_success_and_guardrail(self) -> None:
+        """v0.5.4: Test Claude label scan success, guardrail rejection, and HTTP errors."""
+        class _ClaudeMockSession:
+            def __init__(self, response_body: Any, status: int = 200) -> None:
+                self.response_body = response_body
+                self.status = status
+                self.last_headers: dict[str, str] = {}
+                self.last_json: dict[str, Any] = {}
+
+            def post(self, url: str, **kwargs: Any) -> Any:
+                self.last_headers = dict(kwargs.get("headers") or {})
+                self.last_json = dict(kwargs.get("json") or {})
+
+                class _Resp:
+                    def __init__(self, status: int, body: Any) -> None:
+                        self.status = status
+                        self._body = body
+
+                    async def json(self, content_type: str | None = None) -> Any:
+                        return self._body
+
+                    async def text(self) -> str:
+                        return self._body if isinstance(self._body, str) else json.dumps(self._body)
+
+                    async def __aenter__(self) -> Any:
+                        return self
+
+                    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+                        return None
+
+                return _Resp(self.status, self.response_body)
+
+        async def _run() -> None:
+            # 1. Success case
+            claude_success_reply = {
+                "id": "msg_01",
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps({
+                            "is_wine_bottle_or_label": True,
+                            "winery": "Château Margaux",
+                            "name": "Premier Grand Cru Classé",
+                            "vintage": 2015,
+                            "wine_type": "red",
+                            "varietal": "Cabernet Sauvignon Blend",
+                            "region": "Margaux, Bordeaux",
+                            "country": "France",
+                            "drink_window_note": "Drink 2025-2045",
+                            "food_pairings": ["Roast Lamb", "Ribeye"],
+                            "label_summary": "Château Margaux 2015 Premier Grand Cru Classé",
+                            "label_text_verbatim": "CHATEAU MARGAUX 2015",
+                            "winery_printed": True,
+                            "name_printed": True,
+                            "vintage_printed": True,
+                        }),
+                    }
+                ],
+            }
+            session_success = _ClaudeMockSession(claude_success_reply)
+            result = await async_scan_bottle_label_claude(
+                session_success,  # type: ignore[arg-type]
+                api_key="sk-ant-test-key",
+                image_bytes=b"dummy_image_bytes",
+                mime_type="image/jpeg",
+                model="claude-haiku-5-5",
+            )
+            self.assertTrue(result["is_wine_bottle_or_label"])
+            self.assertEqual(result["winery"], "Château Margaux")
+            self.assertEqual(result["vintage"], 2015)
+            self.assertEqual(session_success.last_headers.get("x-api-key"), "sk-ant-test-key")
+            self.assertEqual(session_success.last_headers.get("anthropic-version"), "2023-06-01")
+            self.assertEqual(session_success.last_json.get("model"), "claude-haiku-5-5")
+            self.assertEqual(len(session_success.last_json.get("messages", [])), 1)
+
+            # 2. Guardrail failure: is_wine_bottle_or_label is False
+            claude_guardrail_reply = {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps({
+                            "is_wine_bottle_or_label": False,
+                            "label_summary": "A close-up photo of a wristwatch.",
+                        }),
+                    }
+                ]
+            }
+            session_guardrail = _ClaudeMockSession(claude_guardrail_reply)
+            with self.assertRaises(ClaudeScannerError) as ctx:
+                await async_scan_bottle_label_claude(
+                    session_guardrail,  # type: ignore[arg-type]
+                    api_key="sk-ant-test-key",
+                    image_bytes=b"dummy",
+                )
+            self.assertIn("This is not a wine bottle or label", str(ctx.exception))
+
+            # 3. HTTP 400 Bad Request
+            session_400 = _ClaudeMockSession({"error": {"message": "Invalid model parameter"}}, status=400)
+            with self.assertRaises(ClaudeScannerError) as ctx_400:
+                await async_scan_bottle_label_claude(
+                    session_400,  # type: ignore[arg-type]
+                    api_key="sk-ant-test-key",
+                    image_bytes=b"dummy",
+                )
+            self.assertIn("400", str(ctx_400.exception))
+
+            # 4. HTTP 401 Authentication Denied
+            session_401 = _ClaudeMockSession({"error": {"message": "Invalid API Key"}}, status=401)
+            with self.assertRaises(ClaudeScannerError) as ctx_401:
+                await async_scan_bottle_label_claude(
+                    session_401,  # type: ignore[arg-type]
+                    api_key="bad-key",
+                    image_bytes=b"dummy",
+                )
+            self.assertIn("401", str(ctx_401.exception))
+
+            # 5. HTTP 429 Rate Limit
+            session_429 = _ClaudeMockSession({"error": {"message": "Too Many Requests"}}, status=429)
+            with self.assertRaises(ClaudeScannerError) as ctx_429:
+                await async_scan_bottle_label_claude(
+                    session_429,  # type: ignore[arg-type]
+                    api_key="sk-ant-test-key",
+                    image_bytes=b"dummy",
+                )
+            self.assertIn("429", str(ctx_429.exception))
+
+            # 6. Missing API key
+            with self.assertRaises(ClaudeScannerError) as ctx_missing:
+                await async_scan_bottle_label_claude(
+                    session_success,  # type: ignore[arg-type]
+                    api_key="",
+                    image_bytes=b"dummy",
+                )
+            self.assertIn("Anthropic Claude API key", str(ctx_missing.exception))
+
+        asyncio.run(_run())
+
+    def test_v054_claude_judge_vivino_candidates(self) -> None:
+        """v0.5.4: Test Claude Vivino candidate matching judgment."""
+        class _ClaudeMockSession:
+            def __init__(self, reply: Any) -> None:
+                self.reply = reply
+
+            def post(self, url: str, **kwargs: Any) -> Any:
+                class _Resp:
+                    def __init__(self, body: Any) -> None:
+                        self.status = 200
+                        self._body = body
+
+                    async def json(self, content_type: str | None = None) -> Any:
+                        return self._body
+
+                    async def text(self) -> str:
+                        return self._body if isinstance(self._body, str) else json.dumps(self._body)
+
+                    async def __aenter__(self) -> Any:
+                        return self
+
+                    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+                        return None
+
+                return _Resp(self.reply)
+
+        async def _run() -> None:
+            # 1. Matches candidate at index 1
+            claude_reply = {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps({"choice": "1", "reason": "Vintage and winery match"}),
+                    }
+                ]
+            }
+            session = _ClaudeMockSession(claude_reply)
+            candidates = [
+                {"name": "Margaux 2014", "link": "https://vivino.com/wines/1"},
+                {"name": "Margaux 2015", "link": "https://vivino.com/wines/2"},
+            ]
+            resp = await async_judge_vivino_candidates_claude(
+                session,  # type: ignore[arg-type]
+                api_key="sk-ant-test",
+                image_bytes=b"dummy",
+                mime_type="image/jpeg",
+                label_text_verbatim="Margaux 2015",
+                candidates=candidates,
+            )
+            self.assertEqual(resp.get("choice"), 1)
+
+            # 2. Out of bounds or None choice returns None
+            claude_none_reply = {
+                "content": [{"type": "text", "text": json.dumps({"choice": "NONE", "reason": "no match"})}]
+            }
+            session_none = _ClaudeMockSession(claude_none_reply)
+            resp_none = await async_judge_vivino_candidates_claude(
+                session_none,  # type: ignore[arg-type]
+                api_key="sk-ant-test",
+                image_bytes=None,
+                mime_type="image/jpeg",
+                label_text_verbatim="Margaux 2015",
+                candidates=candidates,
+            )
+            self.assertIsNone(resp_none.get("choice"))
+
+        asyncio.run(_run())
+
+    def test_v054_claude_wine_research_and_sommelier_pairing(self) -> None:
+        """v0.5.4: Test Claude wine research and SommAI dish pairing."""
+        class _ClaudeMockSession:
+            def __init__(self, reply: Any) -> None:
+                self.reply = reply
+                self.last_json: dict[str, Any] = {}
+
+            def post(self, url: str, **kwargs: Any) -> Any:
+                self.last_json = dict(kwargs.get("json") or {})
+
+                class _Resp:
+                    def __init__(self, body: Any) -> None:
+                        self.status = 200
+                        self._body = body
+
+                    async def json(self, content_type: str | None = None) -> Any:
+                        return self._body
+
+                    async def text(self) -> str:
+                        return self._body if isinstance(self._body, str) else json.dumps(self._body)
+
+                    async def __aenter__(self) -> Any:
+                        return self
+
+                    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+                        return None
+
+                return _Resp(self.reply)
+
+        async def _run() -> None:
+            # 1. Claude Wine Research
+            research_payload = {
+                "summary": "Historic Bordeaux estate producing benchmark Cabernet blends.",
+                "producer_profile": "Premier Grand Cru Classé in the 1855 classification.",
+                "terroir_and_appellation": "Gravel mounds in Margaux near the Gironde estuary.",
+                "tasting_notes": "Blackcurrant, violet, cigar box, fine tannins.",
+                "food_pairings": ["Roast rack of lamb", "Dry-aged ribeye"],
+                "drinking_window": "2025 - 2045",
+                "bold_light_slider": 78,
+                "tannic_smooth_slider": 82,
+                "sweet_dry_slider": 5,
+                "soft_acidic_slider": 65,
+            }
+            session_research = _ClaudeMockSession({
+                "content": [{"type": "text", "text": json.dumps(research_payload)}]
+            })
+            res = await async_research_wine_with_claude(
+                session_research,  # type: ignore[arg-type]
+                api_key="sk-ant-test",
+                wine_data={"winery": "Château Margaux", "vintage": 2015, "wine_type": "red"},
+            )
+            self.assertEqual(res["research"]["summary"], research_payload["summary"])
+            self.assertEqual(res["research"]["bold_light_slider"], 78)
+            self.assertEqual(res["research"]["tannic_smooth_slider"], 82)
+
+            # 2. Claude SommAI Dish Pairing (with multimodal dish photo)
+            somm_payload = {
+                "response": "For this pan-seared duck breast with cherry reduction, I recommend a medium-bodied red with high acidity.",
+                "pairing_recommendations": [
+                    {
+                        "wine_id": 42,
+                        "winery": "Domaine Dujac",
+                        "wine_name": "Morey-Saint-Denis",
+                        "vintage": 2020,
+                        "pairing_reason": "Bright red fruit and earthiness cut through the rich duck fat.",
+                        "confidence": "high",
+                    }
+                ],
+                "recommended_wine_style": "Red Burgundy / Pinot Noir",
+            }
+            session_somm = _ClaudeMockSession({
+                "content": [{"type": "text", "text": json.dumps(somm_payload)}]
+            })
+            cellar_wines = [
+                {"id": 42, "winery": "Domaine Dujac", "name": "Morey-Saint-Denis", "vintage": 2020, "quantity": 2, "wine_type": "red"},
+            ]
+            history = [
+                {"role": "user", "content": "What wine goes best with duck?"},
+                {"role": "model", "content": "Duck pairs wonderfully with Pinot Noir or Syrah."},
+            ]
+            somm_res = await async_sommelier_dish_pairing_claude(
+                session_somm,  # type: ignore[arg-type]
+                api_key="sk-ant-test",
+                dish_description="I have pan-seared duck breast with cherry sauce.",
+                cellar_wines=cellar_wines,
+                image_bytes=b"dummy_dish_image",
+                mime_type="image/jpeg",
+                conversation_history=history,
+            )
+            self.assertIn("pan-seared duck", somm_res["pairing"]["response"])
+            self.assertEqual(len(somm_res["pairing"]["pairing_recommendations"]), 1)
+            self.assertEqual(somm_res["pairing"]["pairing_recommendations"][0]["wine_id"], 42)
+
+            # Verify Claude message format & role translation
+            sent_messages = session_somm.last_json.get("messages", [])
+            self.assertEqual(len(sent_messages), 3)
+            # Check role mapping: "model" -> "assistant"
+            self.assertEqual(sent_messages[0]["role"], "user")
+            self.assertEqual(sent_messages[1]["role"], "assistant")
+            self.assertEqual(sent_messages[2]["role"], "user")
+            # Verify multimodal content in latest user message
+            last_content = sent_messages[2]["content"]
+            self.assertEqual(len(last_content), 2)
+            self.assertEqual(last_content[0]["type"], "image")
+            self.assertEqual(last_content[1]["type"], "text")
+
+            # 3. Claude Vivino Bottle Enrichment
+            enrich_payload = {
+                "grapes": ["Pinot Noir"],
+                "alcohol_pct": 13.5,
+                "region": "Burgundy",
+                "country": "France",
+                "wine_type": "red",
+                "drink_from_year": 2024,
+                "drink_until_year": 2038,
+                "general_notes": "Silky, fragrant, structured.",
+                "food_pairings": ["Duck", "Roast chicken"],
+            }
+            session_enrich = _ClaudeMockSession({
+                "content": [{"type": "text", "text": json.dumps(enrich_payload)}]
+            })
+            enriched = await async_enrich_vivino_bottle_claude(
+                session_enrich,  # type: ignore[arg-type]
+                api_key="sk-ant-test",
+                wine_data={"winery": "Domaine Dujac", "name": "Morey-Saint-Denis", "vintage": 2020},
+            )
+            self.assertEqual(enriched["enrichment"]["alcohol_pct"], 13.5)
+            self.assertEqual(enriched["enrichment"]["drink_until_year"], 2038)
+
+        asyncio.run(_run())
+
+    def test_v054_scanner_unified_dispatchers(self) -> None:
+        """v0.5.4: Test unified dispatchers route to correct provider (Gemini vs Claude)."""
+        async def _run() -> None:
+            mock_session = MagicMock()
+
+            # Test scan dispatch
+            with patch("custom_components.wine_inventory.scanner.async_scan_bottle_label_claude", return_value={"provider": "claude"}) as mock_claude_scan:
+                res_claude = await async_scan_bottle_label(
+                    mock_session,
+                    api_key="test-key",
+                    image_bytes=b"dummy",
+                    provider="claude",
+                )
+                self.assertEqual(res_claude["provider"], "claude")
+                mock_claude_scan.assert_called_once()
+
+            with patch("custom_components.wine_inventory.scanner.async_scan_bottle_label_gemini", return_value={"provider": "gemini"}) as mock_gemini_scan:
+                res_gemini = await async_scan_bottle_label(
+                    mock_session,
+                    api_key="test-key",
+                    image_bytes=b"dummy",
+                    provider="gemini",
+                )
+                self.assertEqual(res_gemini["provider"], "gemini")
+                mock_gemini_scan.assert_called_once()
+
+            # Test research dispatch
+            with patch("custom_components.wine_inventory.scanner.async_research_wine_with_claude", return_value={"research": "claude"}) as mock_claude_res:
+                res_r = await async_research_wine(
+                    mock_session,
+                    api_key="test-key",
+                    wine_data={},
+                    provider="claude",
+                )
+                self.assertEqual(res_r["research"], "claude")
+                mock_claude_res.assert_called_once()
+
+            # Test sommelier dispatch
+            with patch("custom_components.wine_inventory.scanner.async_sommelier_dish_pairing_claude", return_value={"somm": "claude"}) as mock_claude_somm:
+                res_s = await async_sommelier_dish_pairing(
+                    mock_session,
+                    api_key="test-key",
+                    dish_description="Steak",
+                    cellar_wines=[],
+                    provider="claude",
+                )
+                self.assertEqual(res_s["somm"], "claude")
+                mock_claude_somm.assert_called_once()
+
+            # Test enrich dispatch
+            with patch("custom_components.wine_inventory.scanner.async_enrich_vivino_bottle_claude", return_value={"enrich": "claude"}) as mock_claude_enr:
+                res_e = await async_enrich_vivino_bottle(
+                    mock_session,
+                    api_key="test-key",
+                    wine_data={},
+                    provider="claude",
+                )
+                self.assertEqual(res_e["enrich"], "claude")
+                mock_claude_enr.assert_called_once()
+
+        asyncio.run(_run())
+
+    def test_v054_coordinator_claude_provider_routing(self) -> None:
+        """v0.5.4: Test coordinator properly routes requests when configured with Claude."""
+        from custom_components.wine_inventory.coordinator import WineInventoryCoordinator
+        from custom_components.wine_inventory.database import WineDatabase
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_dir = Path(tmpdir)
+            db = WineDatabase(config_dir / "wine_inventory.db")
+            db.initialize()
+
+            class _FakeHass:
+                def __init__(self, cdir: Path) -> None:
+                    self.config = MagicMock()
+                    self.config.config_dir = str(cdir)
+                    self.bus = MagicMock()
+
+                async def async_add_executor_job(self, fn: Any, *args: Any) -> Any:
+                    return fn(*args)
+
+            hass = _FakeHass(config_dir)
+            entry = MagicMock()
+            entry.entry_id = "test-claude-entry"
+            entry.options = {
+                "llm_provider": "claude",
+                "claude_api_key": "sk-ant-active-key",
+                "claude_model": "claude-haiku-5-5",
+                "gemini_api_key": "some-other-gemini-key",
+            }
+
+            coordinator = WineInventoryCoordinator(
+                hass,
+                entry_id="test-claude-entry",
+                config=entry.options,
+                session_getter=lambda h: MagicMock(),
+            )
+            coordinator.db = db
+
+            self.assertEqual(coordinator.llm_provider, "claude")
+            self.assertEqual(coordinator.active_llm_api_key, "sk-ant-active-key")
+            self.assertEqual(coordinator.active_llm_model, "claude-haiku-5-5")
+
+            async def _coordinator_run() -> None:
+                # 1. async_scan_bottle passes provider='claude' and claude key/model
+                jpeg_header = b"\xff\xd8\xff\xe0" + b"\x00" * 32
+                b64_img = f"data:image/jpeg;base64,{base64.b64encode(jpeg_header).decode('ascii')}"
+
+                with patch("custom_components.wine_inventory.coordinator.async_scan_bottle_label", return_value={"winery": "Test Estate", "is_wine_bottle_or_label": True}) as mock_scan:
+                    scan_res = await coordinator.async_scan_bottle(image_data=b64_img)
+                    self.assertEqual(scan_res["extracted"]["winery"], "Test Estate")
+                    mock_scan.assert_called_once()
+                    _, kwargs = mock_scan.call_args
+                    self.assertEqual(kwargs.get("provider"), "claude")
+                    self.assertEqual(kwargs.get("api_key"), "sk-ant-active-key")
+                    self.assertEqual(kwargs.get("model"), "claude-haiku-5-5")
+
+                # 2. async_research_wine passes provider='claude'
+                wine = db.add_or_increment_wine(
+                    winery="Test Estate",
+                    name="Reserve",
+                    vintage=2020,
+                    wine_type="red",
+                    quantity=1,
+                )
+                with patch("custom_components.wine_inventory.coordinator.async_research_wine", return_value={"status": "ok", "research": {"summary": "Detailed research"}}) as mock_res:
+                    res = await coordinator.async_research_wine(wine["id"])
+                    self.assertEqual(res["status"], "ok")
+                    mock_res.assert_called_once()
+                    _, kwargs_res = mock_res.call_args
+                    self.assertEqual(kwargs_res.get("provider"), "claude")
+                    self.assertEqual(kwargs_res.get("api_key"), "sk-ant-active-key")
+
+                # 3. async_sommelier_chat passes provider='claude'
+                with patch("custom_components.wine_inventory.coordinator.async_sommelier_dish_pairing", return_value={"status": "ok", "pairing": {"response": "Pairing advice"}, "response": "Pairing advice"}) as mock_somm:
+                    somm_res = await coordinator.async_sommelier_chat(query_text="Lamb chops")
+                    self.assertEqual(somm_res["response"], "Pairing advice")
+                    mock_somm.assert_called_once()
+                    _, kwargs_somm = mock_somm.call_args
+                    self.assertEqual(kwargs_somm.get("provider"), "claude")
+                    self.assertEqual(kwargs_somm.get("api_key"), "sk-ant-active-key")
+
+                # 4. async_enrich_bottle passes provider='claude'
+                with patch("custom_components.wine_inventory.coordinator.async_enrich_vivino_bottle", return_value={"status": "ok", "enrichment": {"alcohol_pct": 14.0}}) as mock_enrich:
+                    enrich_res = await coordinator.async_enrich_bottle(wine["id"])
+                    self.assertEqual(enrich_res["status"], "ok")
+                    mock_enrich.assert_called_once()
+                    _, kwargs_enrich = mock_enrich.call_args
+                    self.assertEqual(kwargs_enrich.get("provider"), "claude")
+
+            asyncio.run(_coordinator_run())
 
 
 if __name__ == "__main__":

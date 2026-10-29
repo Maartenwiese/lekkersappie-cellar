@@ -4,7 +4,7 @@
  * Authenticated API responses are never persisted to Cache Storage.
  */
 
-const CACHE_NAME = "lekkersappie-pwa-v0.5.3";
+const CACHE_NAME = "lekkersappie-pwa-v0.5.4";
 const APP_SHELL = [
   "/lekkersappie/index.html",
   "/lekkersappie/styles.css",
