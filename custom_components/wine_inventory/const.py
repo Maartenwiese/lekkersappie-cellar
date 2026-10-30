@@ -6,7 +6,7 @@ from typing import Final
 
 DOMAIN: Final = "wine_inventory"
 NAME: Final = "Lekkersappie"
-VERSION: Final = "0.5.6"
+VERSION: Final = "0.5.7"
 
 # Config & Options keys
 CONF_CELLAR_NAME: Final = "cellar_name"
@@ -30,7 +30,7 @@ LLM_PROVIDERS: Final[list[str]] = [
 ]
 
 # Defaults
-DEFAULT_CELLAR_NAME: Final = "Lekkersappie"
+DEFAULT_CELLAR_NAME: Final = "Wine Cellar"
 DEFAULT_LLM_PROVIDER: Final = LLM_PROVIDER_GEMINI
 DEFAULT_GEMINI_MODEL: Final = "gemini-3.5-flash-lite"
 DEFAULT_CLAUDE_MODEL: Final = "claude-haiku-5-5"

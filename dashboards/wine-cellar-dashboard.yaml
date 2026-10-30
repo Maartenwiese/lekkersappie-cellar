@@ -6,7 +6,7 @@
 # - Uses `type: distribution` card for Red / White / Rosé / Sparkling breakdown
 # - Uses `type: custom:wine-inventory-card` for bottle scanning, Vivino ranking, +1/-1 stock, and notes
 # - Mobile-first: on phones the sections stack into one column with the inventory card on top
-# - Features multiple dedicated views: Cellar Overview, Line-Item List View, Tasting Archive, and Cellar Operations & Backup
+# - Features multiple dedicated views: Cellar Overview, Tasted Archive, SommAI Pairing, and Cellar Statistics
 
 title: Lekkersappie
 views:
@@ -15,24 +15,8 @@ views:
     type: sections
     icon: mdi:view-dashboard
     max_columns: 3
-    badges:
-      - type: entity
-        entity: sensor.lekkersappie_total_bottles
-        show_name: true
-        show_state: true
-        color: red
-      - type: entity
-        entity: sensor.lekkersappie_ready_to_drink
-        show_name: true
-        show_state: true
-        color: green
-      - type: entity
-        entity: sensor.lekkersappie_drink_soon
-        show_name: true
-        show_state: true
-        color: amber
+    badges: []
     sections:
-      # Mobile-first: the inventory card comes first so phones show it at the top.
       - type: grid
         column_span: 2
         cards:
@@ -54,7 +38,6 @@ views:
             grid_options:
               columns: full
               rows: auto
-
       - type: grid
         column_span: 1
         cards:
@@ -69,53 +52,55 @@ views:
                   action: perform-action
                   perform_action: wine_inventory.refresh_vivino
           - type: tile
-            entity: sensor.lekkersappie_total_bottles
+            grid_options:
+              columns: 6
+              rows: 1
+            entity: sensor.wine_cellar_total_bottles
             name: Total Stock
             icon: mdi:glass-wine
             color: red
+            vertical: false
+            features_position: bottom
+          - type: tile
             grid_options:
               columns: 6
               rows: 1
-          - type: tile
-            entity: sensor.lekkersappie_unique_wines
+            entity: sensor.wine_cellar_unique_wines
             name: Unique Wines
             icon: mdi:glass-wine
             color: purple
+            vertical: false
+            features_position: bottom
+          - type: tile
             grid_options:
               columns: 6
               rows: 1
-          - type: tile
-            entity: sensor.lekkersappie_ready_to_drink
+            entity: sensor.wine_cellar_ready_to_drink
             name: Ready to Drink
             icon: mdi:check-decagram
             color: green
+            vertical: false
+            features_position: bottom
+          - type: tile
             grid_options:
               columns: 6
               rows: 1
-          - type: tile
-            entity: sensor.lekkersappie_drink_soon
+            entity: sensor.wine_cellar_drink_soon
             name: Drink Soon
             icon: mdi:clock-alert-outline
             color: amber
-            grid_options:
-              columns: 6
-              rows: 1
+            vertical: false
+            features_position: bottom
           - type: tile
-            entity: sensor.lekkersappie_estimated_value
-            name: Cellar Valuation
-            icon: mdi:cash-multiple
-            color: teal
             grid_options:
               columns: 12
               rows: 1
-          - type: custom:wine-cellar-summary-card
-            title: Quick Cellar & Mobile App
-            show_recent: true
-            show_style_bar: true
-            dashboard_path: /lekkersappie-cellar/overview
-            grid_options:
-              columns: full
-              rows: auto
+            entity: sensor.wine_cellar_estimated_value
+            name: Cellar Valuation
+            icon: mdi:cash-multiple
+            color: teal
+            vertical: false
+            features_position: bottom
           - type: heading
             heading: SommAI Food & Wine Pairing
             heading_style: subtitle
@@ -132,65 +117,76 @@ views:
           - type: distribution
             title: Wine Style Breakdown
             entities:
-              - entity: sensor.lekkersappie_red_wine_bottles
+              - entity: sensor.wine_cellar_red_wine_bottles
                 name: Red
-                color: "#b71c1c"
-              - entity: sensor.lekkersappie_white_wine_bottles
+                color: '#b71c1c'
+              - entity: sensor.wine_cellar_white_wine_bottles
                 name: White
-                color: "#f57f17"
-              - entity: sensor.lekkersappie_rose_wine_bottles
+                color: '#f57f17'
+              - entity: sensor.wine_cellar_rose_wine_bottles
+                color: '#ec407a'
                 name: Rosé
-                color: "#ec407a"
-              - entity: sensor.lekkersappie_sparkling_wine_bottles
+              - entity: sensor.wine_cellar_sparkling_wine_bottles
                 name: Sparkling
-                color: "#0288d1"
-              - entity: sensor.lekkersappie_dessert_fortified_bottles
+                color: '#0288d1'
+              - entity: sensor.wine_cellar_dessert_fortified_bottles
                 name: Dessert / Fortified
-                color: "#6a1b9a"
+                color: '#6a1b9a'
             grid_options:
               columns: full
-              rows: 2
-
-  - title: Wine List
-    path: list-view
-    type: sections
-    icon: mdi:view-list
-    max_columns: 1
-    badges:
-      - type: entity
-        entity: sensor.lekkersappie_total_bottles
-        show_name: true
-        show_state: true
-        color: red
-      - type: entity
-        entity: sensor.lekkersappie_unique_wines
-        show_name: true
-        show_state: true
-        color: purple
-    sections:
+              rows: auto
       - type: grid
-        column_span: 1
+        column_span: 3
         cards:
           - type: heading
-            heading: Wine Inventory Line-Item List
+            heading: Cellar Statistics & Drinking Windows
             heading_style: title
-            icon: mdi:format-list-bulleted
-            badges:
-              - type: button
-                icon: mdi:refresh
-                tap_action:
-                  action: perform-action
-                  perform_action: wine_inventory.refresh_vivino
-              - type: button
-                icon: mdi:file-export-outline
-                tap_action:
-                  action: perform-action
-                  perform_action: wine_inventory.export_inventory
-                  data:
-                    format: csv
-          - type: custom:wine-inventory-card
-            title: Lekkersappie
-            default_view: list
+            icon: mdi:chart-timeline-variant-shimmer
+          - type: tile
+            grid_options:
+              columns: 3
+              rows: 1
+            entity: sensor.wine_cellar_ready_to_drink
+            name: Ready to Drink
+            icon: mdi:check-decagram
+            color: green
+            vertical: false
+            features_position: bottom
+          - type: tile
+            grid_options:
+              columns: 3
+              rows: 1
+            entity: sensor.wine_cellar_drink_soon
+            name: Drink Soon
+            icon: mdi:clock-alert-outline
+            color: amber
+            vertical: false
+            features_position: bottom
+          - type: tile
+            grid_options:
+              columns: 3
+              rows: 1
+            entity: sensor.wine_cellar_keep_bottles
+            name: Keep / Aging
+            icon: mdi:archive-clock-outline
+            color: blue
+            vertical: false
+            features_position: bottom
+          - type: tile
+            grid_options:
+              columns: 3
+              rows: 1
+            entity: sensor.wine_cellar_past_peak_bottles
+            name: Past Peak
+            icon: mdi:alert-outline
+            color: red
+            vertical: false
+            features_position: bottom
+          - type: custom:wine-cellar-summary-card
+            title: Quick Cellar & Mobile App Highlights
+            show_recent: true
+            show_style_bar: true
+            dashboard_path: /lekkersappie-cellar/overview
             grid_options:
               columns: full
               rows: auto
@@ -200,42 +196,8 @@ views:
     type: sections
     icon: mdi:glass-flute
     max_columns: 2
-    badges:
-      - type: entity
-        entity: sensor.lekkersappie_total_bottles
-        show_name: true
-        show_state: true
-        color: red
+    badges: []
     sections:
-      - type: grid
-        column_span: 1
-        cards:
-          - type: heading
-            heading: Tasted & Consumed Wines
-            heading_style: title
-            icon: mdi:notebook-check-outline
-          - type: tile
-            entity: sensor.lekkersappie_ready_to_drink
-            name: Prime Bottles to Open
-            icon: mdi:check-decagram
-            color: green
-            grid_options:
-              columns: 12
-              rows: 1
-          - type: tile
-            entity: sensor.lekkersappie_drink_soon
-            name: Urgently Drink Soon
-            icon: mdi:clock-alert-outline
-            color: amber
-            grid_options:
-              columns: 12
-              rows: 1
-          - type: markdown
-            title: Tasted Guide
-            content: >
-              Wines scanned directly to **Tasted** and wines where 1 or more bottles have been consumed from your cellar appear here.
-              Click **Details & Batches** on any wine to view its tasting history, personal rating, and cellar notes.
-
       - type: grid
         column_span: 1
         cards:
@@ -250,18 +212,27 @@ views:
             grid_options:
               columns: full
               rows: auto
+      - type: grid
+        column_span: 1
+        cards:
+          - type: heading
+            heading: Tasting History & Rating Notes
+            heading_style: subtitle
+            icon: mdi:history
+          - type: custom:wine-inventory-card
+            title: Recent Tastings
+            default_tab: tasted
+            show_header: false
+            grid_options:
+              columns: full
+              rows: auto
 
   - title: SommAI
     path: sommai
     type: sections
     icon: mdi:robot
     max_columns: 2
-    badges:
-      - type: entity
-        entity: sensor.lekkersappie_total_bottles
-        show_name: true
-        show_state: true
-        color: red
+    badges: []
     sections:
       - type: grid
         column_span: 2
@@ -276,97 +247,127 @@ views:
               columns: full
               rows: auto
 
-  - title: Operations & Backup
-    path: cellar-operations
+  - title: Statistics
+    path: statistics
     type: sections
-    icon: mdi:database-cog
+    icon: mdi:chart-box-outline
     max_columns: 2
-    badges:
-      - type: entity
-        entity: sensor.lekkersappie_total_bottles
-        show_name: true
-        show_state: true
-        color: red
-      - type: entity
-        entity: sensor.lekkersappie_estimated_value
-        show_name: true
-        show_state: true
-        color: teal
+    badges: []
     sections:
       - type: grid
         column_span: 1
         cards:
           - type: heading
-            heading: Cellar Operations & Maintenance
+            heading: Cellar Valuation & Capacity
             heading_style: title
-            icon: mdi:database-arrow-down
+            icon: mdi:finance
           - type: tile
-            entity: sensor.lekkersappie_total_bottles
-            name: Active Bottles
+            grid_options:
+              columns: 6
+              rows: 1
+            entity: sensor.wine_cellar_total_bottles
+            name: Total Bottles
             icon: mdi:glass-wine
             color: red
-            grid_options:
-              columns: 6
-              rows: 1
+            vertical: false
+            features_position: bottom
           - type: tile
-            entity: sensor.lekkersappie_unique_wines
-            name: Registered Wine Profiles
-            icon: mdi:database
-            color: purple
             grid_options:
               columns: 6
               rows: 1
-          - type: heading
-            heading: Quick Actions
-            heading_style: subtitle
-            icon: mdi:lightning-bolt-outline
-          - type: button
-            name: Create Full Cellar Backup (.zip)
-            icon: mdi:folder-zip-outline
-            tap_action:
-              action: perform-action
-              perform_action: wine_inventory.create_backup
+            entity: sensor.wine_cellar_unique_wines
+            name: Unique Wines
+            icon: mdi:glass-wine
+            color: purple
+            vertical: false
+            features_position: bottom
+          - type: tile
             grid_options:
               columns: 12
               rows: 1
-          - type: button
-            name: Refresh Vivino Ratings
-            icon: mdi:refresh
-            tap_action:
-              action: perform-action
-              perform_action: wine_inventory.refresh_vivino
+            entity: sensor.wine_cellar_estimated_value
+            name: Cellar Valuation
+            icon: mdi:cash-multiple
+            color: teal
+            vertical: false
+            features_position: bottom
+          - type: custom:wine-cellar-summary-card
+            title: Cellar Highlights & Recent Stock
+            show_recent: true
+            show_style_bar: true
+            dashboard_path: /lekkersappie-cellar/overview
             grid_options:
-              columns: 6
-              rows: 1
-          - type: button
-            name: Export Cellar as CSV
-            icon: mdi:file-delimited-outline
-            tap_action:
-              action: perform-action
-              perform_action: wine_inventory.export_inventory
-              data:
-                format: csv
-            grid_options:
-              columns: 6
-              rows: 1
-
+              columns: full
+              rows: auto
       - type: grid
         column_span: 1
         cards:
           - type: heading
-            heading: Database Backup & Import Guide
+            heading: Drinking Windows & Status
             heading_style: title
-            icon: mdi:information-outline
-          - type: markdown
-            title: Backup & Restore Specs
-            content: >
-              ### Full Cellar Backup (.zip)
-
-              A Lekkersappie full backup creates a self-contained `.zip` archive containing:
-              - **`wine_inventory.db`**: Complete SQLite database with all wine records, batches, transactions, and settings.
-              - **`covers/`**: All high-resolution cropped and processed bottle label photos.
-              - **`metadata.json`**: Integration version, cellar name, creation timestamp, and total bottle counts.
-
-              ### How to Backup or Restore
-              - **Option 1**: Go to **Settings -> Devices & Services -> Lekkersappie -> Configure**, then select **Create Full Backup (.zip)** or **Restore Database from Backup (.zip)**.
-              - **Option 2**: In the **Lekkersappie options**, use the **Import Wines** option to bulk-import bottles from JSON, CSV, or another wine archive without wiping your existing cellar.
+            icon: mdi:clock-outline
+          - type: tile
+            grid_options:
+              columns: 6
+              rows: 1
+            entity: sensor.wine_cellar_ready_to_drink
+            name: Ready to Drink
+            icon: mdi:check-decagram
+            color: green
+            vertical: false
+            features_position: bottom
+          - type: tile
+            grid_options:
+              columns: 6
+              rows: 1
+            entity: sensor.wine_cellar_drink_soon
+            name: Drink Soon
+            icon: mdi:clock-alert-outline
+            color: amber
+            vertical: false
+            features_position: bottom
+          - type: tile
+            grid_options:
+              columns: 6
+              rows: 1
+            entity: sensor.wine_cellar_keep_bottles
+            name: Keep / Aging
+            icon: mdi:archive-clock-outline
+            color: blue
+            vertical: false
+            features_position: bottom
+          - type: tile
+            grid_options:
+              columns: 6
+              rows: 1
+            entity: sensor.wine_cellar_past_peak_bottles
+            name: Past Peak
+            icon: mdi:alert-outline
+            color: red
+            vertical: false
+            features_position: bottom
+          - type: heading
+            heading: Wine Style Breakdown
+            heading_style: subtitle
+            icon: mdi:chart-pie
+          - type: distribution
+            title: Stock by Wine Style
+            entities:
+              - entity: sensor.wine_cellar_red_wine_bottles
+                name: Red
+                color: '#b71c1c'
+              - entity: sensor.wine_cellar_white_wine_bottles
+                name: White
+                color: '#f57f17'
+              - entity: sensor.wine_cellar_rose_wine_bottles
+                color: '#ec407a'
+                name: Rosé
+              - entity: sensor.wine_cellar_sparkling_wine_bottles
+                name: Sparkling
+                color: '#0288d1'
+              - entity: sensor.wine_cellar_dessert_fortified_bottles
+                name: Dessert / Fortified
+                color: '#6a1b9a'
+            grid_options:
+              columns: full
+              rows: auto

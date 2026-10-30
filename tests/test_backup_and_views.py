@@ -186,16 +186,16 @@ class TestBackupRestoreAndViews(unittest.TestCase):
 
         view_paths = [v.get("path") for v in views]
         self.assertIn("overview", view_paths)
-        self.assertIn("list-view", view_paths)
         self.assertIn("tasting-archive", view_paths)
-        self.assertIn("cellar-operations", view_paths)
+        self.assertIn("sommai", view_paths)
+        self.assertIn("statistics", view_paths)
 
-        # Verify list-view uses default_view: list
-        list_view = next(v for v in views if v.get("path") == "list-view")
-        self.assertEqual(list_view.get("icon"), "mdi:view-list")
+        # Verify overview view uses default_view: list
+        overview_view = next(v for v in views if v.get("path") == "overview")
+        self.assertEqual(overview_view.get("icon"), "mdi:view-dashboard")
         card_types = [
             c.get("type")
-            for sec in list_view.get("sections", [])
+            for sec in overview_view.get("sections", [])
             for c in sec.get("cards", [])
         ]
         self.assertIn("custom:wine-inventory-card", card_types)
@@ -203,7 +203,7 @@ class TestBackupRestoreAndViews(unittest.TestCase):
         # Verify custom card has default_view: list
         card = next(
             c
-            for sec in list_view.get("sections", [])
+            for sec in overview_view.get("sections", [])
             for c in sec.get("cards", [])
             if c.get("type") == "custom:wine-inventory-card"
         )
@@ -219,6 +219,17 @@ class TestBackupRestoreAndViews(unittest.TestCase):
             if c.get("type") == "custom:wine-inventory-card"
         )
         self.assertEqual(tasted_card.get("default_tab"), "tasted")
+
+        # Verify SommAI view has custom:wine-sommai-card
+        sommai_view = next(v for v in views if v.get("path") == "sommai")
+        self.assertEqual(sommai_view.get("title"), "SommAI")
+        sommai_card = next(
+            c
+            for sec in sommai_view.get("sections", [])
+            for c in sec.get("cards", [])
+            if c.get("type") == "custom:wine-sommai-card"
+        )
+        self.assertIsNotNone(sommai_card)
 
     def test_database_delete_wine_permanently(self) -> None:
         """Verify full permanent deletion of wine, batches, and timeline from SQLite database."""
@@ -699,6 +710,36 @@ class TestBackupRestoreAndViews(unittest.TestCase):
         self.assertEqual(opts_success["type"], "create_entry")
         self.assertEqual(opts_success["data"][CONF_LLM_PROVIDER], LLM_PROVIDER_CLAUDE)
         self.assertEqual(opts_success["data"][CONF_CLAUDE_API_KEY], "sk-ant-new-key")
+
+    def test_v057_dashboard_cellar_name_and_sommai_schema(self) -> None:
+        """v0.5.7: Test default cellar name 'Wine Cellar', sommai image_data null schema, and dashboard stats."""
+        from custom_components.wine_inventory.const import DEFAULT_CELLAR_NAME
+
+        # 1. Default cellar name is "Wine Cellar"
+        self.assertEqual(DEFAULT_CELLAR_NAME, "Wine Cellar")
+
+        # 2. sensor.py contains keep_bottles and past_peak_bottles descriptions
+        sensor_file = Path(__file__).resolve().parent.parent / "custom_components" / "wine_inventory" / "sensor.py"
+        sensor_code = sensor_file.read_text(encoding="utf-8")
+        self.assertIn('key="keep_bottles"', sensor_code)
+        self.assertIn('key="past_peak_bottles"', sensor_code)
+
+        # 3. Source check for image_data vol.Any(None, str) in websocket_api.py
+        ws_file = Path(__file__).resolve().parent.parent / "custom_components" / "wine_inventory" / "websocket_api.py"
+        ws_code = ws_file.read_text(encoding="utf-8")
+        self.assertIn('vol.Optional("image_data"): vol.Any(None, str)', ws_code)
+
+        # 4. Dashboard YAML entities match sensor.wine_cellar_*
+        dash_path = Path(__file__).resolve().parent.parent / "dashboards" / "wine-cellar-dashboard.yaml"
+        with open(dash_path, "r", encoding="utf-8") as f:
+            dash_text = f.read()
+        self.assertIn("sensor.wine_cellar_total_bottles", dash_text)
+        self.assertIn("sensor.wine_cellar_unique_wines", dash_text)
+        self.assertIn("sensor.wine_cellar_ready_to_drink", dash_text)
+        self.assertIn("sensor.wine_cellar_drink_soon", dash_text)
+        self.assertIn("sensor.wine_cellar_estimated_value", dash_text)
+        self.assertIn("sensor.wine_cellar_keep_bottles", dash_text)
+        self.assertIn("sensor.wine_cellar_past_peak_bottles", dash_text)
 
 
 if __name__ == "__main__":

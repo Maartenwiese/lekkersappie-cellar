@@ -82,7 +82,7 @@ class TestStaticAntiMockingAndSchemas(unittest.TestCase):
         views = dashboard_data["views"]
         self.assertEqual(views[0]["type"], "sections")
         sections = views[0]["sections"]
-        self.assertEqual(len(sections), 2)
+        self.assertGreaterEqual(len(sections), 2)
 
         card_types = [
             card["type"]

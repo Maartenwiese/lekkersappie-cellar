@@ -131,6 +131,22 @@ SENSOR_DESCRIPTIONS: tuple[WineSensorDescription, ...] = (
             + c.statistics.get("by_type", {}).get(WINE_TYPE_FORTIFIED, 0)
         ),
     ),
+    WineSensorDescription(
+        key="keep_bottles",
+        name="Keep Wine Bottles",
+        icon="mdi:archive-clock-outline",
+        native_unit_of_measurement="bottles",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda c: c.statistics.get("keep_bottles", c.statistics.get("hold_bottles", 0)),
+    ),
+    WineSensorDescription(
+        key="past_peak_bottles",
+        name="Past Peak Wine Bottles",
+        icon="mdi:alert-outline",
+        native_unit_of_measurement="bottles",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda c: c.statistics.get("past_peak_bottles", 0),
+    ),
 )
 
 

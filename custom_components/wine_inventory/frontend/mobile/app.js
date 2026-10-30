@@ -1,5 +1,5 @@
 /**
- * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.5.6)
+ * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.5.7)
  * Runs parallel to the native Home Assistant UI, inherits Home Assistant OAuth2
  * authentication, defaults to Large (L) text scale, and supports Home Screen installation.
  */
@@ -1004,6 +1004,9 @@ class LekkersappieMobileApp {
         ) {
           return false;
         }
+        if (this.state.filterTab === "past_peak" && w.drink_status !== "past_peak") {
+          return false;
+        }
         if (
           ["red", "white", "rose", "sparkling"].includes(this.state.filterTab) &&
           w.wine_type !== this.state.filterTab
@@ -1368,6 +1371,7 @@ class LekkersappieMobileApp {
       { id: "ready", label: `Ready (${stats.ready_to_drink_bottles || 0})` },
       { id: "drink_soon", label: `Soon (${stats.drink_soon_bottles || 0})` },
       { id: "keep", label: `Keep (${stats.keep_bottles || stats.hold_bottles || 0})` },
+      { id: "past_peak", label: `Past Peak (${stats.past_peak_bottles || 0})` },
       { id: "red", label: `Red (${stats.by_type?.red || 0})` },
       { id: "white", label: `White (${stats.by_type?.white || 0})` },
       { id: "rose", label: `Rosé (${stats.by_type?.rose || 0})` },

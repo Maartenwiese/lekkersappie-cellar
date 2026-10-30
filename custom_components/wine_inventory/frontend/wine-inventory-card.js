@@ -244,7 +244,7 @@ class WineInventoryCard extends HTMLElement {
         e.stopPropagation();
         const wineId = Number(el.dataset.id);
         const wine = this._wines.find((w) => Number(w.id) === wineId) || this._modalWine;
-        if (wine && wine.image_url) {
+        if (wine) {
           this._openImagePreview(wine);
         }
       });
@@ -445,6 +445,9 @@ class WineInventoryCard extends HTMLElement {
           return false;
         }
         if ((this._filterTab === "keep" || this._filterTab === "hold") && w.drink_status !== "hold" && w.drink_status !== "keep") {
+          return false;
+        }
+        if (this._filterTab === "past_peak" && w.drink_status !== "past_peak") {
           return false;
         }
         if (["red", "white", "rose", "sparkling"].includes(this._filterTab) && w.wine_type !== this._filterTab) {
@@ -2284,15 +2287,16 @@ class WineInventoryCard extends HTMLElement {
           </div>
           <div class="modal-body detail-modal-body">
             <div class="detail-overview-header">
-              <div class="detail-thumb-wrap" title="Click to enlarge image">
+              <div class="detail-thumb-wrap" title="Click to view or change bottle photo">
                 ${
                   safeImageUrl(w.image_url)
                     ? `<img class="detail-wine-thumb preview-image-clickable" src="${safeImageUrl(w.image_url)}" alt="${escapeHtml(w.name)}" data-action="preview-image" data-id="${w.id}" />
                        <div class="thumb-zoom-overlay">
-                         <ha-icon icon="mdi:magnify-plus-outline" style="--mdc-icon-size: 14px;"></ha-icon>
+                         <ha-icon icon="mdi:camera" style="--mdc-icon-size: 14px;"></ha-icon>
                        </div>`
-                    : `<div class="wine-thumb-placeholder detail-wine-thumb type-${escapeHtml(w.wine_type)}">
-                         <ha-icon icon="mdi:glass-wine"></ha-icon>
+                    : `<div class="wine-thumb-placeholder detail-wine-thumb preview-image-clickable type-${escapeHtml(w.wine_type)}" data-action="preview-image" data-id="${w.id}" style="cursor: pointer;" title="Click to add photo">
+                         <ha-icon icon="mdi:camera-plus-outline"></ha-icon>
+                         <span style="font-size: 10px; margin-top: 2px;">Add Photo</span>
                        </div>`
                 }
               </div>
@@ -2301,8 +2305,8 @@ class WineInventoryCard extends HTMLElement {
                   <span class="type-pill detail-pill type-${escapeHtml(w.wine_type)}">${escapeHtml(typeLabel)}</span>
                   <span class="vintage-pill detail-pill">📅 ${escapeHtml(w.vintage ? String(w.vintage) : "NV")}</span>
                   ${
-                    w.is_imported
-                      ? `<span class="imported-pill detail-pill" title="Imported wine" style="background: rgba(217,119,6,0.12); color: #b45309; border: 1px solid rgba(217,119,6,0.3); font-weight: 600; display: inline-flex; align-items: center; gap: 3px;">📥 Imported</span>`
+                    Boolean(w.is_imported || df.is_imported)
+                      ? `<span class="imported-pill detail-pill" title="Imported wine" style="background: rgba(217,119,6,0.12); color: #b45309; border: 1px solid rgba(217,119,6,0.3); font-weight: 600; display: inline-flex; align-items: center; gap: 4px;"><ha-icon icon="mdi:package-down" style="--mdc-icon-size: 14px;"></ha-icon> <span>📥 Imported</span></span>`
                       : ""
                   }
                   ${w.varietal ? `<span class="filter-chip detail-pill">🍇 ${escapeHtml(w.varietal)}</span>` : ""}
@@ -2344,14 +2348,6 @@ class WineInventoryCard extends HTMLElement {
                   }
                   ${w.personal_rating ? `<span class="personal-badge detail-personal-badge">My Rating: ★ ${w.personal_rating}</span>` : ""}
                 </div>
-                <div class="vivino-link-row">
-                  <input class="ha-input detail-vivino-input" id="detail-vivino-link-input" type="url" placeholder="Paste exact Vivino link (…vivino.com/…/w/1234)" />
-                  <button type="button" class="ha-btn secondary-btn detail-small-btn" id="btn-detail-link-vivino" data-id="${w.id}" title="Link this wine to an exact Vivino page (no matching involved)">
-                    <ha-icon icon="mdi:link-variant" style="--mdc-icon-size: 14px;"></ha-icon>
-                    <span>${this._linkingVivinoId === w.id ? "Linking…" : "Link Vivino"}</span>
-                  </button>
-                </div>
-                ${this._vivinoLinkError ? `<div class="scan-error-message" style="margin-top: 4px; color: var(--error-color, #c62828);">${escapeHtml(this._vivinoLinkError)}</div>` : ""}
 
                 <!-- Bottle Quantity Stepper (+ / -) with 0-Bottle Warning -->
                 <div class="detail-stepper-wrap">
@@ -2375,143 +2371,6 @@ class WineInventoryCard extends HTMLElement {
                 </div>
               </div>
             </div>
-
-            ${
-              this._researchingWineId === w.id
-                ? `<div class="research-loading-banner">
-                     <ha-icon icon="mdi:loading" class="spin-icon" style="color: var(--primary-color); --mdc-icon-size: 24px; animation: spin 1s linear infinite;"></ha-icon>
-                     <div>
-                       <div class="research-loading-title">AI Model is researching this wine...</div>
-                       <div class="research-loading-sub">Investigating winemaker heritage, cuvée history, terroir, tasting profile, and pairings.</div>
-                     </div>
-                   </div>`
-                : ""
-            }
-
-            ${
-              this._researchError
-                ? `<div class="scan-error-card" style="margin: 12px 0;">
-                     <div class="scan-error-message"><strong>Research Failed:</strong> ${escapeHtml(this._researchError)}</div>
-                   </div>`
-                : ""
-            }
-
-            ${
-              research
-                ? `<div class="research-results-card">
-                     <div class="research-header-row">
-                       <div class="research-header-title">
-                         <ha-icon icon="mdi:auto-fix" style="color: var(--primary-color);"></ha-icon>
-                         <strong>Sommelier &amp; Producer AI Research</strong>
-                       </div>
-                       <button type="button" class="ha-btn secondary-btn icon-btn" id="btn-re-research-wine" data-id="${w.id}" title="Re-run AI Research">
-                         <ha-icon icon="mdi:refresh"></ha-icon>
-                       </button>
-                     </div>
-                     ${research.summary ? `<div class="research-summary-text">${escapeHtml(research.summary)}</div>` : ""}
-                     ${
-                       research.taste_profile
-                         ? `
-                         <div class="taste-sliders-card">
-                           <div class="taste-sliders-heading">
-                             <ha-icon icon="mdi:tune-vertical-variant" style="color: var(--primary-color); --mdc-icon-size: 16px;"></ha-icon>
-                             <strong>Structural Taste Profile</strong>
-                           </div>
-                           <div class="taste-sliders-list">
-                             <!-- Soft vs Acidic -->
-                             <div class="taste-slider-item">
-                               <div class="taste-slider-labels">
-                                 <span class="${Number(research.taste_profile.soft_vs_acidic) <= 40 ? 'taste-pole-active' : 'taste-pole-muted'}">Soft / Round</span>
-                                 <span class="taste-badge">
-                                   ${escapeHtml(research.taste_profile.soft_vs_acidic_label || (Number(research.taste_profile.soft_vs_acidic) < 40 ? 'Soft & Mellow' : Number(research.taste_profile.soft_vs_acidic) > 60 ? 'Crisp & Acidic' : 'Balanced Acidity'))} (${Math.round(Number(research.taste_profile.soft_vs_acidic || 50))}%)
-                                 </span>
-                                 <span class="${Number(research.taste_profile.soft_vs_acidic) >= 60 ? 'taste-pole-active' : 'taste-pole-muted'}">Acidic / Crisp</span>
-                               </div>
-                               <div class="taste-track">
-                                 <div class="taste-fill" style="width: ${Math.max(4, Math.min(100, Number(research.taste_profile.soft_vs_acidic || 50)))}%; background: linear-gradient(90deg, #c084fc, #a61a2e);"></div>
-                                 <div class="taste-thumb" style="left: ${Math.max(2, Math.min(98, Number(research.taste_profile.soft_vs_acidic || 50)))}%;"></div>
-                               </div>
-                             </div>
-
-                             <!-- Light vs Bold -->
-                             <div class="taste-slider-item">
-                               <div class="taste-slider-labels">
-                                 <span class="${Number(research.taste_profile.light_vs_bold) <= 40 ? 'taste-pole-active' : 'taste-pole-muted'}">Light-Bodied</span>
-                                 <span class="taste-badge">
-                                   ${escapeHtml(research.taste_profile.light_vs_bold_label || (Number(research.taste_profile.light_vs_bold) < 40 ? 'Light & Elegant' : Number(research.taste_profile.light_vs_bold) > 60 ? 'Bold & Powerful' : 'Medium-Bodied'))} (${Math.round(Number(research.taste_profile.light_vs_bold || 50))}%)
-                                 </span>
-                                 <span class="${Number(research.taste_profile.light_vs_bold) >= 60 ? 'taste-pole-active' : 'taste-pole-muted'}">Bold / Full</span>
-                               </div>
-                               <div class="taste-track">
-                                 <div class="taste-fill" style="width: ${Math.max(4, Math.min(100, Number(research.taste_profile.light_vs_bold || 50)))}%; background: linear-gradient(90deg, #fcd34d, #831843);"></div>
-                                 <div class="taste-thumb" style="left: ${Math.max(2, Math.min(98, Number(research.taste_profile.light_vs_bold || 50)))}%;"></div>
-                               </div>
-                             </div>
-
-                             <!-- Dry vs Sweet -->
-                             <div class="taste-slider-item">
-                               <div class="taste-slider-labels">
-                                 <span class="${Number(research.taste_profile.dry_vs_sweet) <= 40 ? 'taste-pole-active' : 'taste-pole-muted'}">Bone Dry</span>
-                                 <span class="taste-badge">
-                                   ${escapeHtml(research.taste_profile.dry_vs_sweet_label || (Number(research.taste_profile.dry_vs_sweet) < 25 ? 'Bone Dry' : Number(research.taste_profile.dry_vs_sweet) < 50 ? 'Dry' : Number(research.taste_profile.dry_vs_sweet) < 75 ? 'Off-Dry' : 'Sweet'))} (${Math.round(Number(research.taste_profile.dry_vs_sweet || 10))}%)
-                                 </span>
-                                 <span class="${Number(research.taste_profile.dry_vs_sweet) >= 60 ? 'taste-pole-active' : 'taste-pole-muted'}">Sweet / Luscious</span>
-                               </div>
-                               <div class="taste-track">
-                                 <div class="taste-fill" style="width: ${Math.max(4, Math.min(100, Number(research.taste_profile.dry_vs_sweet || 10)))}%; background: linear-gradient(90deg, #93c5fd, #f59e0b);"></div>
-                                 <div class="taste-thumb" style="left: ${Math.max(2, Math.min(98, Number(research.taste_profile.dry_vs_sweet || 10)))}%;"></div>
-                               </div>
-                             </div>
-                           </div>
-                         </div>
-                         `
-                         : ""
-                     }
-                     <div class="research-blocks-list">
-                       ${
-                         research.producer_history
-                           ? `<div class="research-block">
-                                <strong class="research-block-title">🏰 Producer &amp; Winery Heritage</strong>
-                                <div class="research-block-body">${escapeHtml(research.producer_history)}</div>
-                              </div>`
-                           : ""
-                       }
-                       ${
-                         research.wine_and_terroir
-                           ? `<div class="research-block">
-                                <strong class="research-block-title">🍇 The Wine, Vineyards &amp; Terroir</strong>
-                                <div class="research-block-body">${escapeHtml(research.wine_and_terroir)}</div>
-                              </div>`
-                           : ""
-                       }
-                       ${
-                         research.tasting_profile
-                           ? `<div class="research-block">
-                                <strong class="research-block-title">🍷 Tasting Profile &amp; Cellar Longevity</strong>
-                                <div class="research-block-body">${escapeHtml(research.tasting_profile)}</div>
-                              </div>`
-                           : ""
-                       }
-                       ${
-                         research.serving_and_pairing
-                           ? `<div class="research-block">
-                                <strong class="research-block-title">🍽️ Serving &amp; Culinary Pairings</strong>
-                                <div class="research-block-body">${escapeHtml(research.serving_and_pairing)}</div>
-                              </div>`
-                           : ""
-                       }
-                       ${
-                         research.fun_facts
-                           ? `<div class="research-block">
-                                <strong class="research-block-title">✨ Fascinating Trivia &amp; Accolades</strong>
-                                <div class="research-block-body">${escapeHtml(research.fun_facts)}</div>
-                              </div>`
-                           : ""
-                       }
-                     </div>
-                   </div>`
-                : ""
-            }
 
             <form id="detail-form" class="form-grid">
               <div class="form-field">
@@ -2583,19 +2442,159 @@ class WineInventoryCard extends HTMLElement {
                   <input class="ha-input" type="number" step="0.1" min="1" max="5" name="personal_rating" value="${escapeHtml(df.personal_rating)}" placeholder="My ★ (1.0–5.0)" />
                 </div>
               </div>
-              <div class="form-field">
+              <div class="form-field full-width">
                 <label style="display: flex; justify-content: space-between; align-items: center;">
                   <span>Vivino URL</span>
                   ${
                     safeExternalUrl(df.vivino_url)
-                      ? `<a href="${safeExternalUrl(df.vivino_url)}" target="_blank" rel="noopener noreferrer" class="detail-vivino-open-link">
+                      ? `<a href="${safeExternalUrl(df.vivino_url)}" target="_blank" rel="noopener noreferrer" class="detail-vivino-open-link" style="font-size: 12px; color: var(--primary-color); display: inline-flex; align-items: center; gap: 3px; text-decoration: none;">
                            <span>Open in Vivino</span>
                            <ha-icon icon="mdi:open-in-new" style="--mdc-icon-size: 13px;"></ha-icon>
                          </a>`
                       : ""
                   }
                 </label>
-                <input class="ha-input" name="vivino_url" value="${escapeHtml(df.vivino_url)}" />
+                <input class="ha-input" name="vivino_url" value="${escapeHtml(df.vivino_url)}" placeholder="https://www.vivino.com/en/.../w/1413868?year=2025" />
+              </div>
+
+              <!-- Sommelier AI Research below manual inputs -->
+              <div class="full-width" style="grid-column: 1 / -1;">
+                ${
+                  this._researchingWineId === w.id
+                    ? `<div class="research-loading-banner" style="margin: 12px 0;">
+                         <ha-icon icon="mdi:loading" class="spin-icon" style="color: var(--primary-color); --mdc-icon-size: 24px; animation: spin 1s linear infinite;"></ha-icon>
+                         <div>
+                           <div class="research-loading-title">AI Model is researching this wine...</div>
+                           <div class="research-loading-sub">Investigating winemaker heritage, cuvée history, terroir, tasting profile, and pairings.</div>
+                         </div>
+                       </div>`
+                    : ""
+                }
+
+                ${
+                  this._researchError
+                    ? `<div class="scan-error-card" style="margin: 12px 0;">
+                         <div class="scan-error-message"><strong>Research Failed:</strong> ${escapeHtml(this._researchError)}</div>
+                       </div>`
+                    : ""
+                }
+
+                ${
+                  research
+                    ? `<div class="research-results-card" style="margin: 12px 0;">
+                         <div class="research-header-row">
+                           <div class="research-header-title">
+                             <ha-icon icon="mdi:auto-fix" style="color: var(--primary-color);"></ha-icon>
+                             <strong>Sommelier &amp; Producer AI Research</strong>
+                           </div>
+                           <button type="button" class="ha-btn secondary-btn icon-btn" id="btn-re-research-wine" data-id="${w.id}" title="Re-run AI Research">
+                             <ha-icon icon="mdi:refresh"></ha-icon>
+                           </button>
+                         </div>
+                         ${research.summary ? `<div class="research-summary-text">${escapeHtml(research.summary)}</div>` : ""}
+                         ${
+                           research.taste_profile
+                             ? `
+                             <div class="taste-sliders-card">
+                               <div class="taste-sliders-heading">
+                                 <ha-icon icon="mdi:tune-vertical-variant" style="color: var(--primary-color); --mdc-icon-size: 16px;"></ha-icon>
+                                 <strong>Structural Taste Profile</strong>
+                               </div>
+                               <div class="taste-sliders-list">
+                                 <!-- Soft vs Acidic -->
+                                 <div class="taste-slider-item">
+                                   <div class="taste-slider-labels">
+                                     <span class="${Number(research.taste_profile.soft_vs_acidic) <= 40 ? 'taste-pole-active' : 'taste-pole-muted'}">Soft / Round</span>
+                                     <span class="taste-badge">
+                                       ${escapeHtml(research.taste_profile.soft_vs_acidic_label || (Number(research.taste_profile.soft_vs_acidic) < 40 ? 'Soft & Mellow' : Number(research.taste_profile.soft_vs_acidic) > 60 ? 'Crisp & Acidic' : 'Balanced Acidity'))} (${Math.round(Number(research.taste_profile.soft_vs_acidic || 50))}%)
+                                     </span>
+                                     <span class="${Number(research.taste_profile.soft_vs_acidic) >= 60 ? 'taste-pole-active' : 'taste-pole-muted'}">Acidic / Crisp</span>
+                                   </div>
+                                   <div class="taste-track">
+                                     <div class="taste-fill" style="width: ${Math.max(4, Math.min(100, Number(research.taste_profile.soft_vs_acidic || 50)))}%; background: linear-gradient(90deg, #c084fc, #a61a2e);"></div>
+                                     <div class="taste-thumb" style="left: ${Math.max(2, Math.min(98, Number(research.taste_profile.soft_vs_acidic || 50)))}%;"></div>
+                                   </div>
+                                 </div>
+
+                                 <!-- Light vs Bold -->
+                                 <div class="taste-slider-item">
+                                   <div class="taste-slider-labels">
+                                     <span class="${Number(research.taste_profile.light_vs_bold) <= 40 ? 'taste-pole-active' : 'taste-pole-muted'}">Light-Bodied</span>
+                                     <span class="taste-badge">
+                                       ${escapeHtml(research.taste_profile.light_vs_bold_label || (Number(research.taste_profile.light_vs_bold) < 40 ? 'Light & Elegant' : Number(research.taste_profile.light_vs_bold) > 60 ? 'Bold & Powerful' : 'Medium-Bodied'))} (${Math.round(Number(research.taste_profile.light_vs_bold || 50))}%)
+                                     </span>
+                                     <span class="${Number(research.taste_profile.light_vs_bold) >= 60 ? 'taste-pole-active' : 'taste-pole-muted'}">Bold / Full</span>
+                                   </div>
+                                   <div class="taste-track">
+                                     <div class="taste-fill" style="width: ${Math.max(4, Math.min(100, Number(research.taste_profile.light_vs_bold || 50)))}%; background: linear-gradient(90deg, #fcd34d, #831843);"></div>
+                                     <div class="taste-thumb" style="left: ${Math.max(2, Math.min(98, Number(research.taste_profile.light_vs_bold || 50)))}%;"></div>
+                                   </div>
+                                 </div>
+
+                                 <!-- Dry vs Sweet -->
+                                 <div class="taste-slider-item">
+                                   <div class="taste-slider-labels">
+                                     <span class="${Number(research.taste_profile.dry_vs_sweet) <= 40 ? 'taste-pole-active' : 'taste-pole-muted'}">Bone Dry</span>
+                                     <span class="taste-badge">
+                                       ${escapeHtml(research.taste_profile.dry_vs_sweet_label || (Number(research.taste_profile.dry_vs_sweet) < 25 ? 'Bone Dry' : Number(research.taste_profile.dry_vs_sweet) < 50 ? 'Dry' : Number(research.taste_profile.dry_vs_sweet) < 75 ? 'Off-Dry' : 'Sweet'))} (${Math.round(Number(research.taste_profile.dry_vs_sweet || 10))}%)
+                                     </span>
+                                     <span class="${Number(research.taste_profile.dry_vs_sweet) >= 60 ? 'taste-pole-active' : 'taste-pole-muted'}">Sweet / Luscious</span>
+                                   </div>
+                                   <div class="taste-track">
+                                     <div class="taste-fill" style="width: ${Math.max(4, Math.min(100, Number(research.taste_profile.dry_vs_sweet || 10)))}%; background: linear-gradient(90deg, #93c5fd, #f59e0b);"></div>
+                                     <div class="taste-thumb" style="left: ${Math.max(2, Math.min(98, Number(research.taste_profile.dry_vs_sweet || 10)))}%;"></div>
+                                   </div>
+                                 </div>
+                               </div>
+                             </div>
+                             `
+                             : ""
+                         }
+                         <div class="research-blocks-list">
+                           ${
+                             research.producer_history
+                               ? `<div class="research-block">
+                                    <strong class="research-block-title">🏰 Producer &amp; Winery Heritage</strong>
+                                    <div class="research-block-body">${escapeHtml(research.producer_history)}</div>
+                                  </div>`
+                               : ""
+                           }
+                           ${
+                             research.wine_and_terroir
+                               ? `<div class="research-block">
+                                    <strong class="research-block-title">🍇 The Wine, Vineyards &amp; Terroir</strong>
+                                    <div class="research-block-body">${escapeHtml(research.wine_and_terroir)}</div>
+                                  </div>`
+                               : ""
+                           }
+                           ${
+                             research.tasting_profile
+                               ? `<div class="research-block">
+                                    <strong class="research-block-title">🍷 Tasting Profile &amp; Cellar Longevity</strong>
+                                    <div class="research-block-body">${escapeHtml(research.tasting_profile)}</div>
+                                  </div>`
+                               : ""
+                           }
+                           ${
+                             research.serving_and_pairing
+                               ? `<div class="research-block">
+                                    <strong class="research-block-title">🍽️ Serving &amp; Culinary Pairings</strong>
+                                    <div class="research-block-body">${escapeHtml(research.serving_and_pairing)}</div>
+                                  </div>`
+                               : ""
+                           }
+                           ${
+                             research.fun_facts
+                               ? `<div class="research-block">
+                                    <strong class="research-block-title">✨ Fascinating Trivia &amp; Accolades</strong>
+                                    <div class="research-block-body">${escapeHtml(research.fun_facts)}</div>
+                                  </div>`
+                               : ""
+                           }
+                         </div>
+                       </div>`
+                    : ""
+                }
               </div>
               <div class="modal-actions full-width detail-form-actions">
                 <button type="button" class="ha-btn danger-btn" id="btn-delete-wine" data-id="${w.id}" style="background: rgba(198, 40, 40, 0.12); color: var(--error-color, #c62828); border-color: rgba(198, 40, 40, 0.35);">
@@ -2671,8 +2670,10 @@ class WineInventoryCard extends HTMLElement {
   }
 
   _openImagePreview(wine) {
-    if (!wine || !wine.image_url) return;
+    if (!wine) return;
     this._previewImageWine = wine;
+    this._uploadingImageWineId = null;
+    this._imageUploadError = "";
     this._previousModal = this._activeModal;
     this._activeModal = "image_preview";
     this._render();
@@ -2681,17 +2682,22 @@ class WineInventoryCard extends HTMLElement {
   _closeImagePreview() {
     this._activeModal = this._previousModal || null;
     this._previewImageWine = null;
+    this._uploadingImageWineId = null;
+    this._imageUploadError = "";
     this._previousModal = null;
     this._render();
   }
 
   _renderImagePreviewModal() {
     const wine = this._previewImageWine;
-    if (!wine || !safeImageUrl(wine.image_url)) return "";
+    if (!wine) return "";
+    const hasImage = Boolean(safeImageUrl(wine.image_url));
+    const isUploading = this._uploadingImageWineId === wine.id;
+
     return `
       <div class="modal-backdrop" id="image-preview-backdrop" style="background: rgba(0, 0, 0, 0.85); z-index: 1100;">
         <div class="modal-surface" style="max-width: 540px; width: 92%; background: var(--card-background-color, #fff); border-radius: 14px; overflow: hidden; box-shadow: 0 16px 40px rgba(0,0,0,0.5);">
-          <div class="modal-header" style="padding: 14px 18px; border-bottom: 1px solid var(--divider-color, #e0e0e0);">
+          <div class="modal-header" style="padding: 14px 18px; border-bottom: 1px solid var(--divider-color, #e0e0e0); display: flex; align-items: center; justify-content: space-between;">
             <div>
               <h2 style="font-size: 16px; margin: 0; display: flex; align-items: center; gap: 8px;">
                 <ha-icon icon="mdi:image-outline" style="color: var(--primary-color);"></ha-icon>
@@ -2705,12 +2711,75 @@ class WineInventoryCard extends HTMLElement {
               <ha-icon icon="mdi:close"></ha-icon>
             </button>
           </div>
-          <div style="padding: 12px; background: rgba(0,0,0,0.04); display: flex; justify-content: center; align-items: center; max-height: 75vh; overflow: hidden;">
-            <img src="${safeImageUrl(wine.image_url)}" alt="${escapeHtml(wine.name)}" style="max-height: 70vh; max-width: 100%; object-fit: contain; border-radius: 8px; display: block; box-shadow: 0 4px 12px rgba(0,0,0,0.25);" />
+          <div style="padding: 16px; background: rgba(0,0,0,0.04); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; max-height: 75vh; overflow-y: auto;">
+            ${
+              hasImage
+                ? `<img src="${safeImageUrl(wine.image_url)}" alt="${escapeHtml(wine.name)}" style="max-height: 55vh; max-width: 100%; object-fit: contain; border-radius: 8px; display: block; box-shadow: 0 4px 12px rgba(0,0,0,0.25);" />`
+                : `<div style="padding: 36px 16px; text-align: center; color: var(--secondary-text-color);">
+                     <ha-icon icon="mdi:camera-plus-outline" style="--mdc-icon-size: 48px; color: var(--primary-color); opacity: 0.7;"></ha-icon>
+                     <div style="margin-top: 8px; font-weight: 600; font-size: 14px;">No bottle photo uploaded yet</div>
+                     <div style="font-size: 12px; margin-top: 4px;">Upload a label or bottle photo from your camera or photo library.</div>
+                   </div>`
+            }
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; align-items: center; width: 100%; padding-top: 10px; border-top: 1px solid var(--divider-color, #e0e0e0);">
+              <label class="ha-btn primary-btn" style="cursor: pointer; display: inline-flex; align-items: center; gap: 6px; margin: 0;">
+                <ha-icon icon="mdi:camera"></ha-icon>
+                <span>${hasImage ? "Change / Upload New Photo" : "Upload Bottle Photo"}</span>
+                <input type="file" id="preview-image-upload-input" accept="image/*" style="display: none;" ${isUploading ? "disabled" : ""} />
+              </label>
+              ${
+                isUploading
+                  ? `<span style="font-size: 13px; color: var(--primary-color); display: inline-flex; align-items: center; gap: 4px;">
+                       <ha-icon icon="mdi:loading" style="animation: spin 1s linear infinite;"></ha-icon>
+                       <span>Uploading photo…</span>
+                     </span>`
+                  : ""
+              }
+            </div>
+            ${
+              this._imageUploadError
+                ? `<div class="scan-error-message" style="color: var(--error-color, #c62828); font-size: 12.5px; text-align: center;">${escapeHtml(this._imageUploadError)}</div>`
+                : ""
+            }
           </div>
         </div>
       </div>
     `;
+  }
+
+  async _handleImageUpload(wine, file) {
+    if (!wine || !file || !this._hass) return;
+    this._uploadingImageWineId = wine.id;
+    this._imageUploadError = "";
+    this._render();
+
+    try {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      const res = await this._hass.callWS({
+        type: "wine_inventory/update_wine",
+        wine_id: wine.id,
+        updates: { image_data: dataUrl },
+      });
+
+      if (res && res.wine) {
+        wine.image_url = res.wine.image_url;
+        if (this._modalWine && this._modalWine.id === wine.id) {
+          this._modalWine.image_url = res.wine.image_url;
+        }
+      }
+      await this._fetchInventory();
+    } catch (err) {
+      this._imageUploadError = err?.message || "Failed to upload photo.";
+    } finally {
+      this._uploadingImageWineId = null;
+      this._render();
+    }
   }
 
   _bindEvents() {
@@ -2792,6 +2861,11 @@ class WineInventoryCard extends HTMLElement {
       if (e.target.id === "image-preview-backdrop") {
         this._closeImagePreview();
       }
+    });
+    root.querySelector("#preview-image-upload-input")?.addEventListener("change", async (e) => {
+      const file = e.target.files?.[0];
+      if (!file || !this._previewImageWine) return;
+      await this._handleImageUpload(this._previewImageWine, file);
     });
 
     // Details View: Bottle quantity stepper (+ / -) with 0-bottle warning
@@ -3005,6 +3079,7 @@ class WineInventoryCard extends HTMLElement {
       { id: "ready", label: `Ready to Drink (${stats.ready_to_drink_bottles || 0})` },
       { id: "drink_soon", label: `Soon (${stats.drink_soon_bottles || 0})` },
       { id: "keep", label: `Keep (${stats.keep_bottles || stats.hold_bottles || 0})` },
+      { id: "past_peak", label: `Past Peak (${stats.past_peak_bottles || 0})` },
       { id: "red", label: `Red (${stats.by_type?.red || 0})` },
       { id: "white", label: `White (${stats.by_type?.white || 0})` },
       { id: "rose", label: `Rosé (${stats.by_type?.rose || 0})` },
@@ -5615,12 +5690,15 @@ class WineSommAICard extends HTMLElement {
         role: m.role,
         text: m.conversational_response || m.text,
       }));
-      const res = await this._hass.callWS({
+      const wsPayload = {
         type: "wine_inventory/sommelier_chat",
         message: text,
-        image_data: image,
         history: historyPayload,
-      });
+      };
+      if (image) {
+        wsPayload.image_data = image;
+      }
+      const res = await this._hass.callWS(wsPayload);
       const p = (res && (res.pairing || res)) || {};
       this._messages.push({
         role: "assistant",

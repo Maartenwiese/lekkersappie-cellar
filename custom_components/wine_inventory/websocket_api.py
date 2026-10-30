@@ -180,7 +180,7 @@ async def ws_get_wine_detail(
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "wine_inventory/scan_bottle",
-        vol.Optional("image_data"): str,
+        vol.Optional("image_data"): vol.Any(None, str),
         vol.Optional("camera_entity_id"): str,
         vol.Optional("entry_id"): str,
     }
@@ -598,7 +598,7 @@ async def ws_list_backups(
         vol.Optional("entry_id"): str,
         vol.Optional("message"): str,
         vol.Optional("query"): str,
-        vol.Optional("image_data"): str,
+        vol.Optional("image_data"): vol.Any(None, str),
         vol.Optional("history"): list,
     }
 )

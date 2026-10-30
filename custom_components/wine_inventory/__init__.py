@@ -175,7 +175,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
         handle_scan_bottle,
         schema=vol.Schema(
             {
-                vol.Optional("image_data"): str,
+                vol.Optional("image_data"): vol.Any(None, str),
                 vol.Optional("camera_entity_id"): str,
                 vol.Optional("entry_id"): str,
             }
