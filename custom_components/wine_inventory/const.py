@@ -6,7 +6,7 @@ from typing import Final
 
 DOMAIN: Final = "wine_inventory"
 NAME: Final = "Lekkersappie"
-VERSION: Final = "0.5.4"
+VERSION: Final = "0.5.5"
 
 # Config & Options keys
 CONF_CELLAR_NAME: Final = "cellar_name"

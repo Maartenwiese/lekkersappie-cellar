@@ -24,6 +24,7 @@ from custom_components.wine_inventory.scanner import (
     GeminiScannerError,
     LLMScannerError,
     _extract_json_from_text,
+    _send_claude_messages_request,
     async_enrich_vivino_bottle,
     async_enrich_vivino_bottle_claude,
     async_judge_vivino_candidates,
@@ -1566,6 +1567,111 @@ class TestScannerVivinoAndCoordinator(unittest.TestCase):
                     self.assertEqual(kwargs_enrich.get("provider"), "claude")
 
             asyncio.run(_coordinator_run())
+
+    def test_v055_claude_temperature_and_sampling_params_stripped(self) -> None:
+        """v0.5.5: Verify deprecated sampling parameters (temperature, top_p, top_k) are stripped from Claude requests."""
+        class _CapturingSession:
+            def __init__(self) -> None:
+                self.captured_json: dict[str, Any] = {}
+
+            def post(self, url: str, **kwargs: Any) -> Any:
+                self.captured_json = dict(kwargs.get("json") or {})
+
+                class _Resp:
+                    async def text(self) -> str:
+                        return json.dumps({
+                            "content": [{"type": "text", "text": '{"winery": "Latour", "is_wine_bottle_or_label": true, "summary": "ok", "choice": "NONE", "pairing": {}, "alcohol_pct": 13.0}'}]
+                        })
+                    @property
+                    def status(self) -> int:
+                        return 200
+                    async def json(self, content_type: str | None = None) -> Any:
+                        return json.loads(await self.text())
+                    async def __aenter__(self) -> Any:
+                        return self
+                    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+                        return None
+
+                return _Resp()
+
+        async def _run() -> None:
+            # 1. Direct _send_claude_messages_request with caller-provided sampling parameters
+            session_direct = _CapturingSession()
+            raw_payload = {
+                "model": "claude-haiku-5-5",
+                "max_tokens": 1000,
+                "temperature": 0.2,
+                "top_p": 0.95,
+                "top_k": 50,
+                "messages": [{"role": "user", "content": "Hello"}],
+            }
+            await _send_claude_messages_request(
+                session_direct,  # type: ignore[arg-type]
+                api_key="sk-ant-test",
+                payload=raw_payload,
+            )
+            self.assertNotIn("temperature", session_direct.captured_json)
+            self.assertNotIn("top_p", session_direct.captured_json)
+            self.assertNotIn("top_k", session_direct.captured_json)
+            self.assertEqual(session_direct.captured_json["model"], "claude-haiku-5-5")
+
+            # 2. async_scan_bottle_label_claude
+            session_scan = _CapturingSession()
+            await async_scan_bottle_label_claude(
+                session_scan,  # type: ignore[arg-type]
+                api_key="sk-ant-test",
+                image_bytes=b"dummy",
+                model="claude-haiku-5-5",
+            )
+            self.assertNotIn("temperature", session_scan.captured_json)
+            self.assertNotIn("top_p", session_scan.captured_json)
+            self.assertNotIn("top_k", session_scan.captured_json)
+
+            # 3. async_judge_vivino_candidates_claude
+            session_judge = _CapturingSession()
+            await async_judge_vivino_candidates_claude(
+                session_judge,  # type: ignore[arg-type]
+                api_key="sk-ant-test",
+                image_bytes=b"dummy",
+                mime_type="image/jpeg",
+                label_text_verbatim="Latour",
+                candidates=[{"winery": "Latour", "name": "Grand Vin"}],
+                model="claude-haiku-5-5",
+            )
+            self.assertNotIn("temperature", session_judge.captured_json)
+
+            # 4. async_research_wine_with_claude
+            session_res = _CapturingSession()
+            await async_research_wine_with_claude(
+                session_res,  # type: ignore[arg-type]
+                api_key="sk-ant-test",
+                wine_data={"winery": "Latour"},
+                model="claude-haiku-5-5",
+            )
+            self.assertNotIn("temperature", session_res.captured_json)
+
+            # 5. async_sommelier_dish_pairing_claude
+            session_somm = _CapturingSession()
+            await async_sommelier_dish_pairing_claude(
+                session_somm,  # type: ignore[arg-type]
+                api_key="sk-ant-test",
+                dish_description="Steak",
+                cellar_wines=[],
+                model="claude-haiku-5-5",
+            )
+            self.assertNotIn("temperature", session_somm.captured_json)
+
+            # 6. async_enrich_vivino_bottle_claude
+            session_enrich = _CapturingSession()
+            await async_enrich_vivino_bottle_claude(
+                session_enrich,  # type: ignore[arg-type]
+                api_key="sk-ant-test",
+                wine_data={"winery": "Latour"},
+                model="claude-haiku-5-5",
+            )
+            self.assertNotIn("temperature", session_enrich.captured_json)
+
+        asyncio.run(_run())
 
 
 if __name__ == "__main__":

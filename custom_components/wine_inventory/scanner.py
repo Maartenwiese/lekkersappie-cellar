@@ -200,11 +200,17 @@ async def _send_claude_messages_request(
         else timeout_seconds
     )
     client_error_cls = aiohttp.ClientError if aiohttp is not None else OSError
+    # Ensure sampling parameters deprecated by Anthropic (temperature, top_p, top_k)
+    # are completely stripped from outgoing payloads to prevent HTTP 400 rejection on newer models.
+    clean_payload = dict(payload)
+    clean_payload.pop("temperature", None)
+    clean_payload.pop("top_p", None)
+    clean_payload.pop("top_k", None)
     try:
         async with session.post(
             CLAUDE_API_BASE_URL,
             headers=headers,
-            json=payload,
+            json=clean_payload,
             timeout=timeout,
         ) as resp:
             resp_text = await resp.text()
@@ -551,7 +557,6 @@ async def async_scan_bottle_label_claude(
     payload = {
         "model": model_id,
         "max_tokens": 2048,
-        "temperature": 0.1,
         "messages": [
             {
                 "role": "user",
@@ -789,7 +794,6 @@ async def async_judge_vivino_candidates_claude(
     payload = {
         "model": model_id,
         "max_tokens": 512,
-        "temperature": 0.0,
         "messages": [{"role": "user", "content": user_content}],
     }
 
@@ -1073,7 +1077,6 @@ async def async_research_wine_with_claude(
     payload = {
         "model": model_id,
         "max_tokens": 2048,
-        "temperature": 0.2,
         "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
     }
 
@@ -1423,7 +1426,6 @@ async def async_sommelier_dish_pairing_claude(
     payload = {
         "model": model_id,
         "max_tokens": 2048,
-        "temperature": 0.3,
         "messages": messages,
     }
 
@@ -1706,7 +1708,6 @@ async def async_enrich_vivino_bottle_claude(
     payload = {
         "model": model_id,
         "max_tokens": 2048,
-        "temperature": 0.2,
         "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
     }
 
