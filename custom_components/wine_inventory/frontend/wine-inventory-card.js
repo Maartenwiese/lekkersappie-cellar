@@ -393,6 +393,10 @@ class WineInventoryCard extends HTMLElement {
       w.vivino_url,
     ];
 
+    if (w.is_imported) {
+      parts.push("imported", "vivino import");
+    }
+
     if (Array.isArray(w.food_pairings)) {
       parts.push(...w.food_pairings);
     } else if (w.food_pairings) {
@@ -1206,7 +1210,7 @@ class WineInventoryCard extends HTMLElement {
       this._render();
     } catch (err) {
       this._researchingWineId = null;
-      this._researchError = err?.message || (typeof err === "string" ? err : "Gemini wine research failed.");
+      this._researchError = err?.message || (typeof err === "string" ? err : "AI wine research failed.");
       this._render();
     }
   }
@@ -1254,6 +1258,11 @@ class WineInventoryCard extends HTMLElement {
             <div class="wine-badges-row">
               <span class="type-pill type-${escapeHtml(wine.wine_type)}">${escapeHtml(typeLabel)}</span>
               <span class="vintage-pill">${escapeHtml(vintageLabel)}</span>
+              ${
+                wine.is_imported
+                  ? `<span class="imported-pill" title="Imported wine" style="font-size: 11px; padding: 2px 7px; border-radius: 999px; background: rgba(217,119,6,0.12); color: #b45309; border: 1px solid rgba(217,119,6,0.3); font-weight: 600; display: inline-flex; align-items: center; gap: 3px;">📥 Imported</span>`
+                  : ""
+              }
               <span class="drink-pill" style="border-color:${statusMeta.color}; color:${statusMeta.color};">
                 ${escapeHtml(statusMeta.label)} (${escapeHtml(drinkYears)})
               </span>
@@ -1380,7 +1389,14 @@ class WineInventoryCard extends HTMLElement {
                     </td>
                     <td>
                       <div class="wine-list-title-wrap wine-title-clickable" data-action="detail" data-id="${wine.id}" title="Click to view wine details" style="cursor: pointer;">
-                        <strong title="${escapeHtml(wine.name)}" style="cursor: pointer; color: var(--primary-color, #a61a2e);">${escapeHtml(wine.name)}</strong>
+                        <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                          <strong title="${escapeHtml(wine.name)}" style="cursor: pointer; color: var(--primary-color, #a61a2e);">${escapeHtml(wine.name)}</strong>
+                          ${
+                            wine.is_imported
+                              ? `<span class="imported-pill" title="Imported wine" style="font-size: 10px; padding: 1px 6px; border-radius: 999px; background: rgba(217,119,6,0.12); color: #b45309; border: 1px solid rgba(217,119,6,0.3); font-weight: 600; display: inline-flex; align-items: center; gap: 2px;">📥 Imported</span>`
+                              : ""
+                          }
+                        </div>
                         <span style="font-weight: 500;">${escapeHtml(wine.winery)}${this._isWineTasted(wine) ? ` • <span class="tasted-badge">🥂 Tasted</span>` : ""}</span>
                         <span>${escapeHtml(subMeta)}</span>
                       </div>
@@ -1813,7 +1829,7 @@ class WineInventoryCard extends HTMLElement {
           <div class="modal-header">
             <h2>
               <ha-icon icon="${s.manualOnly ? "mdi:plus-circle-outline" : "mdi:camera-iris"}"></ha-icon>
-              <span>${s.manualOnly ? "Add Wine to Inventory" : "Scan Wine Bottle with Gemini Flash-Lite"}</span>
+              <span>${s.manualOnly ? "Add Wine to Inventory" : "Scan Wine Bottle with AI Model"}</span>
             </h2>
             <div class="modal-header-actions">
               <button type="button" class="ha-btn secondary-btn icon-btn btn-font-scale" title="Text size (tap to change)" aria-label="Text size ${this._fontScaleLabel()}">
@@ -1851,7 +1867,7 @@ class WineInventoryCard extends HTMLElement {
                       s.busy
                         ? `<div class="scan-status-banner">
                             <ha-icon icon="mdi:loading"></ha-icon>
-                            <span>Analyzing bottle label with Gemini Flash-Lite &amp; looking up Vivino rating…</span>
+                            <span>Analyzing bottle label with AI Model &amp; looking up Vivino rating…</span>
                           </div>`
                         : ""
                     }
@@ -1872,7 +1888,7 @@ class WineInventoryCard extends HTMLElement {
                               <div class="scan-error-hint">
                                 <strong>Troubleshooting tips:</strong>
                                 <ul>
-                                  <li>Check that your Google Gemini API key is valid in Lekkersappie integration options.</li>
+                                  <li>Check that your AI API key (Gemini or Claude) is valid in Lekkersappie integration options.</li>
                                   <li>Click <em>Adjust Crop &amp; Rotate</em> to orient the label upright and frame only the printed front label.</li>
                                   <li>Or type the winery, wine name, and vintage manually into the fields below.</li>
                                 </ul>
@@ -2284,6 +2300,11 @@ class WineInventoryCard extends HTMLElement {
                 <div class="detail-badges-row">
                   <span class="type-pill detail-pill type-${escapeHtml(w.wine_type)}">${escapeHtml(typeLabel)}</span>
                   <span class="vintage-pill detail-pill">📅 ${escapeHtml(w.vintage ? String(w.vintage) : "NV")}</span>
+                  ${
+                    w.is_imported
+                      ? `<span class="imported-pill detail-pill" title="Imported wine" style="background: rgba(217,119,6,0.12); color: #b45309; border: 1px solid rgba(217,119,6,0.3); font-weight: 600; display: inline-flex; align-items: center; gap: 3px;">📥 Imported</span>`
+                      : ""
+                  }
                   ${w.varietal ? `<span class="filter-chip detail-pill">🍇 ${escapeHtml(w.varietal)}</span>` : ""}
                   <span class="drink-pill detail-pill" style="border-color:${statusMeta.color}; color:${statusMeta.color};">
                     ${escapeHtml(statusMeta.label)} (${escapeHtml(drinkYears)})
@@ -2347,7 +2368,7 @@ class WineInventoryCard extends HTMLElement {
                     </button>
                   </div>
                   <span class="detail-stepper-unit">${Number(w.quantity) === 1 ? "bottle" : "bottles"}</span>
-                  <button type="button" class="ha-btn secondary-btn detail-research-btn" id="btn-detail-research-wine" data-id="${w.id}" title="Deep Gemini AI research on producer, terroir & cuvée history" ${this._researchingWineId === w.id ? "disabled" : ""}>
+                  <button type="button" class="ha-btn secondary-btn detail-research-btn" id="btn-detail-research-wine" data-id="${w.id}" title="Deep AI research on producer, terroir & cuvée history" ${this._researchingWineId === w.id ? "disabled" : ""}>
                     <ha-icon icon="mdi:auto-fix" style="color: var(--primary-color);"></ha-icon>
                     <span>${this._researchingWineId === w.id ? "Researching..." : "Research Wine (AI)"}</span>
                   </button>
@@ -2360,7 +2381,7 @@ class WineInventoryCard extends HTMLElement {
                 ? `<div class="research-loading-banner">
                      <ha-icon icon="mdi:loading" class="spin-icon" style="color: var(--primary-color); --mdc-icon-size: 24px; animation: spin 1s linear infinite;"></ha-icon>
                      <div>
-                       <div class="research-loading-title">Gemini AI is researching this wine...</div>
+                       <div class="research-loading-title">AI Model is researching this wine...</div>
                        <div class="research-loading-sub">Investigating winemaker heritage, cuvée history, terroir, tasting profile, and pairings.</div>
                      </div>
                    </div>`
@@ -2383,7 +2404,7 @@ class WineInventoryCard extends HTMLElement {
                          <ha-icon icon="mdi:auto-fix" style="color: var(--primary-color);"></ha-icon>
                          <strong>Sommelier &amp; Producer AI Research</strong>
                        </div>
-                       <button type="button" class="ha-btn secondary-btn icon-btn" id="btn-re-research-wine" data-id="${w.id}" title="Re-run Gemini AI Research">
+                       <button type="button" class="ha-btn secondary-btn icon-btn" id="btn-re-research-wine" data-id="${w.id}" title="Re-run AI Research">
                          <ha-icon icon="mdi:refresh"></ha-icon>
                        </button>
                      </div>
@@ -2823,7 +2844,7 @@ class WineInventoryCard extends HTMLElement {
       }
     });
 
-    // Deep Gemini AI Wine Research Scan
+    // Deep AI Wine Research Scan
     root.querySelector("#btn-detail-research-wine")?.addEventListener("click", (e) => {
       const wineId = Number(e.currentTarget.dataset.id);
       this._handleResearchWine(wineId);
@@ -5110,7 +5131,7 @@ if (!window.customCards.some((c) => c.type === "wine-inventory-card")) {
   window.customCards.push({
     type: "wine-inventory-card",
     name: "Lekkersappie Wine Cellar Card",
-    description: "Full interactive Wine Cellar list & grid with Gemini label scanner, Vivino ratings, taste sliders, and stock management.",
+    description: "Full interactive Wine Cellar list & grid with AI label scanner, Vivino ratings, taste sliders, and stock management.",
     preview: true,
     documentationURL: "https://github.com/Maartenwiese/lekkersappie-cellar",
   });

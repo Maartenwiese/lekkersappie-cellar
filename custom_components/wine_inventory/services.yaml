@@ -1,7 +1,7 @@
 scan_bottle:
   name: Scan wine bottle label
   description: >
-    Scan a wine bottle photo using the configured Gemini Flash-Lite vision model,
+    Scan a wine bottle photo using the configured AI vision model (Gemini or Claude),
     look up its Vivino community rating, and check if it is already in the local SQLite database.
   fields:
     camera_entity_id:

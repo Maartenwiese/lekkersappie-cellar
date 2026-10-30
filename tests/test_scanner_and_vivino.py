@@ -1673,6 +1673,78 @@ class TestScannerVivinoAndCoordinator(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_v056_claude_json_parsing_and_token_limits(self) -> None:
+        """v0.5.6: Verify Claude JSON extraction handles unescaped newlines, trailing commas, and max_tokens=4096."""
+        # 1. Direct _extract_json_from_text unit tests
+        # Test case A: Unescaped literal newlines in multi-line narrative string (Claude research format)
+        raw_research_text = '{\n  "producer_history": "Verification caveat: I could not confirm a documented history for a producer named Domaine des Chênes in Vingrau.\n\nHere is additional context on the producer and terroir.",\n  "summary": "Rich southern French red."\n}'
+        parsed_research = _extract_json_from_text(raw_research_text)
+        self.assertIn("Domaine des Chênes", parsed_research["producer_history"])
+        self.assertEqual(parsed_research["summary"], "Rich southern French red.")
+
+        # Test case B: Unescaped literal newlines in dish analysis with markdown code fences and trailing commas
+        raw_somm_text = '```json\n{\n  "dish_name": "Grilled Ribeye Steak with Garlic Herb Butter",\n  "dish_analysis": "A well-marbled ribeye grilled over high heat gives a deeply savory crust with Maillard and char notes,\nwhile the interior remains juicy and rich.",\n  "recommended_bottles": [\n    {"wine_name": "Cabernet Sauvignon", "reason": "Tannins cut through the rich marbling.", },\n  ],\n}\n```'
+        parsed_somm = _extract_json_from_text(raw_somm_text)
+        self.assertEqual(parsed_somm["dish_name"], "Grilled Ribeye Steak with Garlic Herb Butter")
+        self.assertIn("Maillard", parsed_somm["dish_analysis"])
+        self.assertEqual(len(parsed_somm["recommended_bottles"]), 1)
+
+        # 2. Async Claude methods with multi-line narrative responses and max_tokens=4096
+        class _CapturingClaudeSession:
+            def __init__(self, response_text: str) -> None:
+                self.response_text = response_text
+                self.captured_json: dict[str, Any] = {}
+
+            def post(self, url: str, **kwargs: Any) -> Any:
+                self.captured_json = dict(kwargs.get("json") or {})
+
+                class _Resp:
+                    def __init__(self, text_payload: str) -> None:
+                        self.text_payload = text_payload
+                    async def text(self) -> str:
+                        return json.dumps({
+                            "content": [{"type": "text", "text": self.text_payload}]
+                        })
+                    @property
+                    def status(self) -> int:
+                        return 200
+                    async def json(self, content_type: str | None = None) -> Any:
+                        return json.loads(await self.text())
+                    async def __aenter__(self) -> Any:
+                        return self
+                    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+                        return None
+
+                return _Resp(self.response_text)
+
+        async def _run() -> None:
+            # Verify research wine with multi-line Claude output
+            session_res = _CapturingClaudeSession(raw_research_text)
+            res = await async_research_wine_with_claude(
+                session_res,  # type: ignore[arg-type]
+                api_key="sk-ant-test",
+                wine_data={"winery": "Domaine des Chênes", "name": "Razungles"},
+                model="claude-haiku-5-5",
+            )
+            self.assertEqual(res["status"], "ok")
+            self.assertEqual(session_res.captured_json["max_tokens"], 4096)
+            self.assertIn("producer_history", res["research"])
+
+            # Verify sommelier pairing with multi-line Claude output
+            session_somm = _CapturingClaudeSession(raw_somm_text)
+            somm_res = await async_sommelier_dish_pairing_claude(
+                session_somm,  # type: ignore[arg-type]
+                api_key="sk-ant-test",
+                dish_description="Ribeye Steak",
+                cellar_wines=[{"id": 1, "winery": "Penfolds", "name": "Bin 389", "vintage": 2018}],
+                model="claude-haiku-5-5",
+            )
+            self.assertEqual(somm_res["status"], "ok")
+            self.assertEqual(session_somm.captured_json["max_tokens"], 4096)
+            self.assertEqual(somm_res["pairing"]["dish_name"], "Grilled Ribeye Steak with Garlic Herb Butter")
+
+        asyncio.run(_run())
+
 
 if __name__ == "__main__":
     unittest.main()

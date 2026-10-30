@@ -1,5 +1,5 @@
 /**
- * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.5.5)
+ * Lekkersappie Standalone Mobile Web App (PWA) — /lekkersappie/app.js (v0.5.6)
  * Runs parallel to the native Home Assistant UI, inherits Home Assistant OAuth2
  * authentication, defaults to Large (L) text scale, and supports Home Screen installation.
  */
@@ -944,6 +944,10 @@ class LekkersappieMobileApp {
       w.vivino_url,
     ];
 
+    if (w.is_imported) {
+      parts.push("imported", "vivino import");
+    }
+
     if (Array.isArray(w.food_pairings)) {
       parts.push(...w.food_pairings);
     } else if (w.food_pairings) {
@@ -1318,6 +1322,7 @@ class LekkersappieMobileApp {
                 }
                 <span class="pill pill-${esc(w.wine_type)}">${esc(typeLabel)}</span>
                 <span class="pill pill-vintage">📅 ${esc(w.vintage || "NV")}</span>
+                ${w.is_imported ? `<span class="pill pill-imported" title="Imported wine" style="background:rgba(217,119,6,0.12); color:#b45309; border:1px solid rgba(217,119,6,0.3); font-weight:600;">📥 Imported</span>` : ""}
                 ${area && (!tastedMode || inCellarQty > 0) ? `<span class="pill pill-area">📍 ${esc(area)}</span>` : ""}
                 ${originText ? `<span class="pill pill-vintage sub-origin">🌍 ${esc(originText)}</span>` : ""}
               </div>
@@ -2173,7 +2178,7 @@ class LekkersappieMobileApp {
                 <label style="display:flex; align-items:flex-start; gap:12px; cursor:pointer;">
                   <input type="checkbox" id="import-enrich-ai-check" ${this.state.importEnrichAi ? "checked" : ""} style="width:20px; height:20px; margin-top:2px; accent-color:var(--brand);" />
                   <div>
-                    <strong style="font-size:14px; display:block; margin-bottom:2px;">✨ Enrich with Gemini AI</strong>
+                    <strong style="font-size:14px; display:block; margin-bottom:2px;">✨ Enrich with AI</strong>
                     <span style="font-size:12.5px; color:var(--text-muted); line-height:1.4; display:block;">
                       Automatically fills missing grape varietal blends, drinking windows (from/until), and structural taste profile sliders (Soft vs Acidic, Light vs Bold, Dry vs Sweet) for each bottle.
                     </span>
@@ -2303,6 +2308,7 @@ class LekkersappieMobileApp {
                     <div class="detail-hero-badges">
                       <span class="pill pill-${esc(w.wine_type)}">${esc(typeLabel)}</span>
                       <span class="pill pill-vintage">📅 ${esc(w.vintage || "NV")}</span>
+                      ${w.is_imported ? `<span class="pill pill-imported" title="Imported wine" style="background:rgba(217,119,6,0.12); color:#b45309; border:1px solid rgba(217,119,6,0.3); font-weight:600;">📥 Imported</span>` : ""}
                       ${w.varietal ? `<span class="pill pill-vintage">🍇 ${esc(w.varietal)}</span>` : ""}
                       ${w.latest_added_at || w.created_at ? `<span class="pill pill-vintage">🗓️ ${esc(fmtDate(w.latest_added_at || w.created_at))}</span>` : ""}
                       <span class="pill" style="border:1px solid ${drinkMeta.color}; color:${drinkMeta.color};">${esc(drinkMeta.label)}</span>
@@ -2569,7 +2575,7 @@ class LekkersappieMobileApp {
                 ${
                   this.state.scanBusy
                     ? `<div style="margin-top:10px; font-size:13px; font-weight:600; color:var(--brand);">
-                        ⏳ Reading the label with Gemini and checking Vivino… (this can take ~10 s)
+                        ⏳ Reading the label with AI Model and checking Vivino… (this can take ~10 s)
                       </div>`
                     : ""
                 }
@@ -3978,8 +3984,8 @@ class LekkersappieMobileApp {
       image_url: ext.image_url || "",
     };
     this.state.scanResultNote = ext.winery || ext.name
-      ? `✓ Label read by Gemini (${ext.model_used || "model"})`
-      : "Gemini could not read a producer or wine name. Fill in the fields manually.";
+      ? `✓ Label read by AI (${ext.model_used || "model"})`
+      : "The AI model could not read a producer or wine name. Fill in the fields manually.";
   }
 
   _selectScanCandidate(idx) {

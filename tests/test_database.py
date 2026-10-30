@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
 
@@ -527,6 +528,124 @@ class TestWineDatabase(unittest.TestCase):
             self.assertEqual(stats["hold_bottles"], 3)
             self.assertEqual(stats["keep_bottles"], 3)
             self.assertEqual(stats["drink_soon_bottles"], 2)
+
+    def test_v056_database_is_imported_flag_and_migration(self) -> None:
+        """v0.5.6: Verify is_imported column, default 0, True when imported, and migration backfill."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "wine_inventory.db"
+            db = WineDatabase(db_path)
+            db.initialize()
+
+            # 1. Normal wine addition defaults to is_imported=False
+            normal_wine = db.add_or_increment_wine(
+                winery="Domaine Dujac",
+                name="Morey-Saint-Denis",
+                vintage=2020,
+                wine_type="red",
+                quantity=2,
+            )
+            detail_normal = db.get_wine_detail(normal_wine["id"])
+            self.assertIsNotNone(detail_normal)
+            assert detail_normal is not None
+            self.assertFalse(detail_normal["is_imported"])
+            self.assertIsInstance(detail_normal["is_imported"], bool)
+
+            # 2. Wine added with is_imported=True
+            imported_wine = db.add_or_increment_wine(
+                winery="Domaine des Chênes",
+                name="Razungles",
+                vintage=2019,
+                wine_type="red",
+                quantity=1,
+                is_imported=True,
+            )
+            detail_imported = db.get_wine_detail(imported_wine["id"])
+            self.assertIsNotNone(detail_imported)
+            assert detail_imported is not None
+            self.assertTrue(detail_imported["is_imported"])
+
+            # 3. update_wine can toggle or set is_imported
+            updated = db.update_wine(normal_wine["id"], {"is_imported": True})
+            self.assertTrue(updated["is_imported"])
+
+        # 4. Migration backfill on legacy database lacking is_imported column
+        with tempfile.TemporaryDirectory() as tmpdir:
+            legacy_db_path = Path(tmpdir) / "legacy_wine_inventory.db"
+            # Create a raw SQLite schema without is_imported
+            with sqlite3.connect(legacy_db_path) as conn:
+                conn.execute(
+                    """
+                    CREATE TABLE wines (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        winery TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        vintage INTEGER NULL,
+                        wine_type TEXT NOT NULL DEFAULT 'red',
+                        varietal TEXT NOT NULL DEFAULT '',
+                        region TEXT NOT NULL DEFAULT '',
+                        country TEXT NOT NULL DEFAULT '',
+                        alcohol_pct REAL NULL,
+                        bottle_size_ml INTEGER NOT NULL DEFAULT 750,
+                        vivino_rating REAL NULL,
+                        vivino_ratings_count INTEGER NULL,
+                        vivino_url TEXT NOT NULL DEFAULT '',
+                        vivino_price_estimate REAL NULL,
+                        rating_source TEXT NOT NULL DEFAULT '',
+                        vivino_wine_id INTEGER NULL,
+                        vivino_match_confidence TEXT NOT NULL DEFAULT '',
+                        drink_from_year INTEGER NULL,
+                        drink_until_year INTEGER NULL,
+                        drink_window_note TEXT NOT NULL DEFAULT '',
+                        food_pairings TEXT NOT NULL DEFAULT '[]',
+                        general_notes TEXT NOT NULL DEFAULT '',
+                        personal_rating REAL NULL,
+                        image_url TEXT NOT NULL DEFAULT '',
+                        quantity INTEGER NOT NULL DEFAULT 0,
+                        storage_location TEXT NOT NULL DEFAULT '',
+                        purchase_location TEXT NOT NULL DEFAULT '',
+                        purchase_price REAL NULL,
+                        research_notes TEXT NOT NULL DEFAULT '',
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+                    """
+                )
+                # Insert a legacy wine with vivino image
+                conn.execute(
+                    """
+                    INSERT INTO wines (winery, name, vintage, image_url, rating_source, created_at, updated_at)
+                    VALUES ('Château Palmer', 'Alter Ego', 2015, '/local/wine_inventory/covers/vivino_palmer.jpg', 'vivino', '2026-01-01', '2026-01-01');
+                    """
+                )
+                # Insert a legacy wine with rating_source='vivino_import'
+                conn.execute(
+                    """
+                    INSERT INTO wines (winery, name, vintage, image_url, rating_source, created_at, updated_at)
+                    VALUES ('Penfolds', 'Grange', 2012, '', 'vivino_import', '2026-01-01', '2026-01-01');
+                    """
+                )
+                # Insert a regular wine
+                conn.execute(
+                    """
+                    INSERT INTO wines (winery, name, vintage, image_url, rating_source, created_at, updated_at)
+                    VALUES ('Local Winery', 'House Red', 2021, '', '', '2026-01-01', '2026-01-01');
+                    """
+                )
+                conn.commit()
+
+            # Initialize WineDatabase over legacy DB
+            migrated_db = WineDatabase(legacy_db_path)
+            migrated_db.initialize()
+
+            wines = migrated_db.list_wines(include_out_of_stock=True)
+            self.assertEqual(len(wines), 3)
+            palmer = next(w for w in wines if w["name"] == "Alter Ego")
+            grange = next(w for w in wines if w["name"] == "Grange")
+            house = next(w for w in wines if w["name"] == "House Red")
+
+            self.assertTrue(palmer["is_imported"])
+            self.assertTrue(grange["is_imported"])
+            self.assertFalse(house["is_imported"])
 
 
 if __name__ == "__main__":

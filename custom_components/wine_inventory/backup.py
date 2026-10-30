@@ -423,6 +423,7 @@ def _import_wines_list(db: WineDatabase, wines: list[dict[str, Any]]) -> int:
                     purchase_price=b.get("purchase_price"),
                     storage_location=str(b.get("storage_location") or ""),
                     notes=str(b.get("notes") or ""),
+                    is_imported=True,
                 )
         else:
             qty = int(w.get("quantity") or 0)
@@ -446,6 +447,7 @@ def _import_wines_list(db: WineDatabase, wines: list[dict[str, Any]]) -> int:
                 purchase_location=str(w.get("last_purchase_location") or ""),
                 purchase_price=w.get("last_purchase_price"),
                 storage_location=str(w.get("last_storage_location") or ""),
+                is_imported=True,
             )
             # If original had 0 quantity, adjust down
             if qty == 0:
@@ -882,6 +884,7 @@ def import_vivino_full_wine_list_csv(
             added_at=w["added_at"],
             purchase_location=w["purchase_location"],
             as_tasted=True,
+            is_imported=True,
         )
 
     tasted_total = len(grouped_wines)
@@ -991,6 +994,7 @@ def import_vivino_cellar_csv(
             rating_source="vivino" if link else "",
             quantity=count,
             as_tasted=False,
+            is_imported=True,
         )
         cellar_count += 1
         total_bottles += count
@@ -1268,6 +1272,7 @@ def import_vivino_history_csv(db: WineDatabase, csv_text: str) -> dict[str, Any]
             added_at=added_at,
             purchase_price=purchase_price,
             as_tasted=is_as_tasted,
+            is_imported=True,
         )
         imported_count += 1
         if is_as_tasted:

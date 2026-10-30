@@ -137,30 +137,46 @@ def _extract_json_from_text(text: str) -> dict[str, Any]:
         raise ValueError("Model response is empty.")
 
     if "```" in cleaned:
-        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
-        if match:
-            cleaned = match.group(1).strip()
+        m = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned, re.DOTALL)
+        if m:
+            cleaned = m.group(1).strip()
         else:
-            cleaned = re.sub(r"^```[a-zA-Z]*\n", "", cleaned)
-            cleaned = re.sub(r"\n```$", "", cleaned).strip()
-
-    try:
-        data = json.loads(cleaned)
-        if isinstance(data, dict):
-            return data
-    except json.JSONDecodeError:
-        pass
+            cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned)
+            cleaned = re.sub(r"\n?```$", "", cleaned).strip()
 
     start = cleaned.find("{")
     end = cleaned.rfind("}")
     if start != -1 and end != -1 and end > start:
         candidate = cleaned[start : end + 1]
         try:
-            data = json.loads(candidate)
+            data = json.loads(candidate, strict=False)
             if isinstance(data, dict):
                 return data
         except json.JSONDecodeError:
             pass
+
+        cleaned_candidate = re.sub(r",\s*([}\]])", r"\1", candidate)
+        try:
+            data = json.loads(cleaned_candidate, strict=False)
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            pass
+
+    try:
+        data = json.loads(cleaned, strict=False)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+
+    cleaned_full = re.sub(r",\s*([}\]])", r"\1", cleaned)
+    try:
+        data = json.loads(cleaned_full, strict=False)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
 
     raise ValueError(f"Could not parse valid JSON object from model output: {text[:200]}")
 
@@ -556,7 +572,7 @@ async def async_scan_bottle_label_claude(
 
     payload = {
         "model": model_id,
-        "max_tokens": 2048,
+        "max_tokens": 4096,
         "messages": [
             {
                 "role": "user",
@@ -1076,7 +1092,7 @@ async def async_research_wine_with_claude(
 
     payload = {
         "model": model_id,
-        "max_tokens": 2048,
+        "max_tokens": 4096,
         "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
     }
 
@@ -1090,7 +1106,7 @@ async def async_research_wine_with_claude(
     try:
         research_json = _extract_json_from_text(raw_text)
     except Exception as err:
-        raise ClaudeScannerError(f"Failed to parse Claude research JSON: {raw_text[:200]}") from err
+        raise ClaudeScannerError(f"Failed to parse Claude research JSON ({err}): {raw_text[:200]}") from err
 
     return {
         "status": "ok",
@@ -1425,7 +1441,7 @@ async def async_sommelier_dish_pairing_claude(
 
     payload = {
         "model": model_id,
-        "max_tokens": 2048,
+        "max_tokens": 4096,
         "messages": messages,
     }
 
@@ -1439,7 +1455,7 @@ async def async_sommelier_dish_pairing_claude(
     try:
         somm_json = _extract_json_from_text(raw_text)
     except Exception as err:
-        raise ClaudeScannerError(f"Failed to parse Claude sommelier JSON: {raw_text[:200]}") from err
+        raise ClaudeScannerError(f"Failed to parse Claude sommelier JSON ({err}): {raw_text[:200]}") from err
 
     return {
         "status": "ok",
@@ -1707,7 +1723,7 @@ async def async_enrich_vivino_bottle_claude(
 
     payload = {
         "model": model_id,
-        "max_tokens": 2048,
+        "max_tokens": 4096,
         "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
     }
 
@@ -1721,7 +1737,7 @@ async def async_enrich_vivino_bottle_claude(
     try:
         enrichment_json = _extract_json_from_text(raw_text)
     except Exception as err:
-        raise ClaudeScannerError(f"Failed to parse Claude enrichment JSON: {raw_text[:200]}") from err
+        raise ClaudeScannerError(f"Failed to parse Claude enrichment JSON ({err}): {raw_text[:200]}") from err
 
     return {
         "status": "ok",

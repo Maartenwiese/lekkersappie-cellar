@@ -564,6 +564,7 @@ class TestBackupRestoreAndViews(unittest.TestCase):
             self.assertEqual(sassicaia["vivino_url"], "https://www.vivino.com/wines/12345")
             self.assertEqual(sassicaia["vivino_wine_id"], 12345)
             self.assertEqual(sassicaia["vivino_match_confidence"], "confirmed")
+            self.assertTrue(sassicaia["is_imported"])
 
             # Verify that database initialize / restart does not wipe canonical Vivino links
             db.initialize()

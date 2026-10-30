@@ -166,6 +166,7 @@ class WineDatabase:
                     purchase_location TEXT NOT NULL DEFAULT '',
                     purchase_price REAL NULL,
                     research_notes TEXT NOT NULL DEFAULT '',
+                    is_imported INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -223,6 +224,11 @@ class WineDatabase:
                 conn.execute("ALTER TABLE wines ADD COLUMN vivino_wine_id INTEGER NULL;")
             if "vivino_match_confidence" not in cols:
                 conn.execute("ALTER TABLE wines ADD COLUMN vivino_match_confidence TEXT NOT NULL DEFAULT '';")
+            if "is_imported" not in cols:
+                conn.execute("ALTER TABLE wines ADD COLUMN is_imported INTEGER NOT NULL DEFAULT 0;")
+                conn.execute(
+                    "UPDATE wines SET is_imported = 1 WHERE image_url LIKE '%/covers/vivino_%' OR rating_source = 'vivino_import';"
+                )
             self._migrate_vivino_grounding(conn)
             self._migrate_empty_numeric_strings(conn)
 
@@ -330,6 +336,7 @@ class WineDatabase:
             data.get("drink_from_year"),
             data.get("drink_until_year"),
         )
+        data["is_imported"] = bool(data.get("is_imported", 0))
         data["vivino_url"] = _sanitize_vivino_url(data.get("vivino_url"))
         data["image_url"] = _sanitize_image_url(data.get("image_url"))
         data["storage_location"] = (data.get("storage_location") or "").strip()
@@ -503,6 +510,7 @@ class WineDatabase:
         batch_notes: str = "",
         wine_id: int | None = None,
         as_tasted: bool = False,
+        is_imported: bool = False,
     ) -> dict[str, Any]:
         """Add a new wine, add a purchase batch, or log a wine directly as Tasted (0 cellar stock added)."""
         raw_qty = _opt_int(quantity)
@@ -562,6 +570,7 @@ class WineDatabase:
                     ),
                 ).fetchone()
 
+            is_imported_int = 1 if is_imported else 0
             if existing_row is None:
                 cursor = conn.execute(
                     """
@@ -573,8 +582,8 @@ class WineDatabase:
                         drink_from_year, drink_until_year, drink_window_note,
                         food_pairings, general_notes, personal_rating, image_url,
                         quantity, storage_location, purchase_location, purchase_price,
-                        research_notes, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        research_notes, is_imported, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         winery.strip(),
@@ -605,6 +614,7 @@ class WineDatabase:
                         purchase_location.strip(),
                         purchase_price,
                         "",
+                        is_imported_int,
                         timestamp,
                         timestamp,
                     ),
@@ -638,6 +648,7 @@ class WineDatabase:
                         general_notes = ?,
                         personal_rating = COALESCE(?, personal_rating),
                         image_url = CASE WHEN ? != '' THEN ? ELSE image_url END,
+                        is_imported = CASE WHEN ? = 1 THEN 1 ELSE is_imported END,
                         updated_at = ?
                     WHERE id = ?
                     """,
@@ -666,6 +677,7 @@ class WineDatabase:
                         personal_rating,
                         image_url.strip(),
                         image_url.strip(),
+                        is_imported_int,
                         timestamp,
                         target_wine_id,
                     ),
@@ -906,6 +918,7 @@ class WineDatabase:
             "purchase_location",
             "purchase_price",
             "research_notes",
+            "is_imported",
         }
         float_fields = {
             "alcohol_pct",
@@ -935,6 +948,8 @@ class WineDatabase:
                     val = json.dumps([x.strip() for x in val.split(",") if x.strip()])
             elif key in float_fields:
                 val = _opt_float(val)
+            elif key == "is_imported":
+                val = 1 if val else 0
             elif key in int_fields:
                 val = _opt_int(val)
                 if key == "vintage" and val is not None and val <= 0:
