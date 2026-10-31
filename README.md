@@ -1,3 +1,10 @@
+> [!CAUTION]
+> **This repository is archived and no longer maintained.** Lekkersappie has been renamed and continues as
+> **[HomeCave](https://github.com/Maartenwiese/HomeCave)**. Versions in this repository (≤ `v0.5.7`) contain
+> security issues that are fixed only in HomeCave **`v0.9.3`** and later (including admin-only backup/import,
+> SSRF-safe cover downloads, and XSS hardening). Please uninstall this integration and install HomeCave via HACS:
+> https://github.com/Maartenwiese/HomeCave
+
 <p align="center">
   <img src="brand/icon.png" width="112" height="112" alt="Lekkersappie Red Wine Glass Icon" />
 </p>
